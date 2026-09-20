@@ -228,7 +228,7 @@ function App() {
             exit={{ opacity: 0, y: -100, scale: 0.8 }}
             className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4"
           >
-            <div className="glass-card rounded-2xl p-4 border-cyan-400/50 glow-primary animate-pulse-glow">
+            <div className="glass-card rounded-2xl p-4 border-purple-400/50 glow-primary animate-pulse-glow">
               <div className="flex items-start gap-3">
                 <motion.div
                   animate={{ scale: [1, 1.2, 1] }}
@@ -254,7 +254,7 @@ function App() {
       </AnimatePresence>
 
       {/* Header */}
-      <header className="relative z-10 glass-card border-b border-cyan-500/20">
+      <header className="relative z-10 glass-card border-b border-purple-500/20">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <motion.div 
             initial={{ opacity: 0, x: 20 }}
@@ -269,10 +269,10 @@ function App() {
               <Building2 className="w-7 h-7 text-white" />
             </motion.div>
             <div>
-              <h1 className="text-xl font-bold gradient-text">CRM العقارات</h1>
+              <h1 className="text-xl font-bold gradient-text">Muhammed CRM</h1>
               <p className="text-xs text-gray-400 flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-cyan-400" />
-                نظام إدارة العملاء الذكي
+                <Sparkles className="w-3 h-3 text-purple-400" />
+                نظام CRM الخاص بمحمد
               </p>
             </div>
           </motion.div>
@@ -297,25 +297,29 @@ function App() {
                 animate={{ scale: 1 }}
                 whileHover={{ scale: 1.05 }}
                 onClick={() => setShowPermissionModal(true)}
-                className="flex items-center gap-2 bg-cyan-500/20 text-cyan-300 px-3 py-2 rounded-lg text-sm border border-cyan-500/30"
+                className="flex items-center gap-2 bg-purple-500/20 text-purple-300 px-3 py-2 rounded-lg text-sm border border-purple-500/30"
               >
                 <Bell className="w-4 h-4" />
                 <span className="hidden sm:inline">تفعيل الإشعارات</span>
               </motion.button>
             )}
             
-            {stats.dueNow > 0 && (
-              <motion.div 
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                className="notification-badge relative"
-              >
-                <Bell className="w-6 h-6 text-pink-400" />
+            <motion.button 
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+              onClick={() => setActiveTab('reminders')}
+              className="relative p-2 bg-purple-500/20 rounded-lg hover:bg-purple-500/30 transition-colors"
+              title="التذكيرات"
+            >
+              <Bell className="w-6 h-6 text-purple-400" />
+              {stats.dueNow > 0 && (
                 <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center font-bold animate-pulse">
                   {stats.dueNow}
                 </span>
-              </motion.div>
-            )}
+              )}
+            </motion.button>
             
             <motion.button
               whileHover={{ scale: 1.05 }}
@@ -331,7 +335,7 @@ function App() {
       </header>
 
       {/* Navigation */}
-      <nav className="relative z-10 glass-card border-b border-cyan-500/10">
+      <nav className="relative z-10 glass-card border-b border-purple-500/10">
         <div className="max-w-7xl mx-auto px-4">
           <div className="flex gap-1 overflow-x-auto">
             {[
@@ -347,8 +351,8 @@ function App() {
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all duration-300 border-b-2 whitespace-nowrap relative ${
                   activeTab === tab.id 
-                    ? 'border-cyan-400 text-cyan-300' 
-                    : 'border-transparent text-gray-400 hover:text-cyan-300'
+                    ? 'border-purple-400 text-purple-300' 
+                    : 'border-transparent text-gray-400 hover:text-purple-300'
                 }`}
               >
                 <tab.icon className="w-4 h-4" />
@@ -482,7 +486,7 @@ function PermissionModal({ onAllow, onDeny }: { onAllow: () => void; onDeny: () 
         animate={{ scale: 1, opacity: 1, rotateY: 0 }}
         exit={{ scale: 0.5, opacity: 0 }}
         transition={{ type: "spring", duration: 0.6 }}
-        className="glass-card rounded-3xl p-8 w-full max-w-md border-cyan-400/30 glow-primary text-center"
+        className="glass-card rounded-3xl p-8 w-full max-w-md border-purple-400/30 glow-primary text-center"
       >
         <motion.div
           animate={{ 
@@ -540,12 +544,12 @@ function DashboardView({ stats, clients, reminders, onComplete, onDelay }: {
   const dueReminders = reminders.filter(r => isReminderDue(r) && !r.isCompleted);
   
   const statCards = [
-    { label: 'إجمالي العملاء', value: stats.totalClients, icon: Users, gradient: 'from-cyan-500 to-blue-600' },
-    { label: 'عملاء جدد', value: stats.newClients, icon: UserPlus, gradient: 'from-blue-500 to-violet-600' },
-    { label: 'مهتمين', value: stats.interested, icon: Star, gradient: 'from-emerald-500 to-cyan-500' },
-    { label: 'تم الإغلاق', value: stats.closed, icon: Award, gradient: 'from-violet-500 to-pink-500' },
-    { label: 'تذكيرات نشطة', value: stats.activeReminders, icon: Clock, gradient: 'from-pink-500 to-rose-500' },
-    { label: 'مستحقة الآن', value: stats.dueNow, icon: Zap, gradient: 'from-amber-500 to-orange-500' },
+    { label: 'إجمالي العملاء', value: stats.totalClients, icon: Users, gradient: 'from-purple-500 to-violet-600' },
+    { label: 'عملاء جدد', value: stats.newClients, icon: UserPlus, gradient: 'from-violet-500 to-purple-600' },
+    { label: 'مهتمين', value: stats.interested, icon: Star, gradient: 'from-emerald-500 to-purple-500' },
+    { label: 'تم الإغلاق', value: stats.closed, icon: Award, gradient: 'from-purple-500 to-pink-500' },
+    { label: 'تذكيرات نشطة', value: stats.activeReminders, icon: Clock, gradient: 'from-pink-500 to-purple-500' },
+    { label: 'مستحقة الآن', value: stats.dueNow, icon: Zap, gradient: 'from-amber-500 to-purple-500' },
   ];
 
   return (
@@ -732,7 +736,7 @@ function ClientsView({ clients, searchTerm, onSearch, onSelect, onDelete, onAdd 
             placeholder="بحث بالاسم أو رقم الهاتف أو العقار..."
             value={searchTerm}
             onChange={(e) => onSearch(e.target.value)}
-            className="w-full bg-white/5 border border-cyan-500/20 rounded-xl pr-11 pl-4 py-3 text-white placeholder-gray-500 focus:border-cyan-500/50 transition-all"
+            className="w-full bg-white/5 border border-purple-500/20 rounded-xl pr-11 pl-4 py-3 text-white placeholder-gray-500 focus:border-purple-500/50 transition-all"
           />
         </motion.div>
         <motion.button
@@ -781,12 +785,12 @@ function ClientsView({ clients, searchTerm, onSearch, onSelect, onDelete, onAdd 
             </div>
             <div className="space-y-2 text-sm">
               <p className="text-gray-300 flex items-center gap-2">
-                <Building2 className="w-4 h-4 text-cyan-400" />
+                <Building2 className="w-4 h-4 text-purple-400" />
                 {client.property || 'لم يحدد العقار'}
               </p>
               {client.feedback && (
                 <p className="text-gray-400 flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4 text-violet-400" />
+                  <MessageSquare className="w-4 h-4 text-purple-400" />
                   <span className="truncate">{client.feedback}</span>
                 </p>
               )}
@@ -883,7 +887,7 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
                         </motion.span>
                       )}
                     </div>
-                    <p className="text-sm text-cyan-400 flex items-center gap-1">
+                    <p className="text-sm text-purple-400 flex items-center gap-1">
                       <Phone className="w-3 h-3" />
                       <span dir="ltr">{reminder.clientPhone}</span>
                     </p>
@@ -933,10 +937,10 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
                       href={`tel:${reminder.clientPhone}`}
-                      className="p-2 bg-cyan-500/20 rounded-lg hover:bg-cyan-500/30 transition-colors"
+                      className="p-2 bg-purple-500/20 rounded-lg hover:bg-purple-500/30 transition-colors"
                       title="اتصال"
                     >
-                      <PhoneCall className="w-4 h-4 text-cyan-400" />
+                      <PhoneCall className="w-4 h-4 text-purple-400" />
                     </motion.a>
                     <motion.button
                       whileHover={{ scale: 1.1 }}
@@ -1046,7 +1050,7 @@ function AddClientModal({ onClose, onAdd }: {
         exit={{ scale: 0.8, opacity: 0, y: 50 }}
         transition={{ type: "spring", duration: 0.5 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-cyan-400/30 glow-primary"
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary"
       >
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
@@ -1071,7 +1075,7 @@ function AddClientModal({ onClose, onAdd }: {
               required
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               placeholder="اسم العميل"
             />
           </div>
@@ -1082,7 +1086,7 @@ function AddClientModal({ onClose, onAdd }: {
               required
               value={form.phone}
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               placeholder="05xxxxxxxx"
               dir="ltr"
             />
@@ -1093,7 +1097,7 @@ function AddClientModal({ onClose, onAdd }: {
               type="email"
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
-              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               placeholder="email@example.com"
               dir="ltr"
             />
@@ -1104,7 +1108,7 @@ function AddClientModal({ onClose, onAdd }: {
               type="text"
               value={form.property}
               onChange={(e) => setForm({ ...form, property: e.target.value })}
-              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               placeholder="شقة، فيلا، أرض..."
             />
           </div>
@@ -1114,7 +1118,7 @@ function AddClientModal({ onClose, onAdd }: {
               type="text"
               value={form.budget}
               onChange={(e) => setForm({ ...form, budget: e.target.value })}
-              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               placeholder="الميزانية المتوقعة"
             />
           </div>
@@ -1123,7 +1127,7 @@ function AddClientModal({ onClose, onAdd }: {
             <select
               value={form.status}
               onChange={(e) => setForm({ ...form, status: e.target.value as Client['status'] })}
-              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
             >
               <option value="new" className="bg-gray-900">جديد</option>
               <option value="contacted" className="bg-gray-900">تم التواصل</option>
@@ -1138,7 +1142,7 @@ function AddClientModal({ onClose, onAdd }: {
             <textarea
               value={form.feedback}
               onChange={(e) => setForm({ ...form, feedback: e.target.value })}
-              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all resize-none h-24"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24"
               placeholder="أي ملاحظات عن العميل..."
             />
           </div>
@@ -1201,7 +1205,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
         exit={{ scale: 0.8, opacity: 0, y: 50 }}
         transition={{ type: "spring", duration: 0.5 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg border-cyan-400/30 glow-primary"
+        className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary"
       >
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
@@ -1225,7 +1229,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               <select
                 value={form.clientId}
                 onChange={(e) => handleClientSelect(e.target.value)}
-                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               >
                 <option value="" className="bg-gray-900">-- اختر عميل --</option>
                 {clients.map(c => (
@@ -1243,7 +1247,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               required
               value={form.clientName}
               onChange={(e) => setForm({ ...form, clientName: e.target.value })}
-              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               placeholder="اسم العميل"
             />
           </div>
@@ -1254,7 +1258,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               required
               value={form.clientPhone}
               onChange={(e) => setForm({ ...form, clientPhone: e.target.value })}
-              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               placeholder="05xxxxxxxx"
               dir="ltr"
             />
@@ -1267,7 +1271,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               min={minDateTime}
               value={form.dateTime}
               onChange={(e) => setForm({ ...form, dateTime: e.target.value })}
-              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               dir="ltr"
             />
           </div>
@@ -1276,7 +1280,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
             <textarea
               value={form.note}
               onChange={(e) => setForm({ ...form, note: e.target.value })}
-              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all resize-none h-20"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-20"
               placeholder="سبب المكالمة أو ملاحظة..."
             />
           </div>
@@ -1332,7 +1336,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
         exit={{ scale: 0.8, opacity: 0, y: 50 }}
         transition={{ type: "spring", duration: 0.5 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-cyan-400/30 glow-primary"
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary"
       >
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold gradient-text">تفاصيل العميل</h2>
@@ -1367,7 +1371,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               />
             </div>
             <div>
@@ -1376,7 +1380,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="tel"
                 value={form.phone}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
                 dir="ltr"
               />
             </div>
@@ -1386,7 +1390,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="email"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
-                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
                 dir="ltr"
               />
             </div>
@@ -1396,7 +1400,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="text"
                 value={form.property}
                 onChange={(e) => setForm({ ...form, property: e.target.value })}
-                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               />
             </div>
             <div>
@@ -1405,7 +1409,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="text"
                 value={form.budget}
                 onChange={(e) => setForm({ ...form, budget: e.target.value })}
-                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               />
             </div>
             <div>
@@ -1413,7 +1417,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
               <select
                 value={form.status}
                 onChange={(e) => setForm({ ...form, status: e.target.value as Client['status'] })}
-                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               >
                 <option value="new" className="bg-gray-900">جديد</option>
                 <option value="contacted" className="bg-gray-900">تم التواصل</option>
@@ -1428,7 +1432,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
               <textarea
                 value={form.feedback}
                 onChange={(e) => setForm({ ...form, feedback: e.target.value })}
-                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all resize-none h-24"
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24"
               />
             </div>
             <div className="flex gap-3">
@@ -1486,7 +1490,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
                 onClick={() => setEditing(true)}
-                className="flex-1 flex items-center justify-center gap-2 bg-cyan-500/20 text-cyan-300 py-2.5 rounded-xl hover:bg-cyan-500/30 transition-colors border border-cyan-500/20"
+                className="flex-1 flex items-center justify-center gap-2 bg-purple-500/20 text-purple-300 py-2.5 rounded-xl hover:bg-purple-500/30 transition-colors border border-purple-500/20"
               >
                 <Edit3 className="w-4 h-4" />
                 تعديل
@@ -1504,7 +1508,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
                 onClick={onAddReminder}
-                className="flex-1 flex items-center justify-center gap-2 bg-violet-500/20 text-violet-400 py-2.5 rounded-xl hover:bg-violet-500/30 transition-colors border border-violet-500/20"
+                className="flex-1 flex items-center justify-center gap-2 bg-purple-500/20 text-purple-400 py-2.5 rounded-xl hover:bg-purple-500/30 transition-colors border border-purple-500/20"
               >
                 <Bell className="w-4 h-4" />
                 تذكير

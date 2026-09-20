@@ -43,6 +43,17 @@ export async function requestNotificationPermission(): Promise<boolean> {
   if (!('Notification' in window)) {
     return false;
   }
+  
+  // Register Service Worker
+  if ('serviceWorker' in navigator) {
+    try {
+      await navigator.serviceWorker.register('/sw.js');
+      console.log('Service Worker registered');
+    } catch (error) {
+      console.log('Service Worker registration failed:', error);
+    }
+  }
+  
   if (Notification.permission === 'granted') {
     return true;
   }
