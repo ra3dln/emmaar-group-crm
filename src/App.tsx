@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Users, Bell, Plus, Home, Phone, Clock, Check, 
@@ -27,7 +27,6 @@ function App() {
   const [notificationPermission, setNotificationPermission] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [inAppNotification, setInAppNotification] = useState<{title: string, body: string} | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
 
   // Show permission modal on first load
   useEffect(() => {
@@ -38,7 +37,9 @@ function App() {
       }, 2000);
       return () => clearTimeout(timer);
     } else {
-      setNotificationPermission(Notification.permission === 'granted');
+      if ('Notification' in window) {
+        setNotificationPermission(Notification.permission === 'granted');
+      }
     }
   }, []);
 
@@ -47,13 +48,6 @@ function App() {
     setNotificationPermission(granted);
     localStorage.setItem('notification_permission_asked', 'true');
     setShowPermissionModal(false);
-    
-    // Initialize audio context on user interaction
-    try {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-    } catch (e) {
-      console.log('Audio context init failed');
-    }
   };
 
   const handleDenyPermission = () => {
@@ -1554,13 +1548,20 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
 
 // Status Badge Component
 function StatusBadge({ status }: { status: Client['status'] }) {
-  const config = {
-    campaign: { label: 'كامبين', class: 'status-new' },
-    facebook: { label: 'فيسبوك', class: 'status-contacted' },
-    external: { label: 'خارجي', class: 'status-interested' },
+  const getStatusInfo = () => {
+    switch (status) {
+      case 'campaign':
+        return { label: 'كامبين', className: 'status-new' };
+      case 'facebook':
+        return { label: 'فيسبوك', className: 'status-contacted' };
+      case 'external':
+        return { label: 'خارجي', className: 'status-interested' };
+      default:
+        return { label: 'غير معروف', className: 'status-new' };
+    }
   };
 
-  const { label, class: className } = config[status];
+  const { label, className } = getStatusInfo();
 
   return (
     <span className={`text-xs px-2.5 py-1 rounded-full ${className}`}>
