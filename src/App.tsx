@@ -1,17 +1,18 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Users, Bell, Plus, Home, Phone, Clock, Check, 
   AlertTriangle, Star, Calendar, 
   MessageSquare, X, Edit3, Trash2, Search,
   PhoneCall, UserPlus, Building2, Sparkles,
-  Zap, TrendingUp, Target, Award
+  Zap, Target, Award, Volume2, VolumeX
 } from 'lucide-react';
 import { Client, Reminder, TabType } from './types';
 import { 
   getClients, saveClients, getReminders, saveReminders,
   requestNotificationPermission, sendNotification, vibrateDevice,
-  formatDateTime, isReminderDue, getTimeUntil
+  formatDateTime, isReminderDue, getTimeUntil,
+  getNotifiedReminders, addNotifiedReminder, playNotificationSound
 } from './utils';
 
 function App() {
@@ -24,6 +25,9 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [inAppNotification, setInAppNotification] = useState<{title: string, body: string} | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   // Show permission modal on first load
   useEffect(() => {
@@ -31,7 +35,7 @@ function App() {
     if (!hasAsked) {
       const timer = setTimeout(() => {
         setShowPermissionModal(true);
-      }, 1500);
+      }, 2000);
       return () => clearTimeout(timer);
     } else {
       setNotificationPermission(Notification.permission === 'granted');
@@ -43,6 +47,13 @@ function App() {
     setNotificationPermission(granted);
     localStorage.setItem('notification_permission_asked', 'true');
     setShowPermissionModal(false);
+    
+    // Initialize audio context on user interaction
+    try {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    } catch (e) {
+      console.log('Audio context init failed');
+    }
   };
 
   const handleDenyPermission = () => {
@@ -56,22 +67,53 @@ function App() {
     setReminders(getReminders());
   }, []);
 
-  // Check reminders
+  // Check reminders every 5 seconds
   useEffect(() => {
-    const interval = setInterval(() => {
+    const checkReminders = () => {
       const currentReminders = getReminders();
+      const notifiedIds = getNotifiedReminders();
+      
       currentReminders.forEach(reminder => {
-        if (isReminderDue(reminder) && !reminder.isCompleted) {
-          sendNotification(
-            '⏰ تذكير بالاتصال',
-            `حان وقت الاتصال بـ ${reminder.clientName} - ${reminder.clientPhone}`
-          );
+        if (isReminderDue(reminder) && !reminder.isCompleted && !notifiedIds.includes(reminder.id)) {
+          // Mark as notified
+          addNotifiedReminder(reminder.id);
+          
+          // Play sound
+          if (soundEnabled) {
+            playNotificationSound();
+          }
+          
+          // Vibrate device
           vibrateDevice();
+          
+          // Send browser notification (works even when tab is in background)
+          sendNotification(
+            '⏰ تذكير بالاتصال بعميل',
+            `حان وقت الاتصال بـ ${reminder.clientName}\n${reminder.clientPhone}\n${reminder.note || ''}`,
+            `reminder-${reminder.id}`
+          );
+          
+          // Show in-app notification
+          setInAppNotification({
+            title: `⏰ حان وقت الاتصال بـ ${reminder.clientName}`,
+            body: `${reminder.clientPhone} - ${reminder.note || 'تذكير بمكالمة'}`
+          });
+          
+          // Auto-hide in-app notification after 10 seconds
+          setTimeout(() => {
+            setInAppNotification(null);
+          }, 10000);
         }
       });
-    }, 10000);
+    };
+
+    // Check immediately
+    checkReminders();
+    
+    // Then check every 5 seconds
+    const interval = setInterval(checkReminders, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [soundEnabled]);
 
   const addClient = useCallback((client: Omit<Client, 'id' | 'createdAt' | 'updatedAt'>) => {
     const newClient: Client = {
@@ -142,6 +184,9 @@ function App() {
     });
     setReminders(updated);
     saveReminders(updated);
+    // Clear from notified so it can notify again when due
+    const notified = getNotifiedReminders().filter(nid => nid !== id);
+    localStorage.setItem('crm_notified_reminders', JSON.stringify(notified));
   }, [reminders]);
 
   const deleteReminder = useCallback((id: string) => {
@@ -168,14 +213,48 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0e27] text-white relative overflow-hidden">
+    <div className="min-h-screen bg-[#030014] text-white relative overflow-hidden">
       {/* Background Orbs */}
       <div className="bg-orb bg-orb-1"></div>
       <div className="bg-orb bg-orb-2"></div>
       <div className="bg-orb bg-orb-3"></div>
 
+      {/* In-App Notification */}
+      <AnimatePresence>
+        {inAppNotification && (
+          <motion.div
+            initial={{ opacity: 0, y: -100, scale: 0.8 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -100, scale: 0.8 }}
+            className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4"
+          >
+            <div className="glass-card rounded-2xl p-4 border-cyan-400/50 glow-primary animate-pulse-glow">
+              <div className="flex items-start gap-3">
+                <motion.div
+                  animate={{ scale: [1, 1.2, 1] }}
+                  transition={{ duration: 0.5, repeat: Infinity }}
+                  className="w-10 h-10 gradient-primary rounded-full flex items-center justify-center flex-shrink-0"
+                >
+                  <Bell className="w-5 h-5 text-white" />
+                </motion.div>
+                <div className="flex-1">
+                  <p className="font-bold text-white text-sm">{inAppNotification.title}</p>
+                  <p className="text-gray-300 text-xs mt-1">{inAppNotification.body}</p>
+                </div>
+                <button 
+                  onClick={() => setInAppNotification(null)}
+                  className="p-1 hover:bg-white/10 rounded-lg"
+                >
+                  <X className="w-4 h-4 text-gray-400" />
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
-      <header className="relative z-10 glass-card border-b border-primary-500/20">
+      <header className="relative z-10 glass-card border-b border-cyan-500/20">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <motion.div 
             initial={{ opacity: 0, x: 20 }}
@@ -192,20 +271,33 @@ function App() {
             <div>
               <h1 className="text-xl font-bold gradient-text">CRM العقارات</h1>
               <p className="text-xs text-gray-400 flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-primary-400" />
+                <Sparkles className="w-3 h-3 text-cyan-400" />
                 نظام إدارة العملاء الذكي
               </p>
             </div>
           </motion.div>
           
           <div className="flex items-center gap-3">
+            {/* Sound Toggle */}
+            <motion.button
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+              onClick={() => setSoundEnabled(!soundEnabled)}
+              className={`p-2 rounded-lg transition-colors ${
+                soundEnabled ? 'bg-cyan-500/20 text-cyan-400' : 'bg-white/5 text-gray-500'
+              }`}
+              title={soundEnabled ? 'كتم الصوت' : 'تفعيل الصوت'}
+            >
+              {soundEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+            </motion.button>
+
             {!notificationPermission && (
               <motion.button
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 whileHover={{ scale: 1.05 }}
                 onClick={() => setShowPermissionModal(true)}
-                className="flex items-center gap-2 bg-primary-500/20 text-primary-300 px-3 py-2 rounded-lg text-sm border border-primary-500/30"
+                className="flex items-center gap-2 bg-cyan-500/20 text-cyan-300 px-3 py-2 rounded-lg text-sm border border-cyan-500/30"
               >
                 <Bell className="w-4 h-4" />
                 <span className="hidden sm:inline">تفعيل الإشعارات</span>
@@ -218,7 +310,7 @@ function App() {
                 animate={{ scale: 1 }}
                 className="notification-badge relative"
               >
-                <Bell className="w-6 h-6 text-neon-pink" />
+                <Bell className="w-6 h-6 text-pink-400" />
                 <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center font-bold animate-pulse">
                   {stats.dueNow}
                 </span>
@@ -239,7 +331,7 @@ function App() {
       </header>
 
       {/* Navigation */}
-      <nav className="relative z-10 glass-card border-b border-primary-500/10">
+      <nav className="relative z-10 glass-card border-b border-cyan-500/10">
         <div className="max-w-7xl mx-auto px-4">
           <div className="flex gap-1 overflow-x-auto">
             {[
@@ -255,8 +347,8 @@ function App() {
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all duration-300 border-b-2 whitespace-nowrap relative ${
                   activeTab === tab.id 
-                    ? 'border-primary-400 text-primary-300' 
-                    : 'border-transparent text-gray-400 hover:text-primary-300'
+                    ? 'border-cyan-400 text-cyan-300' 
+                    : 'border-transparent text-gray-400 hover:text-cyan-300'
                 }`}
               >
                 <tab.icon className="w-4 h-4" />
@@ -365,7 +457,7 @@ function App() {
             onClose={() => setSelectedClient(null)}
             onUpdate={updateClient}
             onDelete={() => { deleteClient(selectedClient.id); setSelectedClient(null); }}
-            onAddReminder={(clientId, clientName, clientPhone) => {
+            onAddReminder={() => {
               setSelectedClient(null);
               setShowAddReminder(true);
             }}
@@ -390,7 +482,7 @@ function PermissionModal({ onAllow, onDeny }: { onAllow: () => void; onDeny: () 
         animate={{ scale: 1, opacity: 1, rotateY: 0 }}
         exit={{ scale: 0.5, opacity: 0 }}
         transition={{ type: "spring", duration: 0.6 }}
-        className="glass-card rounded-3xl p-8 w-full max-w-md border-primary-500/30 glow-primary text-center"
+        className="glass-card rounded-3xl p-8 w-full max-w-md border-cyan-400/30 glow-primary text-center"
       >
         <motion.div
           animate={{ 
@@ -403,12 +495,12 @@ function PermissionModal({ onAllow, onDeny }: { onAllow: () => void; onDeny: () 
           <Bell className="w-10 h-10 text-white" />
         </motion.div>
         
-        <h2 className="text-2xl font-bold gradient-text mb-3">تفعيل الإشعارات</h2>
+        <h2 className="text-2xl font-bold gradient-text mb-3">تفعيل الإشعارات والصوت</h2>
         <p className="text-gray-300 mb-2">
-          هل تريد تفعيل الإشعارات؟
+          هل تريد تفعيل الإشعارات والصوت؟
         </p>
         <p className="text-gray-400 text-sm mb-6">
-          سنرسل لك إشعارات عند حلول وقت الاتصال بالعملاء مع اهتزاز الجهاز
+          سنرسل لك إشعارات مع صوت عند حلول وقت الاتصال بالعملاء حتى لو كنت خارج الصفحة
         </p>
         
         <div className="flex gap-3">
@@ -448,12 +540,12 @@ function DashboardView({ stats, clients, reminders, onComplete, onDelay }: {
   const dueReminders = reminders.filter(r => isReminderDue(r) && !r.isCompleted);
   
   const statCards = [
-    { label: 'إجمالي العملاء', value: stats.totalClients, icon: Users, gradient: 'from-primary-500 to-primary-700' },
-    { label: 'عملاء جدد', value: stats.newClients, icon: UserPlus, gradient: 'from-blue-500 to-cyan-500' },
-    { label: 'مهتمين', value: stats.interested, icon: Star, gradient: 'from-green-500 to-emerald-500' },
-    { label: 'تم الإغلاق', value: stats.closed, icon: Award, gradient: 'from-purple-500 to-pink-500' },
-    { label: 'تذكيرات نشطة', value: stats.activeReminders, icon: Clock, gradient: 'from-orange-500 to-red-500' },
-    { label: 'مستحقة الآن', value: stats.dueNow, icon: Zap, gradient: 'from-pink-500 to-rose-500' },
+    { label: 'إجمالي العملاء', value: stats.totalClients, icon: Users, gradient: 'from-cyan-500 to-blue-600' },
+    { label: 'عملاء جدد', value: stats.newClients, icon: UserPlus, gradient: 'from-blue-500 to-violet-600' },
+    { label: 'مهتمين', value: stats.interested, icon: Star, gradient: 'from-emerald-500 to-cyan-500' },
+    { label: 'تم الإغلاق', value: stats.closed, icon: Award, gradient: 'from-violet-500 to-pink-500' },
+    { label: 'تذكيرات نشطة', value: stats.activeReminders, icon: Clock, gradient: 'from-pink-500 to-rose-500' },
+    { label: 'مستحقة الآن', value: stats.dueNow, icon: Zap, gradient: 'from-amber-500 to-orange-500' },
   ];
 
   return (
@@ -466,7 +558,7 @@ function DashboardView({ stats, clients, reminders, onComplete, onDelay }: {
       >
         <div className="absolute top-0 left-0 w-full h-full opacity-10">
           <div className="absolute top-0 right-0 w-40 h-40 gradient-primary rounded-full blur-3xl animate-float"></div>
-          <div className="absolute bottom-0 left-0 w-32 h-32 bg-accent-500 rounded-full blur-3xl animate-float" style={{ animationDelay: '1s' }}></div>
+          <div className="absolute bottom-0 left-0 w-32 h-32 bg-violet-500 rounded-full blur-3xl animate-float" style={{ animationDelay: '1s' }}></div>
         </div>
         <div className="relative z-10">
           <h2 className="text-2xl font-bold gradient-text mb-2">مرحباً بك 👋</h2>
@@ -539,28 +631,28 @@ function DashboardView({ stats, clients, reminders, onComplete, onDelay }: {
                     whileHover={{ scale: 1.1 }}
                     whileTap={{ scale: 0.9 }}
                     onClick={() => onComplete(reminder.id)}
-                    className="p-2.5 bg-green-500/20 rounded-xl hover:bg-green-500/30 transition-colors"
+                    className="p-2.5 bg-emerald-500/20 rounded-xl hover:bg-emerald-500/30 transition-colors"
                     title="تم الاتصال"
                   >
-                    <Check className="w-5 h-5 text-green-400" />
+                    <Check className="w-5 h-5 text-emerald-400" />
                   </motion.button>
                   <motion.button
                     whileHover={{ scale: 1.1 }}
                     whileTap={{ scale: 0.9 }}
                     onClick={() => onDelay(reminder.id, 30)}
-                    className="p-2.5 bg-orange-500/20 rounded-xl hover:bg-orange-500/30 transition-colors"
+                    className="p-2.5 bg-amber-500/20 rounded-xl hover:bg-amber-500/30 transition-colors"
                     title="تأجيل 30 دقيقة"
                   >
-                    <Clock className="w-5 h-5 text-orange-400" />
+                    <Clock className="w-5 h-5 text-amber-400" />
                   </motion.button>
                   <motion.a
                     whileHover={{ scale: 1.1 }}
                     whileTap={{ scale: 0.9 }}
                     href={`tel:${reminder.clientPhone}`}
-                    className="p-2.5 bg-primary-500/20 rounded-xl hover:bg-primary-500/30 transition-colors"
+                    className="p-2.5 bg-cyan-500/20 rounded-xl hover:bg-cyan-500/30 transition-colors"
                     title="اتصال"
                   >
-                    <PhoneCall className="w-5 h-5 text-primary-400" />
+                    <PhoneCall className="w-5 h-5 text-cyan-400" />
                   </motion.a>
                 </div>
               </motion.div>
@@ -640,7 +732,7 @@ function ClientsView({ clients, searchTerm, onSearch, onSelect, onDelete, onAdd 
             placeholder="بحث بالاسم أو رقم الهاتف أو العقار..."
             value={searchTerm}
             onChange={(e) => onSearch(e.target.value)}
-            className="w-full bg-white/5 border border-primary-500/20 rounded-xl pr-11 pl-4 py-3 text-white placeholder-gray-500 focus:border-primary-500/50 transition-all"
+            className="w-full bg-white/5 border border-cyan-500/20 rounded-xl pr-11 pl-4 py-3 text-white placeholder-gray-500 focus:border-cyan-500/50 transition-all"
           />
         </motion.div>
         <motion.button
@@ -689,12 +781,12 @@ function ClientsView({ clients, searchTerm, onSearch, onSelect, onDelete, onAdd 
             </div>
             <div className="space-y-2 text-sm">
               <p className="text-gray-300 flex items-center gap-2">
-                <Building2 className="w-4 h-4 text-primary-400" />
+                <Building2 className="w-4 h-4 text-cyan-400" />
                 {client.property || 'لم يحدد العقار'}
               </p>
               {client.feedback && (
                 <p className="text-gray-400 flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4 text-accent-400" />
+                  <MessageSquare className="w-4 h-4 text-violet-400" />
                   <span className="truncate">{client.feedback}</span>
                 </p>
               )}
@@ -776,7 +868,7 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
                         <motion.span 
                           initial={{ scale: 0 }}
                           animate={{ scale: 1 }}
-                          className="text-xs bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded-full"
+                          className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full"
                         >
                           مؤجل ({reminder.delayCount})
                         </motion.span>
@@ -791,7 +883,7 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
                         </motion.span>
                       )}
                     </div>
-                    <p className="text-sm text-primary-400 flex items-center gap-1">
+                    <p className="text-sm text-cyan-400 flex items-center gap-1">
                       <Phone className="w-3 h-3" />
                       <span dir="ltr">{reminder.clientPhone}</span>
                     </p>
@@ -800,7 +892,7 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
                       {formatDateTime(reminder.dateTime)}
                     </p>
                     {!isDue && (
-                      <p className="text-xs text-green-400 mt-1 flex items-center gap-1">
+                      <p className="text-xs text-emerald-400 mt-1 flex items-center gap-1">
                         <Clock className="w-3 h-3" />
                         متبقي: {getTimeUntil(reminder)}
                       </p>
@@ -814,19 +906,19 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
                       onClick={() => onComplete(reminder.id)}
-                      className="p-2 bg-green-500/20 rounded-lg hover:bg-green-500/30 transition-colors"
+                      className="p-2 bg-emerald-500/20 rounded-lg hover:bg-emerald-500/30 transition-colors"
                       title="تم الاتصال"
                     >
-                      <Check className="w-4 h-4 text-green-400" />
+                      <Check className="w-4 h-4 text-emerald-400" />
                     </motion.button>
                     <motion.button
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
                       onClick={() => onDelay(reminder.id, 30)}
-                      className="p-2 bg-orange-500/20 rounded-lg hover:bg-orange-500/30 transition-colors"
+                      className="p-2 bg-amber-500/20 rounded-lg hover:bg-amber-500/30 transition-colors"
                       title="تأجيل 30 دقيقة"
                     >
-                      <Clock className="w-4 h-4 text-orange-400" />
+                      <Clock className="w-4 h-4 text-amber-400" />
                     </motion.button>
                     <motion.button
                       whileHover={{ scale: 1.1 }}
@@ -841,10 +933,10 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
                       href={`tel:${reminder.clientPhone}`}
-                      className="p-2 bg-primary-500/20 rounded-lg hover:bg-primary-500/30 transition-colors"
+                      className="p-2 bg-cyan-500/20 rounded-lg hover:bg-cyan-500/30 transition-colors"
                       title="اتصال"
                     >
-                      <PhoneCall className="w-4 h-4 text-primary-400" />
+                      <PhoneCall className="w-4 h-4 text-cyan-400" />
                     </motion.a>
                     <motion.button
                       whileHover={{ scale: 1.1 }}
@@ -881,7 +973,7 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
                   <p className="text-xs text-gray-400" dir="ltr">{reminder.clientPhone}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded-full">
+                  <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-full">
                     ✓ تم
                   </span>
                   <motion.button
@@ -954,7 +1046,7 @@ function AddClientModal({ onClose, onAdd }: {
         exit={{ scale: 0.8, opacity: 0, y: 50 }}
         transition={{ type: "spring", duration: 0.5 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-primary-500/30 glow-primary"
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-cyan-400/30 glow-primary"
       >
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
@@ -979,7 +1071,7 @@ function AddClientModal({ onClose, onAdd }: {
               required
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               placeholder="اسم العميل"
             />
           </div>
@@ -990,7 +1082,7 @@ function AddClientModal({ onClose, onAdd }: {
               required
               value={form.phone}
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               placeholder="05xxxxxxxx"
               dir="ltr"
             />
@@ -1001,7 +1093,7 @@ function AddClientModal({ onClose, onAdd }: {
               type="email"
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
-              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               placeholder="email@example.com"
               dir="ltr"
             />
@@ -1012,7 +1104,7 @@ function AddClientModal({ onClose, onAdd }: {
               type="text"
               value={form.property}
               onChange={(e) => setForm({ ...form, property: e.target.value })}
-              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               placeholder="شقة، فيلا، أرض..."
             />
           </div>
@@ -1022,7 +1114,7 @@ function AddClientModal({ onClose, onAdd }: {
               type="text"
               value={form.budget}
               onChange={(e) => setForm({ ...form, budget: e.target.value })}
-              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               placeholder="الميزانية المتوقعة"
             />
           </div>
@@ -1031,7 +1123,7 @@ function AddClientModal({ onClose, onAdd }: {
             <select
               value={form.status}
               onChange={(e) => setForm({ ...form, status: e.target.value as Client['status'] })}
-              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
             >
               <option value="new" className="bg-gray-900">جديد</option>
               <option value="contacted" className="bg-gray-900">تم التواصل</option>
@@ -1046,7 +1138,7 @@ function AddClientModal({ onClose, onAdd }: {
             <textarea
               value={form.feedback}
               onChange={(e) => setForm({ ...form, feedback: e.target.value })}
-              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all resize-none h-24"
+              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all resize-none h-24"
               placeholder="أي ملاحظات عن العميل..."
             />
           </div>
@@ -1109,7 +1201,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
         exit={{ scale: 0.8, opacity: 0, y: 50 }}
         transition={{ type: "spring", duration: 0.5 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg border-primary-500/30 glow-primary"
+        className="glass-card rounded-3xl p-6 w-full max-w-lg border-cyan-400/30 glow-primary"
       >
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
@@ -1133,7 +1225,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               <select
                 value={form.clientId}
                 onChange={(e) => handleClientSelect(e.target.value)}
-                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               >
                 <option value="" className="bg-gray-900">-- اختر عميل --</option>
                 {clients.map(c => (
@@ -1151,7 +1243,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               required
               value={form.clientName}
               onChange={(e) => setForm({ ...form, clientName: e.target.value })}
-              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               placeholder="اسم العميل"
             />
           </div>
@@ -1162,7 +1254,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               required
               value={form.clientPhone}
               onChange={(e) => setForm({ ...form, clientPhone: e.target.value })}
-              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               placeholder="05xxxxxxxx"
               dir="ltr"
             />
@@ -1175,7 +1267,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               min={minDateTime}
               value={form.dateTime}
               onChange={(e) => setForm({ ...form, dateTime: e.target.value })}
-              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               dir="ltr"
             />
           </div>
@@ -1184,7 +1276,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
             <textarea
               value={form.note}
               onChange={(e) => setForm({ ...form, note: e.target.value })}
-              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all resize-none h-20"
+              className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all resize-none h-20"
               placeholder="سبب المكالمة أو ملاحظة..."
             />
           </div>
@@ -1208,7 +1300,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
   onClose: () => void;
   onUpdate: (id: string, data: Partial<Client>) => void;
   onDelete: () => void;
-  onAddReminder: (clientId: string, clientName: string, clientPhone: string) => void;
+  onAddReminder: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
@@ -1240,7 +1332,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
         exit={{ scale: 0.8, opacity: 0, y: 50 }}
         transition={{ type: "spring", duration: 0.5 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-primary-500/30 glow-primary"
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-cyan-400/30 glow-primary"
       >
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold gradient-text">تفاصيل العميل</h2>
@@ -1275,7 +1367,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               />
             </div>
             <div>
@@ -1284,7 +1376,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="tel"
                 value={form.phone}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
                 dir="ltr"
               />
             </div>
@@ -1294,7 +1386,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="email"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
-                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
                 dir="ltr"
               />
             </div>
@@ -1304,7 +1396,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="text"
                 value={form.property}
                 onChange={(e) => setForm({ ...form, property: e.target.value })}
-                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               />
             </div>
             <div>
@@ -1313,7 +1405,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="text"
                 value={form.budget}
                 onChange={(e) => setForm({ ...form, budget: e.target.value })}
-                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               />
             </div>
             <div>
@@ -1321,7 +1413,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
               <select
                 value={form.status}
                 onChange={(e) => setForm({ ...form, status: e.target.value as Client['status'] })}
-                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
+                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all"
               >
                 <option value="new" className="bg-gray-900">جديد</option>
                 <option value="contacted" className="bg-gray-900">تم التواصل</option>
@@ -1336,7 +1428,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
               <textarea
                 value={form.feedback}
                 onChange={(e) => setForm({ ...form, feedback: e.target.value })}
-                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all resize-none h-24"
+                className="w-full bg-white/5 border border-cyan-500/20 rounded-xl px-4 py-3 text-white focus:border-cyan-500/50 transition-all resize-none h-24"
               />
             </div>
             <div className="flex gap-3">
@@ -1394,7 +1486,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
                 onClick={() => setEditing(true)}
-                className="flex-1 flex items-center justify-center gap-2 bg-primary-500/20 text-primary-300 py-2.5 rounded-xl hover:bg-primary-500/30 transition-colors border border-primary-500/20"
+                className="flex-1 flex items-center justify-center gap-2 bg-cyan-500/20 text-cyan-300 py-2.5 rounded-xl hover:bg-cyan-500/30 transition-colors border border-cyan-500/20"
               >
                 <Edit3 className="w-4 h-4" />
                 تعديل
@@ -1403,7 +1495,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
                 href={`tel:${client.phone}`}
-                className="flex-1 flex items-center justify-center gap-2 bg-green-500/20 text-green-400 py-2.5 rounded-xl hover:bg-green-500/30 transition-colors border border-green-500/20"
+                className="flex-1 flex items-center justify-center gap-2 bg-emerald-500/20 text-emerald-400 py-2.5 rounded-xl hover:bg-emerald-500/30 transition-colors border border-emerald-500/20"
               >
                 <PhoneCall className="w-4 h-4" />
                 اتصال
@@ -1411,8 +1503,8 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
               <motion.button
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
-                onClick={() => onAddReminder(client.id, client.name, client.phone)}
-                className="flex-1 flex items-center justify-center gap-2 bg-accent-500/20 text-accent-400 py-2.5 rounded-xl hover:bg-accent-500/30 transition-colors border border-accent-500/20"
+                onClick={onAddReminder}
+                className="flex-1 flex items-center justify-center gap-2 bg-violet-500/20 text-violet-400 py-2.5 rounded-xl hover:bg-violet-500/30 transition-colors border border-violet-500/20"
               >
                 <Bell className="w-4 h-4" />
                 تذكير
