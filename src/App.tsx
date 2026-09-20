@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Users, Bell, Plus, Home, Phone, Clock, Check, 
-  AlertTriangle, TrendingUp, Star, Calendar, 
+  AlertTriangle, Star, Calendar, 
   MessageSquare, X, Edit3, Trash2, Search,
-  BarChart3, PhoneCall, UserPlus, Building2
+  PhoneCall, UserPlus, Building2, Sparkles,
+  Zap, TrendingUp, Target, Award
 } from 'lucide-react';
 import { Client, Reminder, TabType } from './types';
 import { 
@@ -21,16 +22,41 @@ function App() {
   const [showAddReminder, setShowAddReminder] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState(false);
 
-  // Load data from localStorage
+  // Show permission modal on first load
+  useEffect(() => {
+    const hasAsked = localStorage.getItem('notification_permission_asked');
+    if (!hasAsked) {
+      const timer = setTimeout(() => {
+        setShowPermissionModal(true);
+      }, 1500);
+      return () => clearTimeout(timer);
+    } else {
+      setNotificationPermission(Notification.permission === 'granted');
+    }
+  }, []);
+
+  const handlePermissionRequest = async () => {
+    const granted = await requestNotificationPermission();
+    setNotificationPermission(granted);
+    localStorage.setItem('notification_permission_asked', 'true');
+    setShowPermissionModal(false);
+  };
+
+  const handleDenyPermission = () => {
+    localStorage.setItem('notification_permission_asked', 'true');
+    setShowPermissionModal(false);
+  };
+
+  // Load data
   useEffect(() => {
     setClients(getClients());
     setReminders(getReminders());
-    requestNotificationPermission().then(setNotificationPermission);
   }, []);
 
-  // Check reminders every 10 seconds
+  // Check reminders
   useEffect(() => {
     const interval = setInterval(() => {
       const currentReminders = getReminders();
@@ -142,48 +168,68 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white">
-      {/* Background Effects */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-gold-500/5 rounded-full blur-3xl"></div>
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-gold-600/5 rounded-full blur-3xl"></div>
-      </div>
+    <div className="min-h-screen bg-[#0a0e27] text-white relative overflow-hidden">
+      {/* Background Orbs */}
+      <div className="bg-orb bg-orb-1"></div>
+      <div className="bg-orb bg-orb-2"></div>
+      <div className="bg-orb bg-orb-3"></div>
 
       {/* Header */}
-      <header className="relative z-10 glass-card border-b border-gold-500/20">
+      <header className="relative z-10 glass-card border-b border-primary-500/20">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <motion.div 
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             className="flex items-center gap-3"
           >
-            <div className="w-12 h-12 gold-gradient rounded-xl flex items-center justify-center shadow-lg shadow-gold-500/20">
-              <Building2 className="w-7 h-7 text-black" />
-            </div>
+            <motion.div 
+              whileHover={{ rotate: 360, scale: 1.1 }}
+              transition={{ duration: 0.6 }}
+              className="w-12 h-12 gradient-primary rounded-xl flex items-center justify-center shadow-lg glow-primary"
+            >
+              <Building2 className="w-7 h-7 text-white" />
+            </motion.div>
             <div>
-              <h1 className="text-xl font-bold gold-text">CRM العقارات</h1>
-              <p className="text-xs text-gray-400">نظام إدارة العملاء</p>
+              <h1 className="text-xl font-bold gradient-text">CRM العقارات</h1>
+              <p className="text-xs text-gray-400 flex items-center gap-1">
+                <Sparkles className="w-3 h-3 text-primary-400" />
+                نظام إدارة العملاء الذكي
+              </p>
             </div>
           </motion.div>
           
           <div className="flex items-center gap-3">
+            {!notificationPermission && (
+              <motion.button
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                whileHover={{ scale: 1.05 }}
+                onClick={() => setShowPermissionModal(true)}
+                className="flex items-center gap-2 bg-primary-500/20 text-primary-300 px-3 py-2 rounded-lg text-sm border border-primary-500/30"
+              >
+                <Bell className="w-4 h-4" />
+                <span className="hidden sm:inline">تفعيل الإشعارات</span>
+              </motion.button>
+            )}
+            
             {stats.dueNow > 0 && (
               <motion.div 
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 className="notification-badge relative"
               >
-                <Bell className="w-6 h-6 text-gold-400" />
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center font-bold">
+                <Bell className="w-6 h-6 text-neon-pink" />
+                <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center font-bold animate-pulse">
                   {stats.dueNow}
                 </span>
               </motion.div>
             )}
+            
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={() => setShowAddClient(true)}
-              className="gold-gradient text-black px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 shadow-lg shadow-gold-500/20"
+              className="gradient-primary text-white px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover"
             >
               <Plus className="w-4 h-4" />
               عميل جديد
@@ -193,31 +239,40 @@ function App() {
       </header>
 
       {/* Navigation */}
-      <nav className="relative z-10 glass-card border-b border-gold-500/10">
+      <nav className="relative z-10 glass-card border-b border-primary-500/10">
         <div className="max-w-7xl mx-auto px-4">
           <div className="flex gap-1 overflow-x-auto">
             {[
               { id: 'dashboard' as TabType, icon: Home, label: 'الرئيسية' },
               { id: 'clients' as TabType, icon: Users, label: 'العملاء' },
               { id: 'reminders' as TabType, icon: Bell, label: 'التذكيرات' },
-            ].map(tab => (
-              <button
+            ].map((tab, i) => (
+              <motion.button
                 key={tab.id}
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.1 }}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all duration-300 border-b-2 whitespace-nowrap ${
+                className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all duration-300 border-b-2 whitespace-nowrap relative ${
                   activeTab === tab.id 
-                    ? 'border-gold-400 text-gold-400' 
-                    : 'border-transparent text-gray-400 hover:text-gold-300'
+                    ? 'border-primary-400 text-primary-300' 
+                    : 'border-transparent text-gray-400 hover:text-primary-300'
                 }`}
               >
                 <tab.icon className="w-4 h-4" />
                 {tab.label}
                 {tab.id === 'reminders' && stats.dueNow > 0 && (
-                  <span className="w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center text-white">
+                  <span className="w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center text-white animate-pulse">
                     {stats.dueNow}
                   </span>
                 )}
-              </button>
+                {activeTab === tab.id && (
+                  <motion.div
+                    layoutId="activeTab"
+                    className="absolute bottom-0 left-0 right-0 h-0.5 gradient-primary"
+                  />
+                )}
+              </motion.button>
             ))}
           </div>
         </div>
@@ -285,6 +340,12 @@ function App() {
 
       {/* Modals */}
       <AnimatePresence>
+        {showPermissionModal && (
+          <PermissionModal 
+            onAllow={handlePermissionRequest}
+            onDeny={handleDenyPermission}
+          />
+        )}
         {showAddClient && (
           <AddClientModal 
             onClose={() => setShowAddClient(false)} 
@@ -307,12 +368,72 @@ function App() {
             onAddReminder={(clientId, clientName, clientPhone) => {
               setSelectedClient(null);
               setShowAddReminder(true);
-              // Pre-select will be handled by state
             }}
           />
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+// Permission Modal
+function PermissionModal({ onAllow, onDeny }: { onAllow: () => void; onDeny: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+    >
+      <motion.div
+        initial={{ scale: 0.5, opacity: 0, rotateY: 90 }}
+        animate={{ scale: 1, opacity: 1, rotateY: 0 }}
+        exit={{ scale: 0.5, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.6 }}
+        className="glass-card rounded-3xl p-8 w-full max-w-md border-primary-500/30 glow-primary text-center"
+      >
+        <motion.div
+          animate={{ 
+            scale: [1, 1.2, 1],
+            rotate: [0, 10, -10, 0]
+          }}
+          transition={{ duration: 2, repeat: Infinity }}
+          className="w-20 h-20 gradient-primary rounded-full flex items-center justify-center mx-auto mb-6 glow-primary"
+        >
+          <Bell className="w-10 h-10 text-white" />
+        </motion.div>
+        
+        <h2 className="text-2xl font-bold gradient-text mb-3">تفعيل الإشعارات</h2>
+        <p className="text-gray-300 mb-2">
+          هل تريد تفعيل الإشعارات؟
+        </p>
+        <p className="text-gray-400 text-sm mb-6">
+          سنرسل لك إشعارات عند حلول وقت الاتصال بالعملاء مع اهتزاز الجهاز
+        </p>
+        
+        <div className="flex gap-3">
+          <motion.button
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={onAllow}
+            className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold btn-hover glow-primary"
+          >
+            <span className="flex items-center justify-center gap-2">
+              <Check className="w-5 h-5" />
+              السماح
+            </span>
+          </motion.button>
+          <motion.button
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={onDeny}
+            className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors border border-white/10"
+          >
+            لاحقاً
+          </motion.button>
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -326,29 +447,52 @@ function DashboardView({ stats, clients, reminders, onComplete, onDelay }: {
 }) {
   const dueReminders = reminders.filter(r => isReminderDue(r) && !r.isCompleted);
   
+  const statCards = [
+    { label: 'إجمالي العملاء', value: stats.totalClients, icon: Users, gradient: 'from-primary-500 to-primary-700' },
+    { label: 'عملاء جدد', value: stats.newClients, icon: UserPlus, gradient: 'from-blue-500 to-cyan-500' },
+    { label: 'مهتمين', value: stats.interested, icon: Star, gradient: 'from-green-500 to-emerald-500' },
+    { label: 'تم الإغلاق', value: stats.closed, icon: Award, gradient: 'from-purple-500 to-pink-500' },
+    { label: 'تذكيرات نشطة', value: stats.activeReminders, icon: Clock, gradient: 'from-orange-500 to-red-500' },
+    { label: 'مستحقة الآن', value: stats.dueNow, icon: Zap, gradient: 'from-pink-500 to-rose-500' },
+  ];
+
   return (
     <div className="space-y-6">
+      {/* Welcome Banner */}
+      <motion.div
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="glass-card rounded-2xl p-6 relative overflow-hidden"
+      >
+        <div className="absolute top-0 left-0 w-full h-full opacity-10">
+          <div className="absolute top-0 right-0 w-40 h-40 gradient-primary rounded-full blur-3xl animate-float"></div>
+          <div className="absolute bottom-0 left-0 w-32 h-32 bg-accent-500 rounded-full blur-3xl animate-float" style={{ animationDelay: '1s' }}></div>
+        </div>
+        <div className="relative z-10">
+          <h2 className="text-2xl font-bold gradient-text mb-2">مرحباً بك 👋</h2>
+          <p className="text-gray-300">إليك نظرة عامة على نشاطك اليوم</p>
+        </div>
+      </motion.div>
+
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        {[
-          { label: 'إجمالي العملاء', value: stats.totalClients, icon: Users, color: 'from-gold-400 to-gold-600' },
-          { label: 'عملاء جدد', value: stats.newClients, icon: UserPlus, color: 'from-blue-400 to-blue-600' },
-          { label: 'مهتمين', value: stats.interested, icon: Star, color: 'from-green-400 to-green-600' },
-          { label: 'تم الإغلاق', value: stats.closed, icon: Check, color: 'from-purple-400 to-purple-600' },
-          { label: 'تذكيرات نشطة', value: stats.activeReminders, icon: Clock, color: 'from-orange-400 to-orange-600' },
-          { label: 'مستحقة الآن', value: stats.dueNow, icon: AlertTriangle, color: 'from-red-400 to-red-600' },
-        ].map((stat, i) => (
+        {statCards.map((stat, i) => (
           <motion.div
             key={stat.label}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }}
-            className="glass-card rounded-xl p-4 hover:border-gold-500/50 transition-all duration-300"
+            initial={{ opacity: 0, y: 30, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ delay: i * 0.1, type: "spring" }}
+            whileHover={{ scale: 1.05, y: -5 }}
+            className="glass-card rounded-2xl p-4 card-hover"
           >
-            <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${stat.color} flex items-center justify-center mb-3`}>
-              <stat.icon className="w-5 h-5 text-white" />
-            </div>
-            <p className="text-2xl font-bold text-white">{stat.value}</p>
+            <motion.div 
+              whileHover={{ rotate: 360 }}
+              transition={{ duration: 0.5 }}
+              className={`w-12 h-12 rounded-xl bg-gradient-to-br ${stat.gradient} flex items-center justify-center mb-3 shadow-lg`}
+            >
+              <stat.icon className="w-6 h-6 text-white" />
+            </motion.div>
+            <p className="text-3xl font-bold text-white">{stat.value}</p>
             <p className="text-xs text-gray-400 mt-1">{stat.label}</p>
           </motion.div>
         ))}
@@ -359,53 +503,65 @@ function DashboardView({ stats, clients, reminders, onComplete, onDelay }: {
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="glass-card rounded-xl p-6 border-red-500/30 glow-border"
+          className="glass-card rounded-2xl p-6 border-red-500/30"
+          style={{ boxShadow: '0 0 30px rgba(239, 68, 68, 0.2)' }}
         >
           <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-red-500/20 rounded-lg flex items-center justify-center">
-              <AlertTriangle className="w-5 h-5 text-red-400" />
-            </div>
+            <motion.div
+              animate={{ scale: [1, 1.2, 1] }}
+              transition={{ duration: 1, repeat: Infinity }}
+              className="w-12 h-12 bg-red-500/20 rounded-xl flex items-center justify-center"
+            >
+              <AlertTriangle className="w-6 h-6 text-red-400" />
+            </motion.div>
             <div>
               <h3 className="text-lg font-bold text-red-400">⚠️ تذكيرات مستحقة الآن</h3>
-              <p className="text-sm text-gray-400">يجب الاتصال بهذه العملاء</p>
+              <p className="text-sm text-gray-400">يجب الاتصال بهذه العملاء فوراً</p>
             </div>
           </div>
           <div className="space-y-3">
             {dueReminders.map((reminder, i) => (
               <motion.div
                 key={reminder.id}
-                initial={{ opacity: 0, x: 20 }}
+                initial={{ opacity: 0, x: 30 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.1 }}
-                className="bg-red-500/5 border border-red-500/20 rounded-lg p-4 flex items-center justify-between"
+                whileHover={{ scale: 1.01 }}
+                className="bg-red-500/5 border border-red-500/20 rounded-xl p-4 flex items-center justify-between"
               >
                 <div>
-                  <p className="font-bold text-white">{reminder.clientName}</p>
-                  <p className="text-sm text-gray-400">{reminder.clientPhone}</p>
+                  <p className="font-bold text-white text-lg">{reminder.clientName}</p>
+                  <p className="text-sm text-gray-400" dir="ltr">{reminder.clientPhone}</p>
                   <p className="text-xs text-red-400 mt-1">{reminder.note}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button
+                  <motion.button
+                    whileHover={{ scale: 1.1 }}
+                    whileTap={{ scale: 0.9 }}
                     onClick={() => onComplete(reminder.id)}
-                    className="p-2 bg-green-500/20 rounded-lg hover:bg-green-500/30 transition-colors"
+                    className="p-2.5 bg-green-500/20 rounded-xl hover:bg-green-500/30 transition-colors"
                     title="تم الاتصال"
                   >
-                    <Check className="w-4 h-4 text-green-400" />
-                  </button>
-                  <button
+                    <Check className="w-5 h-5 text-green-400" />
+                  </motion.button>
+                  <motion.button
+                    whileHover={{ scale: 1.1 }}
+                    whileTap={{ scale: 0.9 }}
                     onClick={() => onDelay(reminder.id, 30)}
-                    className="p-2 bg-orange-500/20 rounded-lg hover:bg-orange-500/30 transition-colors"
+                    className="p-2.5 bg-orange-500/20 rounded-xl hover:bg-orange-500/30 transition-colors"
                     title="تأجيل 30 دقيقة"
                   >
-                    <Clock className="w-4 h-4 text-orange-400" />
-                  </button>
-                  <a
+                    <Clock className="w-5 h-5 text-orange-400" />
+                  </motion.button>
+                  <motion.a
+                    whileHover={{ scale: 1.1 }}
+                    whileTap={{ scale: 0.9 }}
                     href={`tel:${reminder.clientPhone}`}
-                    className="p-2 bg-gold-500/20 rounded-lg hover:bg-gold-500/30 transition-colors"
+                    className="p-2.5 bg-primary-500/20 rounded-xl hover:bg-primary-500/30 transition-colors"
                     title="اتصال"
                   >
-                    <PhoneCall className="w-4 h-4 text-gold-400" />
-                  </a>
+                    <PhoneCall className="w-5 h-5 text-primary-400" />
+                  </motion.a>
                 </div>
               </motion.div>
             ))}
@@ -414,34 +570,45 @@ function DashboardView({ stats, clients, reminders, onComplete, onDelay }: {
       )}
 
       {/* Recent Clients */}
-      <div className="glass-card rounded-xl p-6">
-        <h3 className="text-lg font-bold gold-text mb-4 flex items-center gap-2">
-          <Users className="w-5 h-5" />
+      <div className="glass-card rounded-2xl p-6">
+        <h3 className="text-lg font-bold gradient-text mb-4 flex items-center gap-2">
+          <Target className="w-5 h-5" />
           آخر العملاء المضافين
         </h3>
         <div className="space-y-3">
           {clients.slice(0, 5).map((client, i) => (
             <motion.div
               key={client.id}
-              initial={{ opacity: 0, x: -20 }}
+              initial={{ opacity: 0, x: -30 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: i * 0.1 }}
-              className="flex items-center justify-between p-3 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
+              whileHover={{ x: -5, scale: 1.01 }}
+              className="flex items-center justify-between p-3 bg-white/5 rounded-xl hover:bg-white/10 transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 gold-gradient rounded-full flex items-center justify-center">
-                  <span className="text-black font-bold text-sm">{client.name[0]}</span>
-                </div>
+                <motion.div 
+                  whileHover={{ scale: 1.2, rotate: 10 }}
+                  className="w-11 h-11 gradient-primary rounded-full flex items-center justify-center shadow-lg"
+                >
+                  <span className="text-white font-bold text-sm">{client.name[0]}</span>
+                </motion.div>
                 <div>
                   <p className="font-medium text-white">{client.name}</p>
-                  <p className="text-xs text-gray-400">{client.phone}</p>
+                  <p className="text-xs text-gray-400" dir="ltr">{client.phone}</p>
                 </div>
               </div>
               <StatusBadge status={client.status} />
             </motion.div>
           ))}
           {clients.length === 0 && (
-            <p className="text-center text-gray-500 py-8">لا يوجد عملاء بعد</p>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-center py-8"
+            >
+              <Users className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+              <p className="text-gray-500">لا يوجد عملاء بعد</p>
+            </motion.div>
           )}
         </div>
       </div>
@@ -462,21 +629,27 @@ function ClientsView({ clients, searchTerm, onSearch, onSelect, onDelete, onAdd 
     <div className="space-y-4">
       {/* Search & Actions */}
       <div className="flex flex-col sm:flex-row gap-3">
-        <div className="flex-1 relative">
+        <motion.div 
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="flex-1 relative"
+        >
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
           <input
             type="text"
             placeholder="بحث بالاسم أو رقم الهاتف أو العقار..."
             value={searchTerm}
             onChange={(e) => onSearch(e.target.value)}
-            className="w-full bg-white/5 border border-gold-500/20 rounded-xl pr-11 pl-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-gold-500/50 transition-colors"
+            className="w-full bg-white/5 border border-primary-500/20 rounded-xl pr-11 pl-4 py-3 text-white placeholder-gray-500 focus:border-primary-500/50 transition-all"
           />
-        </div>
+        </motion.div>
         <motion.button
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          whileHover={{ scale: 1.03 }}
+          whileTap={{ scale: 0.97 }}
           onClick={onAdd}
-          className="gold-gradient text-black px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-gold-500/20"
+          className="gradient-primary text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg glow-primary btn-hover"
         >
           <Plus className="w-5 h-5" />
           إضافة عميل
@@ -488,22 +661,27 @@ function ClientsView({ clients, searchTerm, onSearch, onSelect, onDelete, onAdd 
         {clients.map((client, i) => (
           <motion.div
             key={client.id}
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
+            whileHover={{ scale: 1.02, y: -5 }}
             onClick={() => onSelect(client)}
-            className="glass-card rounded-xl p-5 cursor-pointer hover:border-gold-500/50 transition-all duration-300 group"
+            className="glass-card rounded-2xl p-5 cursor-pointer card-hover animated-border"
           >
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 gold-gradient rounded-full flex items-center justify-center group-hover:animate-pulse-gold">
-                  <span className="text-black font-bold">{client.name[0]}</span>
-                </div>
+                <motion.div 
+                  whileHover={{ scale: 1.2, rotate: 360 }}
+                  transition={{ duration: 0.5 }}
+                  className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center shadow-lg"
+                >
+                  <span className="text-white font-bold">{client.name[0]}</span>
+                </motion.div>
                 <div>
                   <h4 className="font-bold text-white">{client.name}</h4>
                   <p className="text-sm text-gray-400 flex items-center gap-1">
                     <Phone className="w-3 h-3" />
-                    {client.phone}
+                    <span dir="ltr">{client.phone}</span>
                   </p>
                 </div>
               </div>
@@ -511,12 +689,12 @@ function ClientsView({ clients, searchTerm, onSearch, onSelect, onDelete, onAdd 
             </div>
             <div className="space-y-2 text-sm">
               <p className="text-gray-300 flex items-center gap-2">
-                <Building2 className="w-4 h-4 text-gold-400" />
+                <Building2 className="w-4 h-4 text-primary-400" />
                 {client.property || 'لم يحدد العقار'}
               </p>
               {client.feedback && (
                 <p className="text-gray-400 flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4 text-gold-400" />
+                  <MessageSquare className="w-4 h-4 text-accent-400" />
                   <span className="truncate">{client.feedback}</span>
                 </p>
               )}
@@ -527,11 +705,16 @@ function ClientsView({ clients, searchTerm, onSearch, onSelect, onDelete, onAdd 
       
       {clients.length === 0 && (
         <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
           className="text-center py-16"
         >
-          <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          <motion.div
+            animate={{ y: [0, -10, 0] }}
+            transition={{ duration: 2, repeat: Infinity }}
+          >
+            <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          </motion.div>
           <p className="text-gray-400 text-lg">لا يوجد عملاء</p>
           <p className="text-gray-500 text-sm mt-2">اضغط على "إضافة عميل" لبدء إضافة عملائك</p>
         </motion.div>
@@ -554,15 +737,15 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold gold-text flex items-center gap-2">
+        <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
           <Bell className="w-6 h-6" />
           التذكيرات
         </h2>
         <motion.button
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
+          whileHover={{ scale: 1.03 }}
+          whileTap={{ scale: 0.97 }}
           onClick={onAdd}
-          className="gold-gradient text-black px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg shadow-gold-500/20"
+          className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover"
         >
           <Plus className="w-4 h-4" />
           تذكير جديد
@@ -578,79 +761,100 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
             return (
               <motion.div
                 key={reminder.id}
-                initial={{ opacity: 0, x: 20 }}
+                initial={{ opacity: 0, x: 30 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.05 }}
-                className={`glass-card rounded-xl p-4 ${isDue ? 'border-red-500/50 animate-pulse-gold' : ''}`}
+                whileHover={{ scale: 1.01 }}
+                className={`glass-card rounded-2xl p-4 ${isDue ? 'border-red-500/50' : ''}`}
+                style={isDue ? { boxShadow: '0 0 20px rgba(239, 68, 68, 0.3)' } : {}}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h4 className="font-bold text-white">{reminder.clientName}</h4>
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <h4 className="font-bold text-white text-lg">{reminder.clientName}</h4>
                       {reminder.isDelayed && (
-                        <span className="text-xs bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded-full">
+                        <motion.span 
+                          initial={{ scale: 0 }}
+                          animate={{ scale: 1 }}
+                          className="text-xs bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded-full"
+                        >
                           مؤجل ({reminder.delayCount})
-                        </span>
+                        </motion.span>
                       )}
                       {isDue && (
-                        <span className="text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full animate-pulse">
-                          مستحق الآن!
-                        </span>
+                        <motion.span 
+                          animate={{ opacity: [1, 0.5, 1] }}
+                          transition={{ duration: 1, repeat: Infinity }}
+                          className="text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full"
+                        >
+                          🔴 مستحق الآن!
+                        </motion.span>
                       )}
                     </div>
-                    <p className="text-sm text-gold-400 flex items-center gap-1">
+                    <p className="text-sm text-primary-400 flex items-center gap-1">
                       <Phone className="w-3 h-3" />
-                      {reminder.clientPhone}
+                      <span dir="ltr">{reminder.clientPhone}</span>
                     </p>
                     <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
                       <Calendar className="w-3 h-3" />
                       {formatDateTime(reminder.dateTime)}
                     </p>
                     {!isDue && (
-                      <p className="text-xs text-green-400 mt-1">
-                        ⏳ متبقي: {getTimeUntil(reminder)}
+                      <p className="text-xs text-green-400 mt-1 flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        متبقي: {getTimeUntil(reminder)}
                       </p>
                     )}
                     {reminder.note && (
-                      <p className="text-sm text-gray-300 mt-2">{reminder.note}</p>
+                      <p className="text-sm text-gray-300 mt-2 bg-white/5 rounded-lg p-2">{reminder.note}</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 mr-4">
-                    <button
+                  <div className="flex items-center gap-1.5 mr-4 flex-wrap justify-end">
+                    <motion.button
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
                       onClick={() => onComplete(reminder.id)}
                       className="p-2 bg-green-500/20 rounded-lg hover:bg-green-500/30 transition-colors"
                       title="تم الاتصال"
                     >
                       <Check className="w-4 h-4 text-green-400" />
-                    </button>
-                    <button
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
                       onClick={() => onDelay(reminder.id, 30)}
                       className="p-2 bg-orange-500/20 rounded-lg hover:bg-orange-500/30 transition-colors"
                       title="تأجيل 30 دقيقة"
                     >
                       <Clock className="w-4 h-4 text-orange-400" />
-                    </button>
-                    <button
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
                       onClick={() => onDelay(reminder.id, 60)}
                       className="p-2 bg-blue-500/20 rounded-lg hover:bg-blue-500/30 transition-colors text-xs font-bold"
                       title="تأجيل ساعة"
                     >
                       <span className="text-blue-400">+1h</span>
-                    </button>
-                    <a
+                    </motion.button>
+                    <motion.a
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
                       href={`tel:${reminder.clientPhone}`}
-                      className="p-2 bg-gold-500/20 rounded-lg hover:bg-gold-500/30 transition-colors"
+                      className="p-2 bg-primary-500/20 rounded-lg hover:bg-primary-500/30 transition-colors"
                       title="اتصال"
                     >
-                      <PhoneCall className="w-4 h-4 text-gold-400" />
-                    </a>
-                    <button
+                      <PhoneCall className="w-4 h-4 text-primary-400" />
+                    </motion.a>
+                    <motion.button
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
                       onClick={() => onDelete(reminder.id)}
                       className="p-2 bg-red-500/20 rounded-lg hover:bg-red-500/30 transition-colors"
                       title="حذف"
                     >
                       <Trash2 className="w-4 h-4 text-red-400" />
-                    </button>
+                    </motion.button>
                   </div>
                 </div>
               </motion.div>
@@ -674,18 +878,20 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
               <div className="flex items-center justify-between">
                 <div>
                   <h4 className="font-medium text-white line-through">{reminder.clientName}</h4>
-                  <p className="text-xs text-gray-400">{reminder.clientPhone}</p>
+                  <p className="text-xs text-gray-400" dir="ltr">{reminder.clientPhone}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded-full">
                     ✓ تم
                   </span>
-                  <button
+                  <motion.button
+                    whileHover={{ scale: 1.1 }}
+                    whileTap={{ scale: 0.9 }}
                     onClick={() => onDelete(reminder.id)}
                     className="p-1.5 bg-red-500/20 rounded-lg hover:bg-red-500/30 transition-colors"
                   >
                     <Trash2 className="w-3 h-3 text-red-400" />
-                  </button>
+                  </motion.button>
                 </div>
               </div>
             </motion.div>
@@ -695,11 +901,16 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
 
       {reminders.length === 0 && (
         <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
           className="text-center py-16"
         >
-          <Bell className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          <motion.div
+            animate={{ y: [0, -10, 0] }}
+            transition={{ duration: 2, repeat: Infinity }}
+          >
+            <Bell className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          </motion.div>
           <p className="text-gray-400 text-lg">لا يوجد تذكيرات</p>
           <p className="text-gray-500 text-sm mt-2">أضف تذكير لمكالمة عميل في وقت محدد</p>
         </motion.div>
@@ -734,24 +945,30 @@ function AddClientModal({ onClose, onAdd }: {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
       onClick={onClose}
     >
       <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.9, opacity: 0 }}
+        initial={{ scale: 0.8, opacity: 0, y: 50 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        exit={{ scale: 0.8, opacity: 0, y: 50 }}
+        transition={{ type: "spring", duration: 0.5 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-gold-500/30"
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-primary-500/30 glow-primary"
       >
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gold-text flex items-center gap-2">
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
             <UserPlus className="w-6 h-6" />
             إضافة عميل جديد
           </h2>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+          <motion.button 
+            whileHover={{ scale: 1.1, rotate: 90 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={onClose} 
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+          >
             <X className="w-5 h-5 text-gray-400" />
-          </button>
+          </motion.button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -762,7 +979,7 @@ function AddClientModal({ onClose, onAdd }: {
               required
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors"
+              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               placeholder="اسم العميل"
             />
           </div>
@@ -773,7 +990,7 @@ function AddClientModal({ onClose, onAdd }: {
               required
               value={form.phone}
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors"
+              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               placeholder="05xxxxxxxx"
               dir="ltr"
             />
@@ -784,7 +1001,7 @@ function AddClientModal({ onClose, onAdd }: {
               type="email"
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
-              className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors"
+              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               placeholder="email@example.com"
               dir="ltr"
             />
@@ -795,7 +1012,7 @@ function AddClientModal({ onClose, onAdd }: {
               type="text"
               value={form.property}
               onChange={(e) => setForm({ ...form, property: e.target.value })}
-              className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors"
+              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               placeholder="شقة، فيلا، أرض..."
             />
           </div>
@@ -805,7 +1022,7 @@ function AddClientModal({ onClose, onAdd }: {
               type="text"
               value={form.budget}
               onChange={(e) => setForm({ ...form, budget: e.target.value })}
-              className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors"
+              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               placeholder="الميزانية المتوقعة"
             />
           </div>
@@ -814,7 +1031,7 @@ function AddClientModal({ onClose, onAdd }: {
             <select
               value={form.status}
               onChange={(e) => setForm({ ...form, status: e.target.value as Client['status'] })}
-              className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors"
+              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
             >
               <option value="new" className="bg-gray-900">جديد</option>
               <option value="contacted" className="bg-gray-900">تم التواصل</option>
@@ -829,17 +1046,17 @@ function AddClientModal({ onClose, onAdd }: {
             <textarea
               value={form.feedback}
               onChange={(e) => setForm({ ...form, feedback: e.target.value })}
-              className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors resize-none h-24"
+              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all resize-none h-24"
               placeholder="أي ملاحظات عن العميل..."
             />
           </div>
           <motion.button
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.99 }}
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
             type="submit"
-            className="w-full gold-gradient text-black py-3 rounded-xl font-bold text-lg shadow-lg shadow-gold-500/20"
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover"
           >
-            إضافة العميل
+            إضافة العميل ✨
           </motion.button>
         </form>
       </motion.div>
@@ -874,7 +1091,6 @@ function AddReminderModal({ clients, onClose, onAdd }: {
     onAdd(form);
   };
 
-  // Set minimum datetime to now
   const now = new Date();
   now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
   const minDateTime = now.toISOString().slice(0, 16);
@@ -884,24 +1100,30 @@ function AddReminderModal({ clients, onClose, onAdd }: {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
       onClick={onClose}
     >
       <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.9, opacity: 0 }}
+        initial={{ scale: 0.8, opacity: 0, y: 50 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        exit={{ scale: 0.8, opacity: 0, y: 50 }}
+        transition={{ type: "spring", duration: 0.5 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-2xl p-6 w-full max-w-lg border-gold-500/30"
+        className="glass-card rounded-3xl p-6 w-full max-w-lg border-primary-500/30 glow-primary"
       >
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gold-text flex items-center gap-2">
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
             <Bell className="w-6 h-6" />
             إضافة تذكير
           </h2>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+          <motion.button 
+            whileHover={{ scale: 1.1, rotate: 90 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={onClose} 
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+          >
             <X className="w-5 h-5 text-gray-400" />
-          </button>
+          </motion.button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -911,7 +1133,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               <select
                 value={form.clientId}
                 onChange={(e) => handleClientSelect(e.target.value)}
-                className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors"
+                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               >
                 <option value="" className="bg-gray-900">-- اختر عميل --</option>
                 {clients.map(c => (
@@ -929,7 +1151,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               required
               value={form.clientName}
               onChange={(e) => setForm({ ...form, clientName: e.target.value })}
-              className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors"
+              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               placeholder="اسم العميل"
             />
           </div>
@@ -940,7 +1162,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               required
               value={form.clientPhone}
               onChange={(e) => setForm({ ...form, clientPhone: e.target.value })}
-              className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors"
+              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               placeholder="05xxxxxxxx"
               dir="ltr"
             />
@@ -953,7 +1175,7 @@ function AddReminderModal({ clients, onClose, onAdd }: {
               min={minDateTime}
               value={form.dateTime}
               onChange={(e) => setForm({ ...form, dateTime: e.target.value })}
-              className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors"
+              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               dir="ltr"
             />
           </div>
@@ -962,17 +1184,17 @@ function AddReminderModal({ clients, onClose, onAdd }: {
             <textarea
               value={form.note}
               onChange={(e) => setForm({ ...form, note: e.target.value })}
-              className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-colors resize-none h-20"
+              className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all resize-none h-20"
               placeholder="سبب المكالمة أو ملاحظة..."
             />
           </div>
           <motion.button
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.99 }}
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
             type="submit"
-            className="w-full gold-gradient text-black py-3 rounded-xl font-bold text-lg shadow-lg shadow-gold-500/20"
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover"
           >
-            إضافة التذكير
+            إضافة التذكير 🔔
           </motion.button>
         </form>
       </motion.div>
@@ -1009,27 +1231,36 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
       onClick={onClose}
     >
       <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.9, opacity: 0 }}
+        initial={{ scale: 0.8, opacity: 0, y: 50 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        exit={{ scale: 0.8, opacity: 0, y: 50 }}
+        transition={{ type: "spring", duration: 0.5 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-gold-500/30"
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-primary-500/30 glow-primary"
       >
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gold-text">تفاصيل العميل</h2>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+          <h2 className="text-xl font-bold gradient-text">تفاصيل العميل</h2>
+          <motion.button 
+            whileHover={{ scale: 1.1, rotate: 90 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={onClose} 
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+          >
             <X className="w-5 h-5 text-gray-400" />
-          </button>
+          </motion.button>
         </div>
 
         <div className="flex items-center gap-4 mb-6">
-          <div className="w-16 h-16 gold-gradient rounded-full flex items-center justify-center">
-            <span className="text-black font-bold text-2xl">{client.name[0]}</span>
-          </div>
+          <motion.div 
+            whileHover={{ scale: 1.1, rotate: 10 }}
+            className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg glow-primary"
+          >
+            <span className="text-white font-bold text-2xl">{client.name[0]}</span>
+          </motion.div>
           <div>
             <h3 className="text-xl font-bold text-white">{client.name}</h3>
             <StatusBadge status={client.status} />
@@ -1044,7 +1275,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50"
+                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               />
             </div>
             <div>
@@ -1053,7 +1284,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="tel"
                 value={form.phone}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50"
+                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
                 dir="ltr"
               />
             </div>
@@ -1063,7 +1294,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="email"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
-                className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50"
+                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
                 dir="ltr"
               />
             </div>
@@ -1073,7 +1304,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="text"
                 value={form.property}
                 onChange={(e) => setForm({ ...form, property: e.target.value })}
-                className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50"
+                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               />
             </div>
             <div>
@@ -1082,7 +1313,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 type="text"
                 value={form.budget}
                 onChange={(e) => setForm({ ...form, budget: e.target.value })}
-                className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50"
+                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               />
             </div>
             <div>
@@ -1090,7 +1321,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
               <select
                 value={form.status}
                 onChange={(e) => setForm({ ...form, status: e.target.value as Client['status'] })}
-                className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50"
+                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all"
               >
                 <option value="new" className="bg-gray-900">جديد</option>
                 <option value="contacted" className="bg-gray-900">تم التواصل</option>
@@ -1105,83 +1336,95 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
               <textarea
                 value={form.feedback}
                 onChange={(e) => setForm({ ...form, feedback: e.target.value })}
-                className="w-full bg-white/5 border border-gold-500/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 resize-none h-24"
+                className="w-full bg-white/5 border border-primary-500/20 rounded-xl px-4 py-3 text-white focus:border-primary-500/50 transition-all resize-none h-24"
               />
             </div>
             <div className="flex gap-3">
-              <button
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
                 onClick={handleSave}
-                className="flex-1 gold-gradient text-black py-3 rounded-xl font-bold"
+                className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold btn-hover"
               >
-                حفظ
-              </button>
-              <button
+                حفظ ✓
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
                 onClick={() => setEditing(false)}
-                className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors"
+                className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors border border-white/10"
               >
                 إلغاء
-              </button>
+              </motion.button>
             </div>
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-white/5 rounded-xl p-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
                 <p className="text-xs text-gray-400">الهاتف</p>
                 <p className="text-white font-medium" dir="ltr">{client.phone}</p>
               </div>
-              <div className="bg-white/5 rounded-xl p-3">
+              <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
                 <p className="text-xs text-gray-400">البريد</p>
                 <p className="text-white font-medium text-sm" dir="ltr">{client.email || '-'}</p>
               </div>
-              <div className="bg-white/5 rounded-xl p-3">
+              <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
                 <p className="text-xs text-gray-400">العقار</p>
                 <p className="text-white font-medium">{client.property || '-'}</p>
               </div>
-              <div className="bg-white/5 rounded-xl p-3">
+              <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
                 <p className="text-xs text-gray-400">الميزانية</p>
                 <p className="text-white font-medium">{client.budget || '-'}</p>
               </div>
             </div>
             {client.feedback && (
-              <div className="bg-white/5 rounded-xl p-4">
+              <div className="bg-white/5 rounded-xl p-4 hover:bg-white/10 transition-colors">
                 <p className="text-xs text-gray-400 mb-1">ملاحظات</p>
                 <p className="text-white text-sm">{client.feedback}</p>
               </div>
             )}
-            <div className="bg-white/5 rounded-xl p-3">
+            <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
               <p className="text-xs text-gray-400">تاريخ الإضافة</p>
               <p className="text-white text-sm">{formatDateTime(client.createdAt)}</p>
             </div>
 
             <div className="flex flex-wrap gap-2 pt-2">
-              <button
+              <motion.button
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
                 onClick={() => setEditing(true)}
-                className="flex-1 flex items-center justify-center gap-2 bg-gold-500/20 text-gold-400 py-2.5 rounded-xl hover:bg-gold-500/30 transition-colors"
+                className="flex-1 flex items-center justify-center gap-2 bg-primary-500/20 text-primary-300 py-2.5 rounded-xl hover:bg-primary-500/30 transition-colors border border-primary-500/20"
               >
                 <Edit3 className="w-4 h-4" />
                 تعديل
-              </button>
-              <a
+              </motion.button>
+              <motion.a
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
                 href={`tel:${client.phone}`}
-                className="flex-1 flex items-center justify-center gap-2 bg-green-500/20 text-green-400 py-2.5 rounded-xl hover:bg-green-500/30 transition-colors"
+                className="flex-1 flex items-center justify-center gap-2 bg-green-500/20 text-green-400 py-2.5 rounded-xl hover:bg-green-500/30 transition-colors border border-green-500/20"
               >
                 <PhoneCall className="w-4 h-4" />
                 اتصال
-              </a>
-              <button
+              </motion.a>
+              <motion.button
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
                 onClick={() => onAddReminder(client.id, client.name, client.phone)}
-                className="flex-1 flex items-center justify-center gap-2 bg-blue-500/20 text-blue-400 py-2.5 rounded-xl hover:bg-blue-500/30 transition-colors"
+                className="flex-1 flex items-center justify-center gap-2 bg-accent-500/20 text-accent-400 py-2.5 rounded-xl hover:bg-accent-500/30 transition-colors border border-accent-500/20"
               >
                 <Bell className="w-4 h-4" />
                 تذكير
-              </button>
-              <button
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
                 onClick={onDelete}
-                className="flex items-center justify-center gap-2 bg-red-500/20 text-red-400 py-2.5 px-4 rounded-xl hover:bg-red-500/30 transition-colors"
+                className="flex items-center justify-center gap-2 bg-red-500/20 text-red-400 py-2.5 px-4 rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20"
               >
                 <Trash2 className="w-4 h-4" />
-              </button>
+              </motion.button>
             </div>
           </div>
         )}
@@ -1193,18 +1436,18 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
 // Status Badge Component
 function StatusBadge({ status }: { status: Client['status'] }) {
   const config = {
-    new: { label: 'جديد', color: 'bg-blue-500/20 text-blue-400' },
-    contacted: { label: 'تم التواصل', color: 'bg-purple-500/20 text-purple-400' },
-    interested: { label: 'مهتم', color: 'bg-green-500/20 text-green-400' },
-    negotiation: { label: 'تفاوض', color: 'bg-orange-500/20 text-orange-400' },
-    closed: { label: 'تم الإغلاق', color: 'bg-gold-500/20 text-gold-400' },
-    lost: { label: 'مفقود', color: 'bg-red-500/20 text-red-400' },
+    new: { label: 'جديد', class: 'status-new' },
+    contacted: { label: 'تم التواصل', class: 'status-contacted' },
+    interested: { label: 'مهتم', class: 'status-interested' },
+    negotiation: { label: 'تفاوض', class: 'status-negotiation' },
+    closed: { label: 'تم الإغلاق', class: 'status-closed' },
+    lost: { label: 'مفقود', class: 'status-lost' },
   };
 
-  const { label, color } = config[status];
+  const { label, class: className } = config[status];
 
   return (
-    <span className={`text-xs px-2.5 py-1 rounded-full ${color}`}>
+    <span className={`text-xs px-2.5 py-1 rounded-full ${className}`}>
       {label}
     </span>
   );
