@@ -20,6 +20,7 @@ self.addEventListener('push', (event) => {
     vibrate: [200, 100, 200, 100, 200],
     data: {
       url: data.url || '/',
+      phone: data.phone || ''
     },
     actions: [
       { action: 'call', title: '📞 اتصال' },
