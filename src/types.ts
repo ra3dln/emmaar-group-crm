@@ -2,10 +2,11 @@ export interface Client {
   id: string;
   name: string;
   phone: string;
-  email: string;
   property: string;
   budget: string;
-  status: 'new' | 'contacted' | 'interested' | 'negotiation' | 'closed' | 'lost';
+  monthlyInstallment: string;
+  deliveryPeriod: string;
+  status: 'campaign' | 'facebook' | 'external';
   feedback: string;
   createdAt: string;
   updatedAt: string;

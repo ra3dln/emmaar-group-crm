@@ -207,9 +207,9 @@ function App() {
     totalClients: clients.length,
     activeReminders: activeReminders.length,
     dueNow: dueReminders.length,
-    newClients: clients.filter(c => c.status === 'new').length,
-    interested: clients.filter(c => c.status === 'interested').length,
-    closed: clients.filter(c => c.status === 'closed').length,
+    campaignClients: clients.filter(c => c.status === 'campaign').length,
+    facebookClients: clients.filter(c => c.status === 'facebook').length,
+    externalClients: clients.filter(c => c.status === 'external').length,
   };
 
   return (
@@ -545,9 +545,9 @@ function DashboardView({ stats, clients, reminders, onComplete, onDelay }: {
   
   const statCards = [
     { label: 'إجمالي العملاء', value: stats.totalClients, icon: Users, gradient: 'from-purple-500 to-violet-600' },
-    { label: 'عملاء جدد', value: stats.newClients, icon: UserPlus, gradient: 'from-violet-500 to-purple-600' },
-    { label: 'مهتمين', value: stats.interested, icon: Star, gradient: 'from-emerald-500 to-purple-500' },
-    { label: 'تم الإغلاق', value: stats.closed, icon: Award, gradient: 'from-purple-500 to-pink-500' },
+    { label: 'عملاء كامبين', value: stats.campaignClients, icon: UserPlus, gradient: 'from-violet-500 to-purple-600' },
+    { label: 'عملاء فيسبوك', value: stats.facebookClients, icon: Star, gradient: 'from-emerald-500 to-purple-500' },
+    { label: 'عملاء خارجي', value: stats.externalClients, icon: Award, gradient: 'from-purple-500 to-pink-500' },
     { label: 'تذكيرات نشطة', value: stats.activeReminders, icon: Clock, gradient: 'from-pink-500 to-purple-500' },
     { label: 'مستحقة الآن', value: stats.dueNow, icon: Zap, gradient: 'from-amber-500 to-purple-500' },
   ];
@@ -1023,10 +1023,11 @@ function AddClientModal({ onClose, onAdd }: {
   const [form, setForm] = useState({
     name: '',
     phone: '',
-    email: '',
     property: '',
     budget: '',
-    status: 'new' as Client['status'],
+    monthlyInstallment: '',
+    deliveryPeriod: '',
+    status: 'campaign' as Client['status'],
     feedback: '',
   });
 
@@ -1092,17 +1093,6 @@ function AddClientModal({ onClose, onAdd }: {
             />
           </div>
           <div>
-            <label className="block text-sm text-gray-300 mb-1">البريد الإلكتروني</label>
-            <input
-              type="email"
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
-              placeholder="email@example.com"
-              dir="ltr"
-            />
-          </div>
-          <div>
             <label className="block text-sm text-gray-300 mb-1">العقار المطلوب</label>
             <input
               type="text"
@@ -1123,18 +1113,35 @@ function AddClientModal({ onClose, onAdd }: {
             />
           </div>
           <div>
-            <label className="block text-sm text-gray-300 mb-1">الحالة</label>
+            <label className="block text-sm text-gray-300 mb-1">القسط الشهري</label>
+            <input
+              type="text"
+              value={form.monthlyInstallment}
+              onChange={(e) => setForm({ ...form, monthlyInstallment: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="القسط الشهري"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">مدة الاستلام</label>
+            <input
+              type="text"
+              value={form.deliveryPeriod}
+              onChange={(e) => setForm({ ...form, deliveryPeriod: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="مدة الاستلام"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">المصدر</label>
             <select
               value={form.status}
               onChange={(e) => setForm({ ...form, status: e.target.value as Client['status'] })}
               className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
             >
-              <option value="new" className="bg-gray-900">جديد</option>
-              <option value="contacted" className="bg-gray-900">تم التواصل</option>
-              <option value="interested" className="bg-gray-900">مهتم</option>
-              <option value="negotiation" className="bg-gray-900">تفاوض</option>
-              <option value="closed" className="bg-gray-900">تم الإغلاق</option>
-              <option value="lost" className="bg-gray-900">مفقود</option>
+              <option value="campaign" className="bg-gray-900">كامبين</option>
+              <option value="facebook" className="bg-gray-900">فيسبوك</option>
+              <option value="external" className="bg-gray-900">خارجي</option>
             </select>
           </div>
           <div>
@@ -1310,9 +1317,10 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
   const [form, setForm] = useState({
     name: client.name,
     phone: client.phone,
-    email: client.email,
     property: client.property,
     budget: client.budget,
+    monthlyInstallment: client.monthlyInstallment,
+    deliveryPeriod: client.deliveryPeriod,
     status: client.status,
     feedback: client.feedback,
   });
@@ -1385,16 +1393,6 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
               />
             </div>
             <div>
-              <label className="block text-sm text-gray-300 mb-1">البريد</label>
-              <input
-                type="email"
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
-                dir="ltr"
-              />
-            </div>
-            <div>
               <label className="block text-sm text-gray-300 mb-1">العقار</label>
               <input
                 type="text"
@@ -1413,18 +1411,33 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
               />
             </div>
             <div>
-              <label className="block text-sm text-gray-300 mb-1">الحالة</label>
+              <label className="block text-sm text-gray-300 mb-1">القسط الشهري</label>
+              <input
+                type="text"
+                value={form.monthlyInstallment}
+                onChange={(e) => setForm({ ...form, monthlyInstallment: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">مدة الاستلام</label>
+              <input
+                type="text"
+                value={form.deliveryPeriod}
+                onChange={(e) => setForm({ ...form, deliveryPeriod: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">المصدر</label>
               <select
                 value={form.status}
                 onChange={(e) => setForm({ ...form, status: e.target.value as Client['status'] })}
                 className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
               >
-                <option value="new" className="bg-gray-900">جديد</option>
-                <option value="contacted" className="bg-gray-900">تم التواصل</option>
-                <option value="interested" className="bg-gray-900">مهتم</option>
-                <option value="negotiation" className="bg-gray-900">تفاوض</option>
-                <option value="closed" className="bg-gray-900">تم الإغلاق</option>
-                <option value="lost" className="bg-gray-900">مفقود</option>
+                <option value="campaign" className="bg-gray-900">كامبين</option>
+                <option value="facebook" className="bg-gray-900">فيسبوك</option>
+                <option value="external" className="bg-gray-900">خارجي</option>
               </select>
             </div>
             <div>
@@ -1462,16 +1475,26 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 <p className="text-white font-medium" dir="ltr">{client.phone}</p>
               </div>
               <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
-                <p className="text-xs text-gray-400">البريد</p>
-                <p className="text-white font-medium text-sm" dir="ltr">{client.email || '-'}</p>
-              </div>
-              <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
                 <p className="text-xs text-gray-400">العقار</p>
                 <p className="text-white font-medium">{client.property || '-'}</p>
               </div>
               <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
                 <p className="text-xs text-gray-400">الميزانية</p>
                 <p className="text-white font-medium">{client.budget || '-'}</p>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
+                <p className="text-xs text-gray-400">القسط الشهري</p>
+                <p className="text-white font-medium">{client.monthlyInstallment || '-'}</p>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
+                <p className="text-xs text-gray-400">مدة الاستلام</p>
+                <p className="text-white font-medium">{client.deliveryPeriod || '-'}</p>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
+                <p className="text-xs text-gray-400">المصدر</p>
+                <p className="text-white font-medium">
+                  {client.status === 'campaign' ? 'كامبين' : client.status === 'facebook' ? 'فيسبوك' : 'خارجي'}
+                </p>
               </div>
             </div>
             {client.feedback && (
@@ -1532,12 +1555,9 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
 // Status Badge Component
 function StatusBadge({ status }: { status: Client['status'] }) {
   const config = {
-    new: { label: 'جديد', class: 'status-new' },
-    contacted: { label: 'تم التواصل', class: 'status-contacted' },
-    interested: { label: 'مهتم', class: 'status-interested' },
-    negotiation: { label: 'تفاوض', class: 'status-negotiation' },
-    closed: { label: 'تم الإغلاق', class: 'status-closed' },
-    lost: { label: 'مفقود', class: 'status-lost' },
+    campaign: { label: 'كامبين', class: 'status-new' },
+    facebook: { label: 'فيسبوك', class: 'status-contacted' },
+    external: { label: 'خارجي', class: 'status-interested' },
   };
 
   const { label, class: className } = config[status];
