@@ -103,4 +103,4 @@ export interface Task {
   createdAt: string;
 }
 
-export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'tasks' | 'reminders' | 'daily-feedback' | 'reports';
+export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'tasks' | 'reminders' | 'daily-feedback' | 'reports' | 'admin-users' | 'admin-teams' | 'admin-settings';
