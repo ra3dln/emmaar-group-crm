@@ -29,16 +29,12 @@ export interface Property {
   id: string;
   name: string;
   type: string;
-  location: string;
-  price: string;
   area: string;
-  rooms: string;
-  bathrooms: string;
+  price: string;
+  location: string;
   description: string;
-  clientPhone: string;
-  status: 'available' | 'reserved' | 'sold';
+  image: string;
   createdAt: string;
-  updatedAt: string;
 }
 
 export interface DailyFeedback {
@@ -47,8 +43,8 @@ export interface DailyFeedback {
   clientName: string;
   date: string;
   feedback: string;
-  followUp: string;
+  callStatus: 'called' | 'no-answer' | 'busy' | 'not-called';
   createdAt: string;
 }
 
-export type TabType = 'dashboard' | 'clients' | 'properties' | 'feedback' | 'reminders';
+export type TabType = 'dashboard' | 'clients' | 'properties' | 'reminders' | 'daily-feedback';

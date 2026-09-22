@@ -197,12 +197,11 @@ function App() {
     saveReminders(updated);
   }, [reminders]);
 
-  const addProperty = useCallback((property: Omit<Property, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const addProperty = useCallback((property: Omit<Property, 'id' | 'createdAt'>) => {
     const newProperty: Property = {
       ...property,
       id: crypto.randomUUID(),
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
     };
     const updated = [newProperty, ...properties];
     setProperties(updated);
@@ -210,9 +209,9 @@ function App() {
     setShowAddProperty(false);
   }, [properties]);
 
-  const updateProperty = useCallback((id: string,  Partial<Property>) => {
+  const updateProperty = useCallback((id: string, data: Partial<Property>) => {
     const updated = properties.map(p => 
-      p.id === id ? { ...p, ...data, updatedAt: new Date().toISOString() } : p
+      p.id === id ? { ...p, ...data } : p
     );
     setProperties(updated);
     saveProperties(updated);
@@ -389,7 +388,9 @@ function App() {
             {[
               { id: 'dashboard' as TabType, icon: Home, label: 'الرئيسية' },
               { id: 'clients' as TabType, icon: Users, label: 'العملاء' },
+              { id: 'properties' as TabType, icon: Building2, label: 'العقارات' },
               { id: 'reminders' as TabType, icon: Bell, label: 'التذكيرات' },
+              { id: 'daily-feedback' as TabType, icon: MessageSquare, label: 'الفيدباك اليومي' },
             ].map((tab, i) => (
               <motion.button
                 key={tab.id}
@@ -479,6 +480,44 @@ function App() {
               />
             </motion.div>
           )}
+
+          {activeTab === 'properties' && (
+            <motion.div
+              key="properties"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+            >
+              <PropertiesView 
+                properties={properties}
+                onSelect={setSelectedProperty}
+                onDelete={deleteProperty}
+                onAdd={() => setShowAddProperty(true)}
+              />
+            </motion.div>
+          )}
+
+          {activeTab === 'daily-feedback' && (
+            <motion.div
+              key="daily-feedback"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+            >
+              <DailyFeedbackView 
+                feedbacks={dailyFeedbacks}
+                clients={clients}
+                onDelete={(id) => {
+                  const updated = dailyFeedbacks.filter(f => f.id !== id);
+                  setDailyFeedbacks(updated);
+                  saveDailyFeedbacks(updated);
+                }}
+                onAdd={() => setShowAddFeedback(true)}
+              />
+            </motion.div>
+          )}
         </AnimatePresence>
       </main>
 
@@ -512,6 +551,37 @@ function App() {
             onAddReminder={() => {
               setSelectedClient(null);
               setShowAddReminder(true);
+            }}
+          />
+        )}
+        {showAddProperty && (
+          <AddPropertyModal 
+            onClose={() => setShowAddProperty(false)} 
+            onAdd={addProperty} 
+          />
+        )}
+        {selectedProperty && (
+          <PropertyDetailModal 
+            property={selectedProperty}
+            onClose={() => setSelectedProperty(null)}
+            onUpdate={updateProperty}
+            onDelete={() => { deleteProperty(selectedProperty.id); setSelectedProperty(null); }}
+          />
+        )}
+        {showAddFeedback && (
+          <AddFeedbackModal 
+            clients={clients}
+            onClose={() => setShowAddFeedback(false)} 
+            onAdd={(feedback) => {
+              const newFeedback: DailyFeedback = {
+                ...feedback,
+                id: crypto.randomUUID(),
+                createdAt: new Date().toISOString(),
+              };
+              const updated = [newFeedback, ...dailyFeedbacks];
+              setDailyFeedbacks(updated);
+              saveDailyFeedbacks(updated);
+              setShowAddFeedback(false);
             }}
           />
         )}
@@ -1621,6 +1691,553 @@ function StatusBadge({ status }: { status: Client['status'] }) {
     <span className={`text-xs px-2.5 py-1 rounded-full ${className}`}>
       {label}
     </span>
+  );
+}
+
+// Add Property Modal
+function AddPropertyModal({ onClose, onAdd }: { 
+  onClose: () => void; 
+  onAdd: (property: Omit<Property, 'id' | 'createdAt'>) => void 
+}) {
+  const [form, setForm] = useState({
+    name: '',
+    type: '',
+    area: '',
+    price: '',
+    location: '',
+    description: '',
+    image: '',
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name || !form.type) return;
+    onAdd(form);
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.8, opacity: 0, y: 50 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        exit={{ scale: 0.8, opacity: 0, y: 50 }}
+        transition={{ type: "spring", duration: 0.5 }}
+        onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary"
+      >
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+            <Building2 className="w-6 h-6" />
+            إضافة عقار جديد
+          </h2>
+          <motion.button 
+            whileHover={{ scale: 1.1, rotate: 90 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={onClose} 
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-400" />
+          </motion.button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">اسم العقار *</label>
+            <input
+              type="text"
+              required
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="اسم العقار"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">نوع العقار *</label>
+            <select
+              required
+              value={form.type}
+              onChange={(e) => setForm({ ...form, type: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+            >
+              <option value="" className="bg-gray-900">اختر النوع</option>
+              <option value="شقة" className="bg-gray-900">شقة</option>
+              <option value="فيلا" className="bg-gray-900">فيلا</option>
+              <option value="أرض" className="bg-gray-900">أرض</option>
+              <option value="محل" className="bg-gray-900">محل</option>
+              <option value="مكتب" className="bg-gray-900">مكتب</option>
+              <option value="أخرى" className="bg-gray-900">أخرى</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">المساحة</label>
+            <input
+              type="text"
+              value={form.area}
+              onChange={(e) => setForm({ ...form, area: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="المساحة بالمتر"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">السعر</label>
+            <input
+              type="text"
+              value={form.price}
+              onChange={(e) => setForm({ ...form, price: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="السعر"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">الموقع</label>
+            <input
+              type="text"
+              value={form.location}
+              onChange={(e) => setForm({ ...form, location: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="الموقع"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">الوصف</label>
+            <textarea
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24"
+              placeholder="وصف العقار"
+            />
+          </div>
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            type="submit"
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover"
+          >
+            إضافة العقار ✨
+          </motion.button>
+        </form>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Property Detail Modal
+function PropertyDetailModal({ property, onClose, onUpdate, onDelete }: {
+  property: Property;
+  onClose: () => void;
+  onUpdate: (id: string, data: Partial<Property>) => void;
+  onDelete: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.8, opacity: 0, y: 50 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        exit={{ scale: 0.8, opacity: 0, y: 50 }}
+        transition={{ type: "spring", duration: 0.5 }}
+        onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary"
+      >
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text">تفاصيل العقار</h2>
+          <motion.button 
+            whileHover={{ scale: 1.1, rotate: 90 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={onClose} 
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-400" />
+          </motion.button>
+        </div>
+
+        <div className="flex items-center gap-4 mb-6">
+          <motion.div 
+            whileHover={{ scale: 1.1, rotate: 10 }}
+            className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg glow-primary"
+          >
+            <Building2 className="w-8 h-8 text-white" />
+          </motion.div>
+          <div>
+            <h3 className="text-xl font-bold text-white">{property.name}</h3>
+            <p className="text-sm text-gray-400">{property.type}</p>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
+              <p className="text-xs text-gray-400">المساحة</p>
+              <p className="text-white font-medium">{property.area || '-'}</p>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
+              <p className="text-xs text-gray-400">السعر</p>
+              <p className="text-white font-medium">{property.price || '-'}</p>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
+              <p className="text-xs text-gray-400">الموقع</p>
+              <p className="text-white font-medium">{property.location || '-'}</p>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
+              <p className="text-xs text-gray-400">تاريخ الإضافة</p>
+              <p className="text-white text-sm">{formatDateTime(property.createdAt)}</p>
+            </div>
+          </div>
+          {property.description && (
+            <div className="bg-white/5 rounded-xl p-4 hover:bg-white/10 transition-colors">
+              <p className="text-xs text-gray-400 mb-1">الوصف</p>
+              <p className="text-white text-sm">{property.description}</p>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2 pt-2">
+            <motion.button
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+              onClick={onDelete}
+              className="flex items-center justify-center gap-2 bg-red-500/20 text-red-400 py-2.5 px-4 rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20"
+            >
+              <Trash2 className="w-4 h-4" />
+              حذف
+            </motion.button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Add Feedback Modal
+function AddFeedbackModal({ clients, onClose, onAdd }: {
+  clients: Client[];
+  onClose: () => void;
+  onAdd: (feedback: Omit<DailyFeedback, 'id' | 'createdAt'>) => void;
+}) {
+  const [form, setForm] = useState({
+    clientPhone: '',
+    clientName: '',
+    date: new Date().toISOString().slice(0, 16),
+    feedback: '',
+    callStatus: 'called' as DailyFeedback['callStatus'],
+  });
+
+  const handleClientSelect = (clientPhone: string) => {
+    const client = clients.find(c => c.phone === clientPhone);
+    if (client) {
+      setForm({ ...form, clientPhone, clientName: client.name });
+    } else {
+      setForm({ ...form, clientPhone, clientName: '' });
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.clientPhone || !form.clientName || !form.date) return;
+    onAdd(form);
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.8, opacity: 0, y: 50 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        exit={{ scale: 0.8, opacity: 0, y: 50 }}
+        transition={{ type: "spring", duration: 0.5 }}
+        onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary"
+      >
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+            <MessageSquare className="w-6 h-6" />
+            إضافة فيدباك يومي
+          </h2>
+          <motion.button 
+            whileHover={{ scale: 1.1, rotate: 90 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={onClose} 
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-400" />
+          </motion.button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">رقم العميل *</label>
+            <input
+              type="tel"
+              required
+              list="client-phones"
+              value={form.clientPhone}
+              onChange={(e) => handleClientSelect(e.target.value)}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="05xxxxxxxx"
+              dir="ltr"
+            />
+            <datalist id="client-phones">
+              {clients.map(c => (
+                <option key={c.id} value={c.phone}>{c.name}</option>
+              ))}
+            </datalist>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">اسم العميل *</label>
+            <input
+              type="text"
+              required
+              value={form.clientName}
+              onChange={(e) => setForm({ ...form, clientName: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="اسم العميل"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">التاريخ والوقت *</label>
+            <input
+              type="datetime-local"
+              required
+              value={form.date}
+              onChange={(e) => setForm({ ...form, date: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              dir="ltr"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">حالة الاتصال *</label>
+            <select
+              required
+              value={form.callStatus}
+              onChange={(e) => setForm({ ...form, callStatus: e.target.value as DailyFeedback['callStatus'] })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+            >
+              <option value="called" className="bg-gray-900">تم الاتصال</option>
+              <option value="no-answer" className="bg-gray-900">لا رد</option>
+              <option value="busy" className="bg-gray-900">مشغول</option>
+              <option value="not-called" className="bg-gray-900">لم يتصل</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">الفيدباك</label>
+            <textarea
+              value={form.feedback}
+              onChange={(e) => setForm({ ...form, feedback: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24"
+              placeholder="ملاحظات على المكالمة..."
+            />
+          </div>
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            type="submit"
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover"
+          >
+            إضافة الفيدباك 📝
+          </motion.button>
+        </form>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Properties View Component
+function PropertiesView({ properties, onSelect, onDelete, onAdd }: {
+  properties: Property[];
+  onSelect: (property: Property) => void;
+  onDelete: (id: string) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+          <Building2 className="w-6 h-6" />
+          العقارات
+        </h2>
+        <motion.button
+          whileHover={{ scale: 1.03 }}
+          whileTap={{ scale: 0.97 }}
+          onClick={onAdd}
+          className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover"
+        >
+          <Plus className="w-4 h-4" />
+          إضافة عقار
+        </motion.button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {properties.map((property, i) => (
+          <motion.div
+            key={property.id}
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.05 }}
+            whileHover={{ scale: 1.02, y: -5 }}
+            onClick={() => onSelect(property)}
+            className="glass-card rounded-2xl p-5 cursor-pointer card-hover animated-border"
+          >
+            <div className="flex items-start justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <motion.div 
+                  whileHover={{ scale: 1.2, rotate: 360 }}
+                  transition={{ duration: 0.5 }}
+                  className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center shadow-lg"
+                >
+                  <Building2 className="w-6 h-6 text-white" />
+                </motion.div>
+                <div>
+                  <h4 className="font-bold text-white">{property.name}</h4>
+                  <p className="text-sm text-gray-400">{property.type}</p>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-2 text-sm">
+              <p className="text-gray-300 flex items-center gap-2">
+                <Target className="w-4 h-4 text-purple-400" />
+                المساحة: {property.area}
+              </p>
+              <p className="text-gray-300 flex items-center gap-2">
+                <Star className="w-4 h-4 text-purple-400" />
+                السعر: {property.price}
+              </p>
+              <p className="text-gray-300 flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-purple-400" />
+                الموقع: {property.location}
+              </p>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+      
+      {properties.length === 0 && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="text-center py-16"
+        >
+          <motion.div
+            animate={{ y: [0, -10, 0] }}
+            transition={{ duration: 2, repeat: Infinity }}
+          >
+            <Building2 className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          </motion.div>
+          <p className="text-gray-400 text-lg">لا يوجد عقارات</p>
+          <p className="text-gray-500 text-sm mt-2">اضغط على "إضافة عقار" لبدء إضافة عقاراتك</p>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+// Daily Feedback View Component
+function DailyFeedbackView({ feedbacks, clients, onDelete, onAdd }: {
+  feedbacks: DailyFeedback[];
+  clients: Client[];
+  onDelete: (id: string) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+          <MessageSquare className="w-6 h-6" />
+          الفيدباك اليومي
+        </h2>
+        <motion.button
+          whileHover={{ scale: 1.03 }}
+          whileTap={{ scale: 0.97 }}
+          onClick={onAdd}
+          className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover"
+        >
+          <Plus className="w-4 h-4" />
+          إضافة فيدباك
+        </motion.button>
+      </div>
+
+      <div className="space-y-3">
+        {feedbacks.map((feedback, i) => (
+          <motion.div
+            key={feedback.id}
+            initial={{ opacity: 0, x: 30 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: i * 0.05 }}
+            className="glass-card rounded-2xl p-4"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-2">
+                  <h4 className="font-bold text-white text-lg">{feedback.clientName}</h4>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${
+                    feedback.callStatus === 'called' ? 'bg-emerald-500/20 text-emerald-400' :
+                    feedback.callStatus === 'no-answer' ? 'bg-amber-500/20 text-amber-400' :
+                    feedback.callStatus === 'busy' ? 'bg-red-500/20 text-red-400' :
+                    'bg-gray-500/20 text-gray-400'
+                  }`}>
+                    {feedback.callStatus === 'called' ? 'تم الاتصال' :
+                     feedback.callStatus === 'no-answer' ? 'لا رد' :
+                     feedback.callStatus === 'busy' ? 'مشغول' : 'لم يتصل'}
+                  </span>
+                </div>
+                <p className="text-sm text-purple-400 flex items-center gap-1">
+                  <Phone className="w-3 h-3" />
+                  <span dir="ltr">{feedback.clientPhone}</span>
+                </p>
+                <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                  <Calendar className="w-3 h-3" />
+                  {formatDateTime(feedback.date)}
+                </p>
+                {feedback.feedback && (
+                  <p className="text-sm text-gray-300 mt-2 bg-white/5 rounded-lg p-2">{feedback.feedback}</p>
+                )}
+              </div>
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+                onClick={() => onDelete(feedback.id)}
+                className="p-2 bg-red-500/20 rounded-lg hover:bg-red-500/30 transition-colors"
+                title="حذف"
+              >
+                <Trash2 className="w-4 h-4 text-red-400" />
+              </motion.button>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+
+      {feedbacks.length === 0 && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="text-center py-16"
+        >
+          <motion.div
+            animate={{ y: [0, -10, 0] }}
+            transition={{ duration: 2, repeat: Infinity }}
+          >
+            <MessageSquare className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          </motion.div>
+          <p className="text-gray-400 text-lg">لا يوجد فيدباك يومي</p>
+          <p className="text-gray-500 text-sm mt-2">اضغط على "إضافة فيدباك" لتسجيل مكالماتك اليومية</p>
+        </motion.div>
+      )}
+    </div>
   );
 }
 
