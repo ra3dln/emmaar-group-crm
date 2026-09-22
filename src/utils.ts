@@ -221,3 +221,78 @@ export function parsePrice(price: string): number {
   const num = parseFloat(cleanPrice);
   return isNaN(num) ? 0 : num;
 }
+
+// User Management functions
+const USERS_KEY = 'crm_users';
+
+export function getUsers(): User[] {
+  const data = localStorage.getItem(USERS_KEY);
+  return data ? JSON.parse(data) : [];
+}
+
+export function saveUsers(users: User[]): void {
+  localStorage.setItem(USERS_KEY, JSON.stringify(users));
+}
+
+export function addUser(user: Omit<User, 'id' | 'createdAt'>): User {
+  const users = getUsers();
+  const newUser: User = {
+    ...user,
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+  };
+  saveUsers([...users, newUser]);
+  return newUser;
+}
+
+export function updateUser(id: string,  Partial<User>): void {
+  const users = getUsers();
+  const updated = users.map(u => u.id === id ? { ...u, ...data } : u);
+  saveUsers(updated);
+}
+
+export function deleteUser(id: string): void {
+  const users = getUsers();
+  saveUsers(users.filter(u => u.id !== id));
+}
+
+export function getUserById(id: string): User | undefined {
+  return getUsers().find(u => u.id === id);
+}
+
+export function getCurrentUser(): User | null {
+  const data = localStorage.getItem('current_user');
+  return data ? JSON.parse(data) : null;
+}
+
+export function setCurrentUser(user: User | null): void {
+  if (user) {
+    localStorage.setItem('current_user', JSON.stringify(user));
+  } else {
+    localStorage.removeItem('current_user');
+  }
+}
+
+export function isAdmin(user: User): boolean {
+  return user.role === 'admin';
+}
+
+export function isSupervisor(user: User): boolean {
+  return user.role === 'supervisor';
+}
+
+export function isSales(user: User): boolean {
+  return user.role === 'sales';
+}
+
+export function canManageUsers(user: User): boolean {
+  return user.role === 'admin' || user.role === 'supervisor';
+}
+
+export function canViewAllData(user: User): boolean {
+  return user.role === 'admin';
+}
+
+export function canViewTeamData(user: User): boolean {
+  return user.role === 'admin' || user.role === 'supervisor';
+}

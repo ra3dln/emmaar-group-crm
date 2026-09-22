@@ -3,8 +3,13 @@ export interface User {
   username: string;
   password: string;
   name: string;
-  role: 'admin' | 'sales';
+  role: 'admin' | 'supervisor' | 'sales';
+  team?: string;
+  phone?: string;
+  email?: string;
+  isActive: boolean;
   createdAt: string;
+  createdBy?: string;
 }
 
 export interface Client {

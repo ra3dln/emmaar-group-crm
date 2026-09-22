@@ -522,6 +522,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
         password: form.password,
         name: form.name,
         role: 'sales',
+        isActive: true,
         createdAt: new Date().toISOString(),
       };
       localStorage.setItem('crm_users', JSON.stringify([...users, newUser]));
