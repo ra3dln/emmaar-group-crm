@@ -3,35 +3,46 @@ export interface User {
   username: string;
   password: string;
   name: string;
-  phone: string;
+  phone?: string;
   role: 'admin' | 'supervisor' | 'sales';
-  teamId?: string;
+  team?: string;
   isActive: boolean;
+  createdAt: string;
+  createdBy?: string;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  supervisorId: string;
+  supervisorName: string;
+  memberIds: string[];
   createdAt: string;
   createdBy: string;
 }
 
 export interface Client {
   id: string;
-  ownerId: string;
+  userId: string;
   name: string;
   phone: string;
   property: string;
   budget: string;
   monthlyInstallment: string;
   deliveryPeriod: string;
-  source: 'campaign' | 'facebook' | 'external';
+  status: 'campaign' | 'facebook' | 'external';
   stage: 'new' | 'contacted' | 'meeting' | 'negotiation' | 'closed' | 'lost';
-  priority: 'high' | 'medium' | 'low';
   feedback: string;
   assignedTo?: string;
+  priority: 'high' | 'medium' | 'low';
+  source: string;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface Reminder {
   id: string;
-  ownerId: string;
+  userId: string;
   clientId: string;
   clientName: string;
   clientPhone: string;
@@ -45,7 +56,7 @@ export interface Reminder {
 
 export interface Property {
   id: string;
-  ownerId: string;
+  userId: string;
   name: string;
   type: string;
   area: string;
@@ -53,9 +64,12 @@ export interface Property {
   priceNumeric: number;
   location: string;
   description: string;
+  image: string;
   clientPhone?: string;
   clientName?: string;
   project?: string;
+  compound?: string;
+  floor?: string;
   rooms?: string;
   bathrooms?: string;
   finishing: 'fully-finished' | 'semi-finished' | 'core-and-shell';
@@ -65,7 +79,7 @@ export interface Property {
 
 export interface DailyFeedback {
   id: string;
-  ownerId: string;
+  userId: string;
   clientPhone: string;
   clientName: string;
   date: string;
@@ -76,21 +90,4 @@ export interface DailyFeedback {
   createdAt: string;
 }
 
-export interface Team {
-  id: string;
-  name: string;
-  supervisorId: string;
-  memberIds: string[];
-  createdAt: string;
-}
-
-export type TabType = 
-  | 'dashboard' 
-  | 'clients' 
-  | 'pipeline' 
-  | 'properties' 
-  | 'reminders' 
-  | 'daily-feedback' 
-  | 'reports'
-  | 'admin-panel'
-  | 'create-account';
+export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'tasks' | 'reminders' | 'daily-feedback' | 'reports' | 'admin-users' | 'admin-teams' | 'admin-settings';
