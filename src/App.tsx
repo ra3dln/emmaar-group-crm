@@ -1216,7 +1216,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete }: 
                   lead.status === 'contacted' ? 'bg-amber-500/20 text-amber-400' :
                   'bg-emerald-500/20 text-emerald-400'
                 }`}>
-                  {lead.status === 'new' ? 'رقم جديد' : 
+                  {lead.status === 'new' ? 'بانتظار العرض' : 
                    lead.status === 'viewed' ? 'تم العرض' :
                    lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
                 </span>
