@@ -6,356 +6,285 @@ import {
   MessageSquare, X, Edit3, Trash2, Search,
   PhoneCall, UserPlus, Building2, Sparkles,
   Zap, Target, Award, Volume2, VolumeX,
-  LogOut, TrendingUp, DollarSign, Filter,
-  BarChart3, PieChart, Activity, FileText
+  LogOut, TrendingUp, DollarSign,
+  BarChart3, PieChart, Activity, FileText,
+  Shield, Settings, Lock
 } from 'lucide-react';
-import { Client, Reminder, Property, DailyFeedback, Task, User, Team, TabType } from './types';
-import { 
-  getClients, saveClients, getReminders, saveReminders,
-  getProperties, saveProperties, getDailyFeedbacks, saveDailyFeedbacks,
-  requestNotificationPermission, sendNotification, vibrateDevice,
-  formatDateTime, isReminderDue, getTimeUntil,
-  getNotifiedReminders, addNotifiedReminder, playNotificationSound,
-  formatPrice, parsePrice,
-  getUsers, addUser, updateUser, deleteUser, getUserById,
-  getTeams, addTeam, updateTeam, deleteTeam,
-  assignClientToUser, assignClientsToUser, distributeClientsEqually,
-  getUserStats, getTeamStats, getAllUsersStats,
-  isAdmin, isSupervisor, canManageUsers, canViewAllData
-} from './utils';
+import { Client, Reminder, Property, DailyFeedback, User, Team, TabType } from './types';
 
+// ============ Database (localStorage) ============
+const DB = {
+  getUsers: (): User[] => JSON.parse(localStorage.getItem('crm_users') || '[]'),
+  saveUsers: (users: User[]) => localStorage.setItem('crm_users', JSON.stringify(users)),
+  getClients: (): Client[] => JSON.parse(localStorage.getItem('crm_clients') || '[]'),
+  saveClients: (clients: Client[]) => localStorage.setItem('crm_clients', JSON.stringify(clients)),
+  getReminders: (): Reminder[] => JSON.parse(localStorage.getItem('crm_reminders') || '[]'),
+  saveReminders: (r: Reminder[]) => localStorage.setItem('crm_reminders', JSON.stringify(r)),
+  getProperties: (): Property[] => JSON.parse(localStorage.getItem('crm_properties') || '[]'),
+  saveProperties: (p: Property[]) => localStorage.setItem('crm_properties', JSON.stringify(p)),
+  getFeedbacks: (): DailyFeedback[] => JSON.parse(localStorage.getItem('crm_feedbacks') || '[]'),
+  saveFeedbacks: (f: DailyFeedback[]) => localStorage.setItem('crm_feedbacks', JSON.stringify(f)),
+  getTeams: (): Team[] => JSON.parse(localStorage.getItem('crm_teams') || '[]'),
+  saveTeams: (t: Team[]) => localStorage.setItem('crm_teams', JSON.stringify(t)),
+  getCurrentUser: (): User | null => {
+    const data = localStorage.getItem('crm_current_user');
+    return data ? JSON.parse(data) : null;
+  },
+  setCurrentUser: (user: User | null) => {
+    if (user) localStorage.setItem('crm_current_user', JSON.stringify(user));
+    else localStorage.removeItem('crm_current_user');
+  },
+};
+
+// Initialize admin account on first load
+const initializeDB = () => {
+  const users = DB.getUsers();
+  if (users.length === 0) {
+    const admin: User = {
+      id: 'admin-001',
+      username: 'admin',
+      password: 'admin123',
+      name: 'المدير العام',
+      phone: '',
+      role: 'admin',
+      isActive: true,
+      createdAt: new Date().toISOString(),
+      createdBy: 'system',
+    };
+    DB.saveUsers([admin]);
+  }
+};
+
+// ============ Helper Functions ============
+const formatPrice = (price: string): string => {
+  if (!price) return '0';
+  const cleanPrice = price.replace(/[,\s]/g, '');
+  const num = parseFloat(cleanPrice);
+  if (isNaN(num)) return price;
+  return num.toLocaleString('en-US');
+};
+
+const parsePrice = (price: string): number => {
+  if (!price) return 0;
+  const arabicNumbers: Record<string, number> = {
+    'مليون': 1000000, 'مليونين': 2000000, 'مليوني': 2000000,
+    'الف': 1000, 'ألف': 1000, 'الفين': 2000, 'ألفين': 2000,
+    'مليار': 1000000000, 'نص مليون': 500000, 'نصف مليون': 500000,
+  };
+  const lowerPrice = price.toLowerCase().trim();
+  for (const [word, value] of Object.entries(arabicNumbers)) {
+    if (lowerPrice.includes(word)) {
+      const match = lowerPrice.match(/(\d+\.?\d*)\s*[\*×x]?\s*[\u0600-\u06FF]+/);
+      if (match) return parseFloat(match[1]) * value;
+      return value;
+    }
+  }
+  const cleanPrice = price.replace(/[,\s$€£ج.م]/g, '');
+  const num = parseFloat(cleanPrice);
+  return isNaN(num) ? 0 : num;
+};
+
+const formatDateTime = (dateString: string): string => {
+  return new Date(dateString).toLocaleDateString('ar-EG', {
+    year: 'numeric', month: 'long', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+};
+
+// ============ Main App ============
 function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+  
+  useEffect(() => {
+    initializeDB();
+    const user = DB.getCurrentUser();
+    if (user) setCurrentUser(user);
+  }, []);
+
+  const handleLogin = (user: User) => {
+    setCurrentUser(user);
+    DB.setCurrentUser(user);
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    DB.setCurrentUser(null);
+  };
+
+  if (!currentUser) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
+
+  return (
+    <MainApp 
+      currentUser={currentUser} 
+      activeTab={activeTab}
+      setActiveTab={setActiveTab}
+      onLogout={handleLogout}
+    />
+  );
+}
+
+// ============ Login Screen ============
+function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
+  const [form, setForm] = useState({ username: '', password: '' });
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    const users = DB.getUsers();
+    const user = users.find(u => 
+      u.username === form.username && 
+      u.password === form.password && 
+      u.isActive
+    );
+    if (!user) {
+      setError('اسم المستخدم أو كلمة المرور غير صحيحة');
+      return;
+    }
+    onLogin(user);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#030014] flex items-center justify-center p-4 relative overflow-hidden">
+      <div className="bg-orb bg-orb-1"></div>
+      <div className="bg-orb bg-orb-2"></div>
+      
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="glass-card rounded-3xl p-8 w-full max-w-md border-purple-400/30 glow-primary relative z-10"
+      >
+        <div className="text-center mb-8">
+          <motion.div
+            animate={{ rotate: [0, 360] }}
+            transition={{ duration: 3, repeat: Infinity, repeatType: "reverse" }}
+            className="w-20 h-20 gradient-primary rounded-full flex items-center justify-center mx-auto mb-4 glow-primary"
+          >
+            <Building2 className="w-10 h-10 text-white" />
+          </motion.div>
+          <h1 className="text-3xl font-bold gradient-text mb-2">Muhammed CRM</h1>
+          <p className="text-gray-400 flex items-center justify-center gap-2">
+            <Lock className="w-4 h-4" />
+            نظام CRM الخاص بمحمد
+          </p>
+          <p className="text-xs text-gray-500 mt-2">تسجيل دخول خاص بالإدارة والفريق</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-300 mb-2">اسم المستخدم</label>
+            <input
+              type="text"
+              value={form.username}
+              onChange={(e) => setForm({ ...form, username: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="أدخل اسم المستخدم"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-2">كلمة المرور</label>
+            <input
+              type="password"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="أدخل كلمة المرور"
+            />
+          </div>
+
+          {error && (
+            <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-red-400 text-sm text-center bg-red-500/10 p-2 rounded-lg">
+              {error}
+            </motion.p>
+          )}
+
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            type="submit"
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover"
+          >
+            تسجيل الدخول
+          </motion.button>
+        </form>
+
+        <div className="mt-6 p-3 bg-purple-500/10 rounded-xl border border-purple-500/20">
+          <p className="text-xs text-gray-400 text-center">
+            <Shield className="w-3 h-3 inline ml-1" />
+            الحسابات يتم إنشاؤها من قبل الإدارة فقط
+          </p>
+          <p className="text-xs text-gray-500 text-center mt-1">
+            الحساب الافتراضي: admin / admin123
+          </p>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ============ Main App (After Login) ============
+function MainApp({ currentUser, activeTab, setActiveTab, onLogout }: {
+  currentUser: User;
+  activeTab: TabType;
+  setActiveTab: (tab: TabType) => void;
+  onLogout: () => void;
+}) {
   const [clients, setClients] = useState<Client[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
-  const [dailyFeedbacks, setDailyFeedbacks] = useState<DailyFeedback[]>([]);
+  const [feedbacks, setFeedbacks] = useState<DailyFeedback[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  
   const [showAddClient, setShowAddClient] = useState(false);
   const [showAddReminder, setShowAddReminder] = useState(false);
   const [showAddProperty, setShowAddProperty] = useState(false);
   const [showAddFeedback, setShowAddFeedback] = useState(false);
-  const [showAddUser, setShowAddUser] = useState(false);
-  const [showAddTeam, setShowAddTeam] = useState(false);
-  const [showAssignClients, setShowAssignClients] = useState(false);
+  const [showCreateAccount, setShowCreateAccount] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [propertySearch, setPropertySearch] = useState('');
-  const [showPermissionModal, setShowPermissionModal] = useState(false);
-  const [notificationPermission, setNotificationPermission] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [inAppNotification, setInAppNotification] = useState<{title: string, body: string} | null>(null);
 
-  // Check if user is logged in
+  // Load data based on role
   useEffect(() => {
-    const user = localStorage.getItem('current_user');
-    if (user) {
-      setCurrentUser(JSON.parse(user));
-    }
-  }, []);
+    const allClients = DB.getClients();
+    const allReminders = DB.getReminders();
+    const allProperties = DB.getProperties();
+    const allFeedbacks = DB.getFeedbacks();
+    const allUsers = DB.getUsers();
+    const allTeams = DB.getTeams();
 
-  // Show permission modal on first load
-  useEffect(() => {
-    if (!currentUser) return;
-    const hasAsked = localStorage.getItem('notification_permission_asked');
-    if (!hasAsked) {
-      const timer = setTimeout(() => {
-        setShowPermissionModal(true);
-      }, 2000);
-      return () => clearTimeout(timer);
+    if (currentUser.role === 'admin' || currentUser.role === 'supervisor') {
+      // Admin/Supervisor sees all data
+      setClients(allClients);
+      setReminders(allReminders);
+      setProperties(allProperties);
+      setFeedbacks(allFeedbacks);
     } else {
-      if ('Notification' in window) {
-        setNotificationPermission(Notification.permission === 'granted');
-      }
+      // Sales sees only their own data
+      setClients(allClients.filter(c => c.ownerId === currentUser.id || c.assignedTo === currentUser.id));
+      setReminders(allReminders.filter(r => r.ownerId === currentUser.id));
+      setProperties(allProperties.filter(p => p.ownerId === currentUser.id));
+      setFeedbacks(allFeedbacks.filter(f => f.ownerId === currentUser.id));
     }
+
+    setUsers(allUsers);
+    setTeams(allTeams);
   }, [currentUser]);
 
-  const handlePermissionRequest = async () => {
-    const granted = await requestNotificationPermission();
-    setNotificationPermission(granted);
-    localStorage.setItem('notification_permission_asked', 'true');
-    setShowPermissionModal(false);
-  };
-
-  const handleDenyPermission = () => {
-    localStorage.setItem('notification_permission_asked', 'true');
-    setShowPermissionModal(false);
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('current_user');
-    setCurrentUser(null);
-  };
-
-  // Load data
-  useEffect(() => {
-    if (!currentUser) return;
-    
-    // Load user-specific data based on role
-    if (isAdmin(currentUser) || isSupervisor(currentUser)) {
-      // Admin/Supervisor can see all data
-      setClients(getClients());
-      setReminders(getReminders());
-      setProperties(getProperties());
-      setDailyFeedbacks(getDailyFeedbacks());
-    } else {
-      // Regular sales can only see their own data
-      setClients(getClients().filter(c => c.userId === currentUser.id || c.assignedTo === currentUser.id));
-      setReminders(getReminders().filter(r => r.userId === currentUser.id));
-      setProperties(getProperties().filter(p => p.userId === currentUser.id));
-      setDailyFeedbacks(getDailyFeedbacks().filter(f => f.userId === currentUser.id));
-    }
-    
-    // Load users and teams for admin/supervisor
-    if (canManageUsers(currentUser)) {
-      setUsers(getUsers());
-      setTeams(getTeams());
-    }
-  }, [currentUser]);
-
-  // Check reminders every 5 seconds
-  useEffect(() => {
-    if (!currentUser) return;
-    const checkReminders = () => {
-      const currentReminders = getReminders().filter(r => r.userId === currentUser.id);
-      const notifiedIds = getNotifiedReminders();
-      
-      currentReminders.forEach(reminder => {
-        if (isReminderDue(reminder) && !reminder.isCompleted && !notifiedIds.includes(reminder.id)) {
-          addNotifiedReminder(reminder.id);
-          if (soundEnabled) playNotificationSound();
-          vibrateDevice();
-          sendNotification(
-            '⏰ تذكير بالاتصال بعميل',
-            `حان وقت الاتصال بـ ${reminder.clientName}\n${reminder.clientPhone}`,
-            `reminder-${reminder.id}`
-          );
-          setInAppNotification({
-            title: `⏰ حان وقت الاتصال بـ ${reminder.clientName}`,
-            body: `${reminder.clientPhone} - ${reminder.note || 'تذكير بمكالمة'}`
-          });
-          setTimeout(() => setInAppNotification(null), 10000);
-        }
-      });
-    };
-
-    checkReminders();
-    const interval = setInterval(checkReminders, 5000);
-    return () => clearInterval(interval);
-  }, [currentUser, soundEnabled]);
-
-  const addClient = useCallback((client: Omit<Client, 'id' | 'createdAt' | 'updatedAt' | 'userId'>) => {
-    if (!currentUser) return;
-    const newClient: Client = {
-      ...client,
-      userId: currentUser.id,
-      id: crypto.randomUUID(),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    const updated = [newClient, ...clients];
-    setClients(updated);
-    const allClients = getClients();
-    saveClients([newClient, ...allClients]);
-    setShowAddClient(false);
-  }, [clients, currentUser]);
-
-  const updateClient = useCallback((id: string, data: Partial<Client>) => {
-    const updated = clients.map(c => 
-      c.id === id ? { ...c, ...data, updatedAt: new Date().toISOString() } : c
-    );
-    setClients(updated);
-    const allClients = getClients();
-    saveClients(allClients.map(c => c.id === id ? { ...c, ...data, updatedAt: new Date().toISOString() } : c));
-    setSelectedClient(null);
-  }, [clients]);
-
-  const deleteClient = useCallback((id: string) => {
-    const updated = clients.filter(c => c.id !== id);
-    setClients(updated);
-    saveClients(getClients().filter(c => c.id !== id));
-    setReminders(reminders.filter(r => r.clientId !== id));
-    saveReminders(getReminders().filter(r => r.clientId !== id));
-  }, [clients, reminders]);
-
-  const addReminder = useCallback((reminder: Omit<Reminder, 'id' | 'isCompleted' | 'isDelayed' | 'delayCount' | 'createdAt' | 'userId'>) => {
-    if (!currentUser) return;
-    const newReminder: Reminder = {
-      ...reminder,
-      userId: currentUser.id,
-      id: crypto.randomUUID(),
-      isCompleted: false,
-      isDelayed: false,
-      delayCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-    const updated = [newReminder, ...reminders];
-    setReminders(updated);
-    saveReminders([newReminder, ...getReminders()]);
-    setShowAddReminder(false);
-  }, [reminders, currentUser]);
-
-  const completeReminder = useCallback((id: string) => {
-    const updated = reminders.map(r => r.id === id ? { ...r, isCompleted: true } : r);
-    setReminders(updated);
-    saveReminders(getReminders().map(r => r.id === id ? { ...r, isCompleted: true } : r));
-  }, [reminders]);
-
-  const delayReminder = useCallback((id: string, minutes: number) => {
-    const updated = reminders.map(r => {
-      if (r.id === id) {
-        const newTime = new Date(new Date(r.dateTime).getTime() + minutes * 60000);
-        return { ...r, dateTime: newTime.toISOString(), isDelayed: true, delayCount: r.delayCount + 1 };
-      }
-      return r;
-    });
-    setReminders(updated);
-    saveReminders(getReminders().map(r => {
-      if (r.id === id) {
-        const newTime = new Date(new Date(r.dateTime).getTime() + minutes * 60000);
-        return { ...r, dateTime: newTime.toISOString(), isDelayed: true, delayCount: r.delayCount + 1 };
-      }
-      return r;
-    }));
-    const notified = getNotifiedReminders().filter(nid => nid !== id);
-    localStorage.setItem('crm_notified_reminders', JSON.stringify(notified));
-  }, [reminders]);
-
-  const deleteReminder = useCallback((id: string) => {
-    const updated = reminders.filter(r => r.id !== id);
-    setReminders(updated);
-    saveReminders(getReminders().filter(r => r.id !== id));
-  }, [reminders]);
-
-  const addProperty = useCallback((property: Omit<Property, 'id' | 'createdAt' | 'userId'>) => {
-    if (!currentUser) return;
-    const newProperty: Property = {
-      ...property,
-      userId: currentUser.id,
-      id: crypto.randomUUID(),
-      createdAt: new Date().toISOString(),
-    };
-    const updated = [newProperty, ...properties];
-    setProperties(updated);
-    saveProperties([newProperty, ...getProperties()]);
-    setShowAddProperty(false);
-  }, [properties, currentUser]);
-
-  const deleteProperty = useCallback((id: string) => {
-    const updated = properties.filter(p => p.id !== id);
-    setProperties(updated);
-    saveProperties(getProperties().filter(p => p.id !== id));
-  }, [properties]);
-
-  const filteredClients = clients.filter(c => 
-    c.name.includes(searchTerm) || 
-    c.phone.includes(searchTerm) || 
-    c.property.includes(searchTerm)
-  );
-
-  const filteredProperties = properties.filter(p => {
-    const searchLower = propertySearch.toLowerCase();
-    const searchNumeric = parsePrice(propertySearch);
-    
-    // Search in text fields
-    const textMatch = p.name.toLowerCase().includes(searchLower) ||
-                     p.type.toLowerCase().includes(searchLower) ||
-                     p.location.toLowerCase().includes(searchLower) ||
-                     p.description.toLowerCase().includes(searchLower);
-    
-    // Search in price (both numeric and text)
-    const priceMatch = p.price.toLowerCase().includes(searchLower) ||
-                      p.priceNumeric === searchNumeric ||
-                      (searchNumeric > 0 && Math.abs(p.priceNumeric - searchNumeric) < 1000);
-    
-    return textMatch || priceMatch;
-  });
-
-  // User Management Functions
-  const handleAddUser = useCallback((userData: Omit<User, 'id' | 'createdAt' | 'createdBy'>) => {
-    if (!currentUser || !canManageUsers(currentUser)) return;
-    
-    const newUser = addUser({
-      ...userData,
-      createdBy: currentUser.id,
-      isActive: true,
-    });
-    
-    setUsers([...users, newUser]);
-    setShowAddUser(false);
-  }, [currentUser, users]);
-
-  const handleUpdateUser = useCallback((id: string, data: Partial<User>) => {
-    updateUser(id, data);
-    setUsers(getUsers());
-    setSelectedUser(null);
-  }, []);
-
-  const handleDeleteUser = useCallback((id: string) => {
-    deleteUser(id);
-    setUsers(getUsers());
-    setSelectedUser(null);
-  }, []);
-
-  // Team Management Functions
-  const handleAddTeam = useCallback((teamData: Omit<Team, 'id' | 'createdAt' | 'createdBy'>) => {
-    if (!currentUser || !canManageUsers(currentUser)) return;
-    
-    const newTeam = addTeam({
-      ...teamData,
-      createdBy: currentUser.id,
-    });
-    
-    setTeams([...teams, newTeam]);
-    setShowAddTeam(false);
-  }, [currentUser, teams]);
-
-  const handleUpdateTeam = useCallback((id: string, data: Partial<Team>) => {
-    updateTeam(id, data);
-    setTeams(getTeams());
-    setSelectedTeam(null);
-  }, []);
-
-  const handleDeleteTeam = useCallback((id: string) => {
-    deleteTeam(id);
-    setTeams(getTeams());
-    setSelectedTeam(null);
-  }, []);
-
-  // Client Assignment Functions
-  const handleAssignClient = useCallback((clientId: string, userId: string) => {
-    assignClientToUser(clientId, userId);
-    setClients(getClients());
-    setShowAssignClients(false);
-  }, []);
-
-  const handleAssignMultipleClients = useCallback((clientIds: string[], userId: string) => {
-    assignClientsToUser(clientIds, userId);
-    setClients(getClients());
-    setShowAssignClients(false);
-  }, []);
-
-  const handleDistributeClients = useCallback((clientIds: string[], userIds: string[]) => {
-    distributeClientsEqually(clientIds, userIds);
-    setClients(getClients());
-    setShowAssignClients(false);
-  }, []);
-
-  const activeReminders = reminders.filter(r => !r.isCompleted);
-  const dueReminders = reminders.filter(r => isReminderDue(r));
-  
+  // Stats
   const stats = {
     totalClients: clients.length,
-    activeReminders: activeReminders.length,
-    dueNow: dueReminders.length,
-    campaignClients: clients.filter(c => c.status === 'campaign').length,
-    facebookClients: clients.filter(c => c.status === 'facebook').length,
-    externalClients: clients.filter(c => c.status === 'external').length,
+    campaignClients: clients.filter(c => c.source === 'campaign').length,
+    facebookClients: clients.filter(c => c.source === 'facebook').length,
+    externalClients: clients.filter(c => c.source === 'external').length,
     newStage: clients.filter(c => c.stage === 'new').length,
     contactedStage: clients.filter(c => c.stage === 'contacted').length,
     meetingStage: clients.filter(c => c.stage === 'meeting').length,
@@ -363,11 +292,200 @@ function App() {
     closedStage: clients.filter(c => c.stage === 'closed').length,
     lostStage: clients.filter(c => c.stage === 'lost').length,
     totalProperties: properties.length,
+    totalUsers: users.length,
+    activeReminders: reminders.filter(r => !r.isCompleted).length,
+    dueNow: reminders.filter(r => !r.isCompleted && new Date(r.dateTime) <= new Date()).length,
   };
 
-  if (!currentUser) {
-    return <LoginScreen onLogin={setCurrentUser} />;
-  }
+  const filteredClients = clients.filter(c => 
+    c.name.includes(searchTerm) || c.phone.includes(searchTerm) || c.property.includes(searchTerm)
+  );
+
+  const filteredProperties = properties.filter(p => {
+    const searchLower = propertySearch.toLowerCase();
+    const searchNumeric = parsePrice(propertySearch);
+    const textMatch = p.name.toLowerCase().includes(searchLower) ||
+                     p.type.toLowerCase().includes(searchLower) ||
+                     p.location.toLowerCase().includes(searchLower);
+    const priceMatch = p.price.toLowerCase().includes(searchLower) ||
+                      p.priceNumeric === searchNumeric;
+    return textMatch || priceMatch;
+  });
+
+  // Client CRUD
+  const addClient = (client: Omit<Client, 'id' | 'createdAt' | 'updatedAt' | 'ownerId'>) => {
+    const newClient: Client = {
+      ...client,
+      ownerId: currentUser.id,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const updated = [newClient, ...DB.getClients()];
+    DB.saveClients(updated);
+    setClients(currentUser.role === 'sales' 
+      ? updated.filter(c => c.ownerId === currentUser.id || c.assignedTo === currentUser.id)
+      : updated);
+    setShowAddClient(false);
+  };
+
+  const updateClient = (id: string,  Partial<Client>) => {
+    const all = DB.getClients().map(c => 
+      c.id === id ? { ...c, ...data, updatedAt: new Date().toISOString() } : c
+    );
+    DB.saveClients(all);
+    setClients(currentUser.role === 'sales'
+      ? all.filter(c => c.ownerId === currentUser.id || c.assignedTo === currentUser.id)
+      : all);
+    setSelectedClient(null);
+  };
+
+  const deleteClient = (id: string) => {
+    const all = DB.getClients().filter(c => c.id !== id);
+    DB.saveClients(all);
+    setClients(currentUser.role === 'sales'
+      ? all.filter(c => c.ownerId === currentUser.id || c.assignedTo === currentUser.id)
+      : all);
+  };
+
+  // Reminder CRUD
+  const addReminder = (reminder: Omit<Reminder, 'id' | 'createdAt' | 'ownerId' | 'isCompleted' | 'isDelayed' | 'delayCount'>) => {
+    const newReminder: Reminder = {
+      ...reminder,
+      ownerId: currentUser.id,
+      id: crypto.randomUUID(),
+      isCompleted: false,
+      isDelayed: false,
+      delayCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+    const updated = [newReminder, ...DB.getReminders()];
+    DB.saveReminders(updated);
+    setReminders(currentUser.role === 'sales'
+      ? updated.filter(r => r.ownerId === currentUser.id)
+      : updated);
+    setShowAddReminder(false);
+  };
+
+  const completeReminder = (id: string) => {
+    const updated = DB.getReminders().map(r => r.id === id ? { ...r, isCompleted: true } : r);
+    DB.saveReminders(updated);
+    setReminders(currentUser.role === 'sales'
+      ? updated.filter(r => r.ownerId === currentUser.id)
+      : updated);
+  };
+
+  const delayReminder = (id: string, minutes: number) => {
+    const updated = DB.getReminders().map(r => {
+      if (r.id === id) {
+        const newTime = new Date(new Date(r.dateTime).getTime() + minutes * 60000);
+        return { ...r, dateTime: newTime.toISOString(), isDelayed: true, delayCount: r.delayCount + 1 };
+      }
+      return r;
+    });
+    DB.saveReminders(updated);
+    setReminders(currentUser.role === 'sales'
+      ? updated.filter(r => r.ownerId === currentUser.id)
+      : updated);
+  };
+
+  const deleteReminder = (id: string) => {
+    const updated = DB.getReminders().filter(r => r.id !== id);
+    DB.saveReminders(updated);
+    setReminders(currentUser.role === 'sales'
+      ? updated.filter(r => r.ownerId === currentUser.id)
+      : updated);
+  };
+
+  // Property CRUD
+  const addProperty = (property: Omit<Property, 'id' | 'createdAt' | 'ownerId'>) => {
+    const newProperty: Property = {
+      ...property,
+      ownerId: currentUser.id,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+    };
+    const updated = [newProperty, ...DB.getProperties()];
+    DB.saveProperties(updated);
+    setProperties(currentUser.role === 'sales'
+      ? updated.filter(p => p.ownerId === currentUser.id)
+      : updated);
+    setShowAddProperty(false);
+  };
+
+  const deleteProperty = (id: string) => {
+    const updated = DB.getProperties().filter(p => p.id !== id);
+    DB.saveProperties(updated);
+    setProperties(currentUser.role === 'sales'
+      ? updated.filter(p => p.ownerId === currentUser.id)
+      : updated);
+  };
+
+  // Feedback CRUD
+  const addFeedback = (feedback: Omit<DailyFeedback, 'id' | 'createdAt' | 'ownerId'>) => {
+    const newFeedback: DailyFeedback = {
+      ...feedback,
+      ownerId: currentUser.id,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+    };
+    const updated = [newFeedback, ...DB.getFeedbacks()];
+    DB.saveFeedbacks(updated);
+    setFeedbacks(currentUser.role === 'sales'
+      ? updated.filter(f => f.ownerId === currentUser.id)
+      : updated);
+    setShowAddFeedback(false);
+  };
+
+  const deleteFeedback = (id: string) => {
+    const updated = DB.getFeedbacks().filter(f => f.id !== id);
+    DB.saveFeedbacks(updated);
+    setFeedbacks(currentUser.role === 'sales'
+      ? updated.filter(f => f.ownerId === currentUser.id)
+      : updated);
+  };
+
+  // User Management (Admin/Supervisor only)
+  const createUser = (userData: { username: string; password: string; name: string; phone: string; role: User['role'] }) => {
+    const newUser: User = {
+      ...userData,
+      id: crypto.randomUUID(),
+      isActive: true,
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser.id,
+    };
+    const updated = [...DB.getUsers(), newUser];
+    DB.saveUsers(updated);
+    setUsers(updated);
+    setShowCreateAccount(false);
+  };
+
+  const updateUser = (id: string,  Partial<User>) => {
+    const updated = DB.getUsers().map(u => u.id === id ? { ...u, ...data } : u);
+    DB.saveUsers(updated);
+    setUsers(updated);
+    setSelectedUser(null);
+  };
+
+  const deleteUser = (id: string) => {
+    const updated = DB.getUsers().filter(u => u.id !== id);
+    DB.saveUsers(updated);
+    setUsers(updated);
+    setSelectedUser(null);
+  };
+
+  // Assign client to user
+  const assignClient = (clientId: string, userId: string) => {
+    const updated = DB.getClients().map(c => 
+      c.id === clientId ? { ...c, assignedTo: userId, updatedAt: new Date().toISOString() } : c
+    );
+    DB.saveClients(updated);
+    setClients(currentUser.role === 'sales'
+      ? updated.filter(c => c.ownerId === currentUser.id || c.assignedTo === currentUser.id)
+      : updated);
+  };
+
+  const isManager = currentUser.role === 'admin' || currentUser.role === 'supervisor';
 
   return (
     <div className="min-h-screen bg-[#030014] text-white relative overflow-hidden">
@@ -375,39 +493,10 @@ function App() {
       <div className="bg-orb bg-orb-2"></div>
       <div className="bg-orb bg-orb-3"></div>
 
-      <AnimatePresence>
-        {inAppNotification && (
-          <motion.div
-            initial={{ opacity: 0, y: -100, scale: 0.8 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -100, scale: 0.8 }}
-            className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4"
-          >
-            <div className="glass-card rounded-2xl p-4 border-purple-400/50 glow-primary animate-pulse-glow">
-              <div className="flex items-start gap-3">
-                <motion.div
-                  animate={{ scale: [1, 1.2, 1] }}
-                  transition={{ duration: 0.5, repeat: Infinity }}
-                  className="w-10 h-10 gradient-primary rounded-full flex items-center justify-center flex-shrink-0"
-                >
-                  <Bell className="w-5 h-5 text-white" />
-                </motion.div>
-                <div className="flex-1">
-                  <p className="font-bold text-white text-sm">{inAppNotification.title}</p>
-                  <p className="text-gray-300 text-xs mt-1">{inAppNotification.body}</p>
-                </div>
-                <button onClick={() => setInAppNotification(null)} className="p-1 hover:bg-white/10 rounded-lg">
-                  <X className="w-4 h-4 text-gray-400" />
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
+      {/* Header */}
       <header className="relative z-10 glass-card border-b border-purple-500/20">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="flex items-center gap-3">
+          <div className="flex items-center gap-3">
             <motion.div whileHover={{ rotate: 360, scale: 1.1 }} transition={{ duration: 0.6 }}
               className="w-12 h-12 gradient-primary rounded-xl flex items-center justify-center shadow-lg glow-primary">
               <Building2 className="w-7 h-7 text-white" />
@@ -415,11 +504,11 @@ function App() {
             <div>
               <h1 className="text-xl font-bold gradient-text">Muhammed CRM</h1>
               <p className="text-xs text-gray-400 flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-purple-400" />
-                نظام CRM الخاص بمحمد - مرحباً {currentUser.name}
+                <Shield className="w-3 h-3 text-purple-400" />
+                {currentUser.name} • {currentUser.role === 'admin' ? 'مدير' : currentUser.role === 'supervisor' ? 'مشرف' : 'بائع'}
               </p>
             </div>
-          </motion.div>
+          </div>
           
           <div className="flex items-center gap-3">
             <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
@@ -428,27 +517,14 @@ function App() {
               {soundEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
             </motion.button>
 
-            {!notificationPermission && (
-              <motion.button initial={{ scale: 0 }} animate={{ scale: 1 }} whileHover={{ scale: 1.05 }}
-                onClick={() => setShowPermissionModal(true)}
-                className="flex items-center gap-2 bg-purple-500/20 text-purple-300 px-3 py-2 rounded-lg text-sm border border-purple-500/30">
-                <Bell className="w-4 h-4" />
-                <span className="hidden sm:inline">تفعيل الإشعارات</span>
+            {isManager && (
+              <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                onClick={() => setShowCreateAccount(true)}
+                className="bg-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors">
+                <UserPlus className="w-4 h-4" />
+                <span className="hidden sm:inline">إنشاء حساب</span>
               </motion.button>
             )}
-            
-            <motion.button initial={{ scale: 0 }} animate={{ scale: 1 }}
-              whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
-              onClick={() => setActiveTab('reminders')}
-              className="relative p-2 bg-purple-500/20 rounded-lg hover:bg-purple-500/30 transition-colors"
-              title="التذكيرات">
-              <Bell className="w-6 h-6 text-purple-400" />
-              {stats.dueNow > 0 && (
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center font-bold animate-pulse">
-                  {stats.dueNow}
-                </span>
-              )}
-            </motion.button>
             
             <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
               onClick={() => setShowAddClient(true)}
@@ -457,8 +533,8 @@ function App() {
               عميل جديد
             </motion.button>
 
-            <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-              onClick={handleLogout}
+            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+              onClick={onLogout}
               className="p-2 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30 transition-colors"
               title="تسجيل الخروج">
               <LogOut className="w-5 h-5" />
@@ -467,6 +543,7 @@ function App() {
         </div>
       </header>
 
+      {/* Navigation */}
       <nav className="relative z-10 glass-card border-b border-purple-500/10">
         <div className="max-w-7xl mx-auto px-4">
           <div className="flex gap-1 overflow-x-auto">
@@ -478,27 +555,22 @@ function App() {
               { id: 'reminders' as TabType, icon: Bell, label: 'التذكيرات' },
               { id: 'daily-feedback' as TabType, icon: MessageSquare, label: 'الفيدباك' },
               { id: 'reports' as TabType, icon: BarChart3, label: 'التقارير' },
-              { id: 'admin-users' as TabType, icon: Users, label: 'إدارة المستخدمين' },
-              { id: 'admin-teams' as TabType, icon: Users, label: 'الفرق' },
-              { id: 'admin-settings' as TabType, icon: Edit3, label: 'الإعدادات' },
+              ...(isManager ? [{ id: 'admin-panel' as TabType, icon: Shield, label: 'لوحة الإدارة' }] : []),
             ].map((tab, i) => (
               <motion.button key={tab.id}
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.1 }}
+                transition={{ delay: i * 0.05 }}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all duration-300 border-b-2 whitespace-nowrap relative ${
+                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-all duration-300 border-b-2 whitespace-nowrap relative ${
                   activeTab === tab.id ? 'border-purple-400 text-purple-300' : 'border-transparent text-gray-400 hover:text-purple-300'
                 }`}>
                 <tab.icon className="w-4 h-4" />
-                {tab.label}
+                <span className="hidden md:inline">{tab.label}</span>
                 {tab.id === 'reminders' && stats.dueNow > 0 && (
                   <span className="w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center text-white animate-pulse">
                     {stats.dueNow}
                   </span>
-                )}
-                {activeTab === tab.id && (
-                  <motion.div layoutId="activeTab" className="absolute bottom-0 left-0 right-0 h-0.5 gradient-primary" />
                 )}
               </motion.button>
             ))}
@@ -506,322 +578,90 @@ function App() {
         </div>
       </nav>
 
+      {/* Main Content */}
       <main className="relative z-10 max-w-7xl mx-auto px-4 py-6">
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && (
             <motion.div key="dashboard" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <DashboardView stats={stats} clients={clients} reminders={reminders} properties={properties}
-                onComplete={completeReminder} onDelay={delayReminder} />
+              <DashboardView stats={stats} reminders={reminders} onComplete={completeReminder} onDelay={delayReminder} />
             </motion.div>
           )}
-
           {activeTab === 'clients' && (
             <motion.div key="clients" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
               <ClientsView clients={filteredClients} searchTerm={searchTerm} onSearch={setSearchTerm}
-                onSelect={setSelectedClient} onDelete={deleteClient} onAdd={() => setShowAddClient(true)} />
+                onSelect={setSelectedClient} onDelete={deleteClient} onAdd={() => setShowAddClient(true)}
+                isManager={isManager} users={users} onAssign={assignClient} currentUser={currentUser} />
             </motion.div>
           )}
-
           {activeTab === 'pipeline' && (
             <motion.div key="pipeline" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
               <PipelineView clients={clients} onUpdateStage={(id, stage) => updateClient(id, { stage })} />
             </motion.div>
           )}
-
           {activeTab === 'properties' && (
             <motion.div key="properties" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
               <PropertiesView properties={filteredProperties} searchTerm={propertySearch} onSearch={setPropertySearch}
                 onSelect={setSelectedProperty} onDelete={deleteProperty} onAdd={() => setShowAddProperty(true)} />
             </motion.div>
           )}
-
           {activeTab === 'reminders' && (
             <motion.div key="reminders" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
               <RemindersView reminders={reminders} onComplete={completeReminder} onDelay={delayReminder}
                 onDelete={deleteReminder} onAdd={() => setShowAddReminder(true)} />
             </motion.div>
           )}
-
           {activeTab === 'daily-feedback' && (
             <motion.div key="daily-feedback" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <DailyFeedbackView feedbacks={dailyFeedbacks} clients={clients}
-                onDelete={(id) => {
-                  const updated = dailyFeedbacks.filter(f => f.id !== id);
-                  setDailyFeedbacks(updated);
-                  saveDailyFeedbacks(getDailyFeedbacks().filter(f => f.id !== id));
-                }}
-                onAdd={() => setShowAddFeedback(true)} />
+              <DailyFeedbackView feedbacks={feedbacks} clients={clients} onDelete={deleteFeedback} onAdd={() => setShowAddFeedback(true)} />
             </motion.div>
           )}
-
           {activeTab === 'reports' && (
             <motion.div key="reports" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <ReportsView stats={stats} clients={clients} properties={properties} feedbacks={dailyFeedbacks} />
+              <ReportsView stats={stats} clients={clients} properties={properties} feedbacks={feedbacks} users={users} />
             </motion.div>
           )}
-
-          {activeTab === 'admin-users' && canManageUsers(currentUser) && (
-            <motion.div key="admin-users" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <AdminUsersView 
+          {activeTab === 'admin-panel' && isManager && (
+            <motion.div key="admin-panel" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
+              <AdminPanel 
                 users={users} 
                 currentUser={currentUser}
                 onSelect={setSelectedUser}
-                onAdd={() => setShowAddUser(true)}
+                onAdd={() => setShowCreateAccount(true)}
+                stats={stats}
               />
-            </motion.div>
-          )}
-
-          {activeTab === 'admin-teams' && canManageUsers(currentUser) && (
-            <motion.div key="admin-teams" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <AdminTeamsView 
-                teams={teams}
-                users={users}
-                currentUser={currentUser}
-                onSelect={setSelectedTeam}
-                onAdd={() => setShowAddTeam(true)}
-              />
-            </motion.div>
-          )}
-
-          {activeTab === 'admin-settings' && canManageUsers(currentUser) && (
-            <motion.div key="admin-settings" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <AdminSettingsView currentUser={currentUser} />
             </motion.div>
           )}
         </AnimatePresence>
       </main>
 
+      {/* Modals */}
       <AnimatePresence>
-        {showPermissionModal && <PermissionModal onAllow={handlePermissionRequest} onDeny={handleDenyPermission} />}
         {showAddClient && <AddClientModal onClose={() => setShowAddClient(false)} onAdd={addClient} />}
         {showAddReminder && <AddReminderModal clients={clients} onClose={() => setShowAddReminder(false)} onAdd={addReminder} />}
+        {showAddProperty && <AddPropertyModal clients={clients} onClose={() => setShowAddProperty(false)} onAdd={addProperty} />}
+        {showAddFeedback && <AddFeedbackModal clients={clients} onClose={() => setShowAddFeedback(false)} onAdd={addFeedback} />}
+        {showCreateAccount && isManager && <CreateAccountModal onClose={() => setShowCreateAccount(false)} onCreate={createUser} />}
         {selectedClient && (
           <ClientDetailModal client={selectedClient} onClose={() => setSelectedClient(null)}
             onUpdate={updateClient} onDelete={() => { deleteClient(selectedClient.id); setSelectedClient(null); }}
             onAddReminder={() => { setSelectedClient(null); setShowAddReminder(true); }} />
         )}
-        {showAddProperty && <AddPropertyModal clients={clients} onClose={() => setShowAddProperty(false)} onAdd={addProperty} />}
         {selectedProperty && (
           <PropertyDetailModal property={selectedProperty} onClose={() => setSelectedProperty(null)}
             onDelete={() => { deleteProperty(selectedProperty.id); setSelectedProperty(null); }} />
         )}
-        {showAddFeedback && (
-          <AddFeedbackModal clients={clients} onClose={() => setShowAddFeedback(false)}
-            onAdd={(feedback) => {
-              if (!currentUser) return;
-              const newFeedback: DailyFeedback = {
-                ...feedback,
-                userId: currentUser.id,
-                id: crypto.randomUUID(),
-                createdAt: new Date().toISOString(),
-              };
-              const updated = [newFeedback, ...dailyFeedbacks];
-              setDailyFeedbacks(updated);
-              saveDailyFeedbacks([newFeedback, ...getDailyFeedbacks()]);
-              setShowAddFeedback(false);
-            }} />
-        )}
-        {showAddUser && (
-          <AddUserModal 
-            onClose={() => setShowAddUser(false)} 
-            onAdd={handleAddUser} 
-          />
-        )}
-        {showAddTeam && (
-          <AddTeamModal 
-            users={users}
-            onClose={() => setShowAddTeam(false)} 
-            onAdd={handleAddTeam} 
-          />
-        )}
-        {selectedUser && (
-          <UserDetailModal 
-            user={selectedUser}
-            currentUser={currentUser}
-            onClose={() => setSelectedUser(null)}
-            onUpdate={handleUpdateUser}
-            onDelete={handleDeleteUser}
-          />
-        )}
-        {selectedTeam && (
-          <TeamDetailModal 
-            team={selectedTeam}
-            users={users}
-            currentUser={currentUser}
-            onClose={() => setSelectedTeam(null)}
-            onUpdate={handleUpdateTeam}
-            onDelete={handleDeleteTeam}
-          />
+        {selectedUser && isManager && (
+          <UserDetailModal user={selectedUser} currentUser={currentUser}
+            onClose={() => setSelectedUser(null)} onUpdate={updateUser} onDelete={deleteUser} />
         )}
       </AnimatePresence>
     </div>
   );
 }
 
-// Login Screen
-function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
-  const [isRegister, setIsRegister] = useState(false);
-  const [form, setForm] = useState({ username: '', password: '', name: '' });
-  const [error, setError] = useState('');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-
-    const users: User[] = JSON.parse(localStorage.getItem('crm_users') || '[]');
-
-    if (isRegister) {
-      if (!form.username || !form.password || !form.name) {
-        setError('يرجى ملء جميع الحقول');
-        return;
-      }
-      if (users.find(u => u.username === form.username)) {
-        setError('اسم المستخدم موجود بالفعل');
-        return;
-      }
-      const newUser: User = {
-        id: crypto.randomUUID(),
-        username: form.username,
-        password: form.password,
-        name: form.name,
-        role: 'sales',
-        isActive: true,
-        createdAt: new Date().toISOString(),
-      };
-      localStorage.setItem('crm_users', JSON.stringify([...users, newUser]));
-      localStorage.setItem('current_user', JSON.stringify(newUser));
-      onLogin(newUser);
-    } else {
-      const user = users.find(u => u.username === form.username && u.password === form.password);
-      if (!user) {
-        setError('اسم المستخدم أو كلمة المرور غير صحيحة');
-        return;
-      }
-      localStorage.setItem('current_user', JSON.stringify(user));
-      onLogin(user);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-[#030014] flex items-center justify-center p-4">
-      <div className="bg-orb bg-orb-1"></div>
-      <div className="bg-orb bg-orb-2"></div>
-      
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="glass-card rounded-3xl p-8 w-full max-w-md border-purple-400/30 glow-primary"
-      >
-        <div className="text-center mb-8">
-          <motion.div
-            animate={{ rotate: [0, 360] }}
-            transition={{ duration: 2, repeat: Infinity, repeatType: "reverse" }}
-            className="w-20 h-20 gradient-primary rounded-full flex items-center justify-center mx-auto mb-4 glow-primary"
-          >
-            <Building2 className="w-10 h-10 text-white" />
-          </motion.div>
-          <h1 className="text-3xl font-bold gradient-text mb-2">Muhammed CRM</h1>
-          <p className="text-gray-400">نظام CRM الخاص بمحمد</p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {isRegister && (
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">الاسم الكامل</label>
-              <input
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
-                placeholder="اسمك الكامل"
-              />
-            </div>
-          )}
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">اسم المستخدم</label>
-            <input
-              type="text"
-              value={form.username}
-              onChange={(e) => setForm({ ...form, username: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
-              placeholder="اسم المستخدم"
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">كلمة المرور</label>
-            <input
-              type="password"
-              value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
-              placeholder="كلمة المرور"
-            />
-          </div>
-
-          {error && (
-            <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-red-400 text-sm text-center">
-              {error}
-            </motion.p>
-          )}
-
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            type="submit"
-            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover"
-          >
-            {isRegister ? 'إنشاء حساب' : 'تسجيل الدخول'}
-          </motion.button>
-
-          <p className="text-center text-gray-400 text-sm">
-            {isRegister ? 'لديك حساب بالفعل؟' : 'ليس لديك حساب؟'}
-            <button type="button" onClick={() => setIsRegister(!isRegister)} className="text-purple-400 mr-1 hover:underline">
-              {isRegister ? 'تسجيل الدخول' : 'إنشاء حساب'}
-            </button>
-          </p>
-        </form>
-      </motion.div>
-    </div>
-  );
-}
-
-// Permission Modal
-function PermissionModal({ onAllow, onDeny }: { onAllow: () => void; onDeny: () => void }) {
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-      <motion.div initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }}
-        transition={{ type: "spring", duration: 0.6 }}
-        className="glass-card rounded-3xl p-8 w-full max-w-md border-purple-400/30 glow-primary text-center">
-        <motion.div animate={{ scale: [1, 1.2, 1], rotate: [0, 10, -10, 0] }}
-          transition={{ duration: 2, repeat: Infinity }}
-          className="w-20 h-20 gradient-primary rounded-full flex items-center justify-center mx-auto mb-6 glow-primary">
-          <Bell className="w-10 h-10 text-white" />
-        </motion.div>
-        <h2 className="text-2xl font-bold gradient-text mb-3">تفعيل الإشعارات والصوت</h2>
-        <p className="text-gray-300 mb-2">هل تريد تفعيل الإشعارات والصوت؟</p>
-        <p className="text-gray-400 text-sm mb-6">سنرسل لك إشعارات مع صوت عند حلول وقت الاتصال بالعملاء</p>
-        <div className="flex gap-3">
-          <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onAllow}
-            className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold btn-hover glow-primary">
-            <span className="flex items-center justify-center gap-2"><Check className="w-5 h-5" /> السماح</span>
-          </motion.button>
-          <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onDeny}
-            className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors border border-white/10">
-            لاحقاً
-          </motion.button>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// Dashboard View
-function DashboardView({ stats, clients, reminders, properties, onComplete, onDelay }: {
-  stats: any; clients: Client[]; reminders: Reminder[]; properties: Property[];
-  onComplete: (id: string) => void; onDelay: (id: string, minutes: number) => void;
-}) {
-  const dueReminders = reminders.filter(r => isReminderDue(r) && !r.isCompleted);
+// ============ Dashboard ============
+function DashboardView({ stats, reminders, onComplete, onDelay }: any) {
+  const dueReminders = reminders.filter((r: Reminder) => !r.isCompleted && new Date(r.dateTime) <= new Date());
   
   return (
     <div className="space-y-6">
@@ -829,7 +669,6 @@ function DashboardView({ stats, clients, reminders, properties, onComplete, onDe
         className="glass-card rounded-2xl p-6 relative overflow-hidden">
         <div className="absolute top-0 left-0 w-full h-full opacity-10">
           <div className="absolute top-0 right-0 w-40 h-40 gradient-primary rounded-full blur-3xl animate-float"></div>
-          <div className="absolute bottom-0 left-0 w-32 h-32 bg-purple-500 rounded-full blur-3xl animate-float" style={{ animationDelay: '1s' }}></div>
         </div>
         <div className="relative z-10">
           <h2 className="text-2xl font-bold gradient-text mb-2">مرحباً بك 👋</h2>
@@ -840,19 +679,18 @@ function DashboardView({ stats, clients, reminders, properties, onComplete, onDe
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {[
           { label: 'إجمالي العملاء', value: stats.totalClients, icon: Users, gradient: 'from-purple-500 to-violet-600' },
-          { label: 'عملاء كامبين', value: stats.campaignClients, icon: UserPlus, gradient: 'from-violet-500 to-purple-600' },
-          { label: 'عملاء فيسبوك', value: stats.facebookClients, icon: Star, gradient: 'from-emerald-500 to-purple-500' },
-          { label: 'عملاء خارجي', value: stats.externalClients, icon: Award, gradient: 'from-purple-500 to-pink-500' },
+          { label: 'كامبين', value: stats.campaignClients, icon: UserPlus, gradient: 'from-violet-500 to-purple-600' },
+          { label: 'فيسبوك', value: stats.facebookClients, icon: Star, gradient: 'from-emerald-500 to-purple-500' },
+          { label: 'خارجي', value: stats.externalClients, icon: Award, gradient: 'from-purple-500 to-pink-500' },
           { label: 'العقارات', value: stats.totalProperties, icon: Building2, gradient: 'from-cyan-500 to-purple-500' },
-          { label: 'مستحقة الآن', value: stats.dueNow, icon: Zap, gradient: 'from-amber-500 to-purple-500' },
+          { label: 'مستحقة الآن', value: stats.dueNow, icon: Zap, gradient: 'from-amber-500 to-red-500' },
         ].map((stat, i) => (
           <motion.div key={stat.label} initial={{ opacity: 0, y: 30, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ delay: i * 0.1, type: "spring" }}
             whileHover={{ scale: 1.05, y: -5 }} className="glass-card rounded-2xl p-4 card-hover">
-            <motion.div whileHover={{ rotate: 360 }} transition={{ duration: 0.5 }}
-              className={`w-12 h-12 rounded-xl bg-gradient-to-br ${stat.gradient} flex items-center justify-center mb-3 shadow-lg`}>
+            <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${stat.gradient} flex items-center justify-center mb-3 shadow-lg`}>
               <stat.icon className="w-6 h-6 text-white" />
-            </motion.div>
+            </div>
             <p className="text-3xl font-bold text-white">{stat.value}</p>
             <p className="text-xs text-gray-400 mt-1">{stat.label}</p>
           </motion.div>
@@ -873,9 +711,9 @@ function DashboardView({ stats, clients, reminders, properties, onComplete, onDe
             </div>
           </div>
           <div className="space-y-3">
-            {dueReminders.map((reminder, i) => (
+            {dueReminders.map((reminder: Reminder) => (
               <motion.div key={reminder.id} initial={{ opacity: 0, x: 30 }} animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: i * 0.1 }} whileHover={{ scale: 1.01 }}
+                whileHover={{ scale: 1.01 }}
                 className="bg-red-500/5 border border-red-500/20 rounded-xl p-4 flex items-center justify-between">
                 <div>
                   <p className="font-bold text-white text-lg">{reminder.clientName}</p>
@@ -907,8 +745,81 @@ function DashboardView({ stats, clients, reminders, properties, onComplete, onDe
   );
 }
 
-// Pipeline View
-function PipelineView({ clients, onUpdateStage }: { clients: Client[]; onUpdateStage: (id: string, stage: Client['stage']) => void }) {
+// ============ Clients View ============
+function ClientsView({ clients, searchTerm, onSearch, onSelect, onDelete, onAdd, isManager, users, onAssign, currentUser }: any) {
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="flex-1 relative">
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <input type="text" placeholder="بحث بالاسم أو رقم الهاتف أو العقار..."
+            value={searchTerm} onChange={(e) => onSearch(e.target.value)}
+            className="w-full bg-white/5 border border-purple-500/20 rounded-xl pr-11 pl-4 py-3 text-white placeholder-gray-500 focus:border-purple-500/50 transition-all" />
+        </div>
+        <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onAdd}
+          className="gradient-primary text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg glow-primary btn-hover">
+          <Plus className="w-5 h-5" /> إضافة عميل
+        </motion.button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        {clients.map((client: Client, i: number) => {
+          const owner = users?.find((u: User) => u.id === client.ownerId);
+          const assigned = client.assignedTo ? users?.find((u: User) => u.id === client.assignedTo) : null;
+          
+          return (
+            <motion.div key={client.id} initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.05 }} whileHover={{ scale: 1.02, y: -5 }}
+              onClick={() => onSelect(client)}
+              className="glass-card rounded-2xl p-5 cursor-pointer card-hover animated-border">
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center shadow-lg">
+                    <span className="text-white font-bold">{client.name[0]}</span>
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-white">{client.name}</h4>
+                    <p className="text-sm text-gray-400 flex items-center gap-1">
+                      <Phone className="w-3 h-3" />
+                      <span dir="ltr">{client.phone}</span>
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1 items-end">
+                  <SourceBadge source={client.source} />
+                  <StageBadge stage={client.stage} />
+                </div>
+              </div>
+              <div className="space-y-2 text-sm">
+                <p className="text-gray-300 flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-purple-400" />
+                  {client.property || 'لم يحدد العقار'}
+                </p>
+                {isManager && owner && (
+                  <p className="text-xs text-gray-500 flex items-center gap-1">
+                    <Users className="w-3 h-3" />
+                    المالك: {owner.name}
+                    {assigned && ` • مُسند إلى: ${assigned.name}`}
+                  </p>
+                )}
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+      
+      {clients.length === 0 && (
+        <div className="text-center py-16">
+          <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          <p className="text-gray-400 text-lg">لا يوجد عملاء</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============ Pipeline View ============
+function PipelineView({ clients, onUpdateStage }: any) {
   const stages = [
     { id: 'new', label: 'جديد', color: 'from-blue-500 to-blue-600', icon: '🆕' },
     { id: 'contacted', label: 'تم التواصل', color: 'from-purple-500 to-purple-600', icon: '📞' },
@@ -927,7 +838,7 @@ function PipelineView({ clients, onUpdateStage }: { clients: Client[]; onUpdateS
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {stages.map((stage, i) => {
-          const stageClients = clients.filter(c => c.stage === stage.id);
+          const stageClients = clients.filter((c: Client) => c.stage === stage.id);
           return (
             <motion.div key={stage.id} initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.1 }} className="glass-card rounded-2xl p-4">
@@ -935,28 +846,23 @@ function PipelineView({ clients, onUpdateStage }: { clients: Client[]; onUpdateS
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="text-2xl">{stage.icon}</span>
-                    <h3 className="font-bold text-white">{stage.label}</h3>
+                    <h3 className="font-bold text-white text-sm">{stage.label}</h3>
                   </div>
                   <span className="bg-white/20 text-white px-2 py-1 rounded-full text-sm font-bold">
                     {stageClients.length}
                   </span>
                 </div>
               </div>
-
               <div className="space-y-2 max-h-96 overflow-y-auto">
-                {stageClients.map((client) => (
+                {stageClients.map((client: Client) => (
                   <motion.div key={client.id} whileHover={{ scale: 1.02 }}
                     className="bg-white/5 rounded-lg p-3 hover:bg-white/10 transition-colors">
-                    <div className="flex items-start justify-between mb-2">
-                      <div className="flex-1">
-                        <p className="font-medium text-white text-sm">{client.name}</p>
-                        <p className="text-xs text-gray-400" dir="ltr">{client.phone}</p>
-                      </div>
-                    </div>
-                    {client.property && <p className="text-xs text-purple-400 mb-2">{client.property}</p>}
-                    <div className="flex gap-1">
+                    <p className="font-medium text-white text-sm">{client.name}</p>
+                    <p className="text-xs text-gray-400" dir="ltr">{client.phone}</p>
+                    {client.property && <p className="text-xs text-purple-400 mt-1">{client.property}</p>}
+                    <div className="flex gap-1 mt-2">
                       {stages.map((s) => (
-                        <button key={s.id} onClick={() => onUpdateStage(client.id, s.id as Client['stage'])}
+                        <button key={s.id} onClick={() => onUpdateStage(client.id, s.id)}
                           className={`flex-1 text-xs py-1 rounded ${
                             client.stage === s.id ? 'bg-purple-500 text-white' : 'bg-white/5 text-gray-400 hover:bg-white/10'
                           }`} title={s.label}>
@@ -976,40 +882,34 @@ function PipelineView({ clients, onUpdateStage }: { clients: Client[]; onUpdateS
   );
 }
 
-// Properties View with Smart Search
-function PropertiesView({ properties, searchTerm, onSearch, onSelect, onDelete, onAdd }: {
-  properties: Property[]; searchTerm: string; onSearch: (term: string) => void;
-  onSelect: (property: Property) => void; onDelete: (id: string) => void; onAdd: () => void;
-}) {
+// ============ Properties View ============
+function PropertiesView({ properties, searchTerm, onSearch, onSelect, onDelete, onAdd }: any) {
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row gap-3">
-        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="flex-1 relative">
+        <div className="flex-1 relative">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-          <input type="text" placeholder="بحث ذكي: اسم، نوع، موقع، أو سعر (مثل: مليون، 1000000، 1,000,000)..."
+          <input type="text" placeholder="بحث ذكي: اسم، نوع، موقع، أو سعر (مثل: مليون، 1000000)..."
             value={searchTerm} onChange={(e) => onSearch(e.target.value)}
             className="w-full bg-white/5 border border-purple-500/20 rounded-xl pr-11 pl-4 py-3 text-white placeholder-gray-500 focus:border-purple-500/50 transition-all" />
-        </motion.div>
-        <motion.button initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
-          whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onAdd}
+        </div>
+        <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onAdd}
           className="gradient-primary text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg glow-primary btn-hover">
-          <Plus className="w-5 h-5" />
-          إضافة عقار
+          <Plus className="w-5 h-5" /> إضافة عقار
         </motion.button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {properties.map((property, i) => (
+        {properties.map((property: Property, i: number) => (
           <motion.div key={property.id} initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }} whileHover={{ scale: 1.02, y: -5 }}
             onClick={() => onSelect(property)}
             className="glass-card rounded-2xl p-5 cursor-pointer card-hover animated-border">
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
-                <motion.div whileHover={{ scale: 1.2, rotate: 360 }} transition={{ duration: 0.5 }}
-                  className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center shadow-lg">
+                <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center shadow-lg">
                   <Building2 className="w-6 h-6 text-white" />
-                </motion.div>
+                </div>
                 <div>
                   <h4 className="font-bold text-white">{property.name}</h4>
                   <p className="text-sm text-gray-400">{property.type}</p>
@@ -1018,27 +918,18 @@ function PropertiesView({ properties, searchTerm, onSearch, onSelect, onDelete, 
             </div>
             <div className="space-y-2 text-sm">
               <p className="text-gray-300 flex items-center gap-2">
-                <Target className="w-4 h-4 text-purple-400" />
-                المساحة: {property.area}
+                <Target className="w-4 h-4 text-purple-400" /> المساحة: {property.area}
               </p>
               <p className="text-gray-300 flex items-center gap-2">
                 <DollarSign className="w-4 h-4 text-purple-400" />
                 السعر: <span className="font-bold text-purple-400">{formatPrice(property.price)}</span>
               </p>
               <p className="text-gray-300 flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-purple-400" />
-                الموقع: {property.location}
+                <Calendar className="w-4 h-4 text-purple-400" /> الموقع: {property.location}
               </p>
               {property.clientName && (
                 <p className="text-gray-300 flex items-center gap-2">
-                  <Users className="w-4 h-4 text-purple-400" />
-                  العميل: {property.clientName}
-                </p>
-              )}
-              {property.clientPhone && (
-                <p className="text-gray-300 flex items-center gap-2">
-                  <Phone className="w-4 h-4 text-purple-400" />
-                  <span dir="ltr">{property.clientPhone}</span>
+                  <Users className="w-4 h-4 text-purple-400" /> العميل: {property.clientName}
                 </p>
               )}
             </div>
@@ -1047,211 +938,111 @@ function PropertiesView({ properties, searchTerm, onSearch, onSelect, onDelete, 
       </div>
       
       {properties.length === 0 && (
-        <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-16">
-          <motion.div animate={{ y: [0, -10, 0] }} transition={{ duration: 2, repeat: Infinity }}>
-            <Building2 className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          </motion.div>
+        <div className="text-center py-16">
+          <Building2 className="w-16 h-16 text-gray-600 mx-auto mb-4" />
           <p className="text-gray-400 text-lg">لا يوجد عقارات</p>
-          <p className="text-gray-500 text-sm mt-2">اضغط على "إضافة عقار" لبدء إضافة عقاراتك</p>
-        </motion.div>
+        </div>
       )}
     </div>
   );
 }
 
-// Clients View
-function ClientsView({ clients, searchTerm, onSearch, onSelect, onDelete, onAdd }: {
-  clients: Client[]; searchTerm: string; onSearch: (term: string) => void;
-  onSelect: (client: Client) => void; onDelete: (id: string) => void; onAdd: () => void;
-}) {
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row gap-3">
-        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="flex-1 relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-          <input type="text" placeholder="بحث بالاسم أو رقم الهاتف أو العقار..."
-            value={searchTerm} onChange={(e) => onSearch(e.target.value)}
-            className="w-full bg-white/5 border border-purple-500/20 rounded-xl pr-11 pl-4 py-3 text-white placeholder-gray-500 focus:border-purple-500/50 transition-all" />
-        </motion.div>
-        <motion.button initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
-          whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onAdd}
-          className="gradient-primary text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg glow-primary btn-hover">
-          <Plus className="w-5 h-5" />
-          إضافة عميل
-        </motion.button>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        {clients.map((client, i) => (
-          <motion.div key={client.id} initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.05 }} whileHover={{ scale: 1.02, y: -5 }}
-            onClick={() => onSelect(client)}
-            className="glass-card rounded-2xl p-5 cursor-pointer card-hover animated-border">
-            <div className="flex items-start justify-between mb-3">
-              <div className="flex items-center gap-3">
-                <motion.div whileHover={{ scale: 1.2, rotate: 360 }} transition={{ duration: 0.5 }}
-                  className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center shadow-lg">
-                  <span className="text-white font-bold">{client.name[0]}</span>
-                </motion.div>
-                <div>
-                  <h4 className="font-bold text-white">{client.name}</h4>
-                  <p className="text-sm text-gray-400 flex items-center gap-1">
-                    <Phone className="w-3 h-3" />
-                    <span dir="ltr">{client.phone}</span>
-                  </p>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <StatusBadge status={client.status} />
-                <StageBadge stage={client.stage} />
-              </div>
-            </div>
-            <div className="space-y-2 text-sm">
-              <p className="text-gray-300 flex items-center gap-2">
-                <Building2 className="w-4 h-4 text-purple-400" />
-                {client.property || 'لم يحدد العقار'}
-              </p>
-              {client.feedback && (
-                <p className="text-gray-400 flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4 text-purple-400" />
-                  <span className="truncate">{client.feedback}</span>
-                </p>
-              )}
-            </div>
-          </motion.div>
-        ))}
-      </div>
-      
-      {clients.length === 0 && (
-        <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-16">
-          <motion.div animate={{ y: [0, -10, 0] }} transition={{ duration: 2, repeat: Infinity }}>
-            <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          </motion.div>
-          <p className="text-gray-400 text-lg">لا يوجد عملاء</p>
-        </motion.div>
-      )}
-    </div>
-  );
-}
-
-// Reminders View
-function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: {
-  reminders: Reminder[]; onComplete: (id: string) => void; onDelay: (id: string, minutes: number) => void;
-  onDelete: (id: string) => void; onAdd: () => void;
-}) {
-  const pending = reminders.filter(r => !r.isCompleted);
+// ============ Reminders View ============
+function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: any) {
+  const pending = reminders.filter((r: Reminder) => !r.isCompleted);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-          <Bell className="w-6 h-6" />
-          التذكيرات
+          <Bell className="w-6 h-6" /> التذكيرات
         </h2>
         <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onAdd}
           className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover">
-          <Plus className="w-4 h-4" />
-          تذكير جديد
+          <Plus className="w-4 h-4" /> تذكير جديد
         </motion.button>
       </div>
 
-      {pending.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-medium text-gray-400">التذكيرات القادمة ({pending.length})</h3>
-          {pending.map((reminder, i) => {
-            const isDue = isReminderDue(reminder);
-            return (
-              <motion.div key={reminder.id} initial={{ opacity: 0, x: 30 }} animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: i * 0.05 }} whileHover={{ scale: 1.01 }}
-                className={`glass-card rounded-2xl p-4 ${isDue ? 'border-red-500/50' : ''}`}
-                style={isDue ? { boxShadow: '0 0 20px rgba(239, 68, 68, 0.3)' } : {}}>
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <h4 className="font-bold text-white text-lg">{reminder.clientName}</h4>
-                      {isDue && (
-                        <motion.span animate={{ opacity: [1, 0.5, 1] }} transition={{ duration: 1, repeat: Infinity }}
-                          className="text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">
-                          🔴 مستحق الآن!
-                        </motion.span>
-                      )}
-                    </div>
-                    <p className="text-sm text-purple-400 flex items-center gap-1">
-                      <Phone className="w-3 h-3" />
-                      <span dir="ltr">{reminder.clientPhone}</span>
-                    </p>
-                    <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
-                      <Calendar className="w-3 h-3" />
-                      {formatDateTime(reminder.dateTime)}
-                    </p>
-                    {!isDue && (
-                      <p className="text-xs text-emerald-400 mt-1 flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        متبقي: {getTimeUntil(reminder)}
-                      </p>
+      <div className="space-y-3">
+        {pending.map((reminder: Reminder, i: number) => {
+          const isDue = new Date(reminder.dateTime) <= new Date();
+          return (
+            <motion.div key={reminder.id} initial={{ opacity: 0, x: 30 }} animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.05 }} whileHover={{ scale: 1.01 }}
+              className={`glass-card rounded-2xl p-4 ${isDue ? 'border-red-500/50' : ''}`}
+              style={isDue ? { boxShadow: '0 0 20px rgba(239, 68, 68, 0.3)' } : {}}>
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <h4 className="font-bold text-white text-lg">{reminder.clientName}</h4>
+                    {isDue && (
+                      <motion.span animate={{ opacity: [1, 0.5, 1] }} transition={{ duration: 1, repeat: Infinity }}
+                        className="text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">
+                        🔴 مستحق الآن!
+                      </motion.span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1.5 mr-4">
-                    <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
-                      onClick={() => onComplete(reminder.id)}
-                      className="p-2 bg-emerald-500/20 rounded-lg hover:bg-emerald-500/30 transition-colors">
-                      <Check className="w-4 h-4 text-emerald-400" />
-                    </motion.button>
-                    <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
-                      onClick={() => onDelay(reminder.id, 30)}
-                      className="p-2 bg-amber-500/20 rounded-lg hover:bg-amber-500/30 transition-colors">
-                      <Clock className="w-4 h-4 text-amber-400" />
-                    </motion.button>
-                    <motion.a whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
-                      href={`tel:${reminder.clientPhone}`}
-                      className="p-2 bg-purple-500/20 rounded-lg hover:bg-purple-500/30 transition-colors">
-                      <PhoneCall className="w-4 h-4 text-purple-400" />
-                    </motion.a>
-                    <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
-                      onClick={() => onDelete(reminder.id)}
-                      className="p-2 bg-red-500/20 rounded-lg hover:bg-red-500/30 transition-colors">
-                      <Trash2 className="w-4 h-4 text-red-400" />
-                    </motion.button>
-                  </div>
+                  <p className="text-sm text-purple-400 flex items-center gap-1">
+                    <Phone className="w-3 h-3" /> <span dir="ltr">{reminder.clientPhone}</span>
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                    <Calendar className="w-3 h-3" /> {formatDateTime(reminder.dateTime)}
+                  </p>
                 </div>
-              </motion.div>
-            );
-          })}
-        </div>
-      )}
+                <div className="flex items-center gap-1.5 mr-4">
+                  <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                    onClick={() => onComplete(reminder.id)}
+                    className="p-2 bg-emerald-500/20 rounded-lg hover:bg-emerald-500/30 transition-colors">
+                    <Check className="w-4 h-4 text-emerald-400" />
+                  </motion.button>
+                  <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                    onClick={() => onDelay(reminder.id, 30)}
+                    className="p-2 bg-amber-500/20 rounded-lg hover:bg-amber-500/30 transition-colors">
+                    <Clock className="w-4 h-4 text-amber-400" />
+                  </motion.button>
+                  <motion.a whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                    href={`tel:${reminder.clientPhone}`}
+                    className="p-2 bg-purple-500/20 rounded-lg hover:bg-purple-500/30 transition-colors">
+                    <PhoneCall className="w-4 h-4 text-purple-400" />
+                  </motion.a>
+                  <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                    onClick={() => onDelete(reminder.id)}
+                    className="p-2 bg-red-500/20 rounded-lg hover:bg-red-500/30 transition-colors">
+                    <Trash2 className="w-4 h-4 text-red-400" />
+                  </motion.button>
+                </div>
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
 
       {reminders.length === 0 && (
-        <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-16">
-          <motion.div animate={{ y: [0, -10, 0] }} transition={{ duration: 2, repeat: Infinity }}>
-            <Bell className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          </motion.div>
+        <div className="text-center py-16">
+          <Bell className="w-16 h-16 text-gray-600 mx-auto mb-4" />
           <p className="text-gray-400 text-lg">لا يوجد تذكيرات</p>
-        </motion.div>
+        </div>
       )}
     </div>
   );
 }
 
-// Daily Feedback View
-function DailyFeedbackView({ feedbacks, clients, onDelete, onAdd }: {
-  feedbacks: DailyFeedback[]; clients: Client[]; onDelete: (id: string) => void; onAdd: () => void;
-}) {
+// ============ Daily Feedback View ============
+function DailyFeedbackView({ feedbacks, clients, onDelete, onAdd }: any) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-          <MessageSquare className="w-6 h-6" />
-          الفيدباك اليومي
+          <MessageSquare className="w-6 h-6" /> الفيدباك اليومي
         </h2>
         <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onAdd}
           className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover">
-          <Plus className="w-4 h-4" />
-          إضافة فيدباك
+          <Plus className="w-4 h-4" /> إضافة فيدباك
         </motion.button>
       </div>
 
       <div className="space-y-3">
-        {feedbacks.map((feedback, i) => (
+        {feedbacks.map((feedback: DailyFeedback, i: number) => (
           <motion.div key={feedback.id} initial={{ opacity: 0, x: 30 }} animate={{ opacity: 1, x: 0 }}
             transition={{ delay: i * 0.05 }} className="glass-card rounded-2xl p-4">
             <div className="flex items-start justify-between">
@@ -1270,13 +1061,9 @@ function DailyFeedbackView({ feedbacks, clients, onDelete, onAdd }: {
                   </span>
                 </div>
                 <p className="text-sm text-purple-400 flex items-center gap-1">
-                  <Phone className="w-3 h-3" />
-                  <span dir="ltr">{feedback.clientPhone}</span>
+                  <Phone className="w-3 h-3" /> <span dir="ltr">{feedback.clientPhone}</span>
                 </p>
-                <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
-                  <Calendar className="w-3 h-3" />
-                  {formatDateTime(feedback.date)}
-                </p>
+                <p className="text-xs text-gray-400 mt-1">{formatDateTime(feedback.date)}</p>
                 {feedback.feedback && (
                   <p className="text-sm text-gray-300 mt-2 bg-white/5 rounded-lg p-2">{feedback.feedback}</p>
                 )}
@@ -1292,23 +1079,19 @@ function DailyFeedbackView({ feedbacks, clients, onDelete, onAdd }: {
       </div>
 
       {feedbacks.length === 0 && (
-        <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-16">
-          <motion.div animate={{ y: [0, -10, 0] }} transition={{ duration: 2, repeat: Infinity }}>
-            <MessageSquare className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          </motion.div>
+        <div className="text-center py-16">
+          <MessageSquare className="w-16 h-16 text-gray-600 mx-auto mb-4" />
           <p className="text-gray-400 text-lg">لا يوجد فيدباك يومي</p>
-        </motion.div>
+        </div>
       )}
     </div>
   );
 }
 
-// Reports View
-function ReportsView({ stats, clients, properties, feedbacks }: {
-  stats: any; clients: Client[]; properties: Property[]; feedbacks: DailyFeedback[];
-}) {
+// ============ Reports View ============
+function ReportsView({ stats, clients, properties, feedbacks, users }: any) {
   const conversionRate = clients.length > 0 ? ((stats.closedStage / clients.length) * 100).toFixed(1) : 0;
-  const calledToday = feedbacks.filter(f => {
+  const calledToday = feedbacks.filter((f: DailyFeedback) => {
     const today = new Date().toDateString();
     return new Date(f.date).toDateString() === today && f.callStatus === 'called';
   }).length;
@@ -1316,116 +1099,70 @@ function ReportsView({ stats, clients, properties, feedbacks }: {
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-        <BarChart3 className="w-6 h-6" />
-        التقارير والإحصائيات
+        <BarChart3 className="w-6 h-6" /> التقارير والإحصائيات
       </h2>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          className="glass-card rounded-2xl p-6">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-12 h-12 bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-xl flex items-center justify-center">
-              <TrendingUp className="w-6 h-6 text-white" />
+        {[
+          { label: 'نسبة التحويل', value: `${conversionRate}%`, icon: TrendingUp, gradient: 'from-emerald-500 to-emerald-600' },
+          { label: 'مكالمات اليوم', value: calledToday, icon: PhoneCall, gradient: 'from-purple-500 to-purple-600' },
+          { label: 'إجمالي العقارات', value: properties.length, icon: Building2, gradient: 'from-cyan-500 to-cyan-600' },
+          { label: 'في مرحلة التفاوض', value: stats.negotiationStage, icon: Activity, gradient: 'from-amber-500 to-amber-600' },
+        ].map((stat, i) => (
+          <motion.div key={stat.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.1 }} className="glass-card rounded-2xl p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className={`w-12 h-12 bg-gradient-to-br ${stat.gradient} rounded-xl flex items-center justify-center`}>
+                <stat.icon className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <p className="text-3xl font-bold text-white">{stat.value}</p>
+                <p className="text-sm text-gray-400">{stat.label}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-3xl font-bold text-white">{conversionRate}%</p>
-              <p className="text-sm text-gray-400">نسبة التحويل</p>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-          className="glass-card rounded-2xl p-6">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl flex items-center justify-center">
-              <PhoneCall className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <p className="text-3xl font-bold text-white">{calledToday}</p>
-              <p className="text-sm text-gray-400">مكالمات اليوم</p>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-          className="glass-card rounded-2xl p-6">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-12 h-12 bg-gradient-to-br from-cyan-500 to-cyan-600 rounded-xl flex items-center justify-center">
-              <Building2 className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <p className="text-3xl font-bold text-white">{properties.length}</p>
-              <p className="text-sm text-gray-400">إجمالي العقارات</p>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
-          className="glass-card rounded-2xl p-6">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-12 h-12 bg-gradient-to-br from-amber-500 to-amber-600 rounded-xl flex items-center justify-center">
-              <Activity className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <p className="text-3xl font-bold text-white">{stats.negotiationStage}</p>
-              <p className="text-sm text-gray-400">في مرحلة التفاوض</p>
-            </div>
-          </div>
-        </motion.div>
+          </motion.div>
+        ))}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
           className="glass-card rounded-2xl p-6">
           <h3 className="text-lg font-bold gradient-text mb-4 flex items-center gap-2">
-            <PieChart className="w-5 h-5" />
-            توزيع المصادر
+            <PieChart className="w-5 h-5" /> توزيع المصادر
           </h3>
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-gray-300">كامبين</span>
-              <div className="flex items-center gap-2">
-                <div className="w-32 h-2 bg-white/10 rounded-full overflow-hidden">
-                  <div className="h-full bg-purple-500 rounded-full" style={{ width: `${clients.length > 0 ? (stats.campaignClients / clients.length) * 100 : 0}%` }}></div>
+            {[
+              { label: 'كامبين', count: stats.campaignClients, color: 'bg-purple-500' },
+              { label: 'فيسبوك', count: stats.facebookClients, color: 'bg-blue-500' },
+              { label: 'خارجي', count: stats.externalClients, color: 'bg-emerald-500' },
+            ].map((item) => (
+              <div key={item.label} className="flex items-center justify-between">
+                <span className="text-gray-300">{item.label}</span>
+                <div className="flex items-center gap-2">
+                  <div className="w-32 h-2 bg-white/10 rounded-full overflow-hidden">
+                    <div className={`h-full ${item.color} rounded-full`} 
+                      style={{ width: `${clients.length > 0 ? (item.count / clients.length) * 100 : 0}%` }}></div>
+                  </div>
+                  <span className="text-white font-bold">{item.count}</span>
                 </div>
-                <span className="text-white font-bold">{stats.campaignClients}</span>
               </div>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-300">فيسبوك</span>
-              <div className="flex items-center gap-2">
-                <div className="w-32 h-2 bg-white/10 rounded-full overflow-hidden">
-                  <div className="h-full bg-blue-500 rounded-full" style={{ width: `${clients.length > 0 ? (stats.facebookClients / clients.length) * 100 : 0}%` }}></div>
-                </div>
-                <span className="text-white font-bold">{stats.facebookClients}</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-300">خارجي</span>
-              <div className="flex items-center gap-2">
-                <div className="w-32 h-2 bg-white/10 rounded-full overflow-hidden">
-                  <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${clients.length > 0 ? (stats.externalClients / clients.length) * 100 : 0}%` }}></div>
-                </div>
-                <span className="text-white font-bold">{stats.externalClients}</span>
-              </div>
-            </div>
+            ))}
           </div>
         </motion.div>
 
         <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
           className="glass-card rounded-2xl p-6">
           <h3 className="text-lg font-bold gradient-text mb-4 flex items-center gap-2">
-            <FileText className="w-5 h-5" />
-            ملخص المراحل
+            <FileText className="w-5 h-5" /> ملخص المراحل
           </h3>
           <div className="space-y-2">
             {[
-              { label: 'جديد', count: stats.newStage, color: 'bg-blue-500' },
-              { label: 'تم التواصل', count: stats.contactedStage, color: 'bg-purple-500' },
-              { label: 'موعد معاينة', count: stats.meetingStage, color: 'bg-cyan-500' },
-              { label: 'تفاوض', count: stats.negotiationStage, color: 'bg-amber-500' },
-              { label: 'تم البيع', count: stats.closedStage, color: 'bg-emerald-500' },
-              { label: 'ضائع', count: stats.lostStage, color: 'bg-red-500' },
+              { label: 'جديد', count: stats.newStage },
+              { label: 'تم التواصل', count: stats.contactedStage },
+              { label: 'موعد معاينة', count: stats.meetingStage },
+              { label: 'تفاوض', count: stats.negotiationStage },
+              { label: 'تم البيع', count: stats.closedStage },
+              { label: 'ضائع', count: stats.lostStage },
             ].map((item) => (
               <div key={item.label} className="flex items-center justify-between">
                 <span className="text-gray-300 text-sm">{item.label}</span>
@@ -1439,315 +1176,92 @@ function ReportsView({ stats, clients, properties, feedbacks }: {
   );
 }
 
-// Admin Users View
-function AdminUsersView({ users, currentUser, onSelect, onAdd }: {
-  users: User[];
-  currentUser: User;
-  onSelect: (user: User) => void;
-  onAdd: () => void;
-}) {
+// ============ Admin Panel ============
+function AdminPanel({ users, currentUser, onSelect, onAdd, stats }: any) {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-          <Users className="w-6 h-6" />
-          إدارة المستخدمين
+          <Shield className="w-6 h-6" /> لوحة الإدارة
         </h2>
-        {canManageUsers(currentUser) && (
-          <motion.button
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
-            onClick={onAdd}
-            className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover"
-          >
-            <Plus className="w-4 h-4" />
-            إضافة مستخدم
-          </motion.button>
-        )}
+        <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onAdd}
+          className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover">
+          <UserPlus className="w-4 h-4" /> إنشاء حساب جديد
+        </motion.button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {users.map((user, i) => (
-          <motion.div
-            key={user.id}
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.05 }}
-            whileHover={{ scale: 1.02, y: -5 }}
-            onClick={() => onSelect(user)}
-            className="glass-card rounded-2xl p-5 cursor-pointer card-hover animated-border"
-          >
-            <div className="flex items-start justify-between mb-3">
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+          className="glass-card rounded-2xl p-4">
+          <p className="text-3xl font-bold text-white">{users.length}</p>
+          <p className="text-xs text-gray-400 mt-1">إجمالي المستخدمين</p>
+        </motion.div>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+          className="glass-card rounded-2xl p-4">
+          <p className="text-3xl font-bold text-white">{users.filter((u: User) => u.role === 'sales').length}</p>
+          <p className="text-xs text-gray-400 mt-1">البائعين</p>
+        </motion.div>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+          className="glass-card rounded-2xl p-4">
+          <p className="text-3xl font-bold text-white">{stats.totalClients}</p>
+          <p className="text-xs text-gray-400 mt-1">إجمالي العملاء</p>
+        </motion.div>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
+          className="glass-card rounded-2xl p-4">
+          <p className="text-3xl font-bold text-white">{stats.closedStage}</p>
+          <p className="text-xs text-gray-400 mt-1">صفقات مغلقة</p>
+        </motion.div>
+      </div>
+
+      {/* Users List */}
+      <div className="glass-card rounded-2xl p-6">
+        <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+          <Users className="w-5 h-5 text-purple-400" /> المستخدمون
+        </h3>
+        <div className="grid gap-3 md:grid-cols-2">
+          {users.map((user: User, i: number) => (
+            <motion.div key={user.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.05 }} whileHover={{ scale: 1.02 }}
+              onClick={() => onSelect(user)}
+              className="bg-white/5 rounded-xl p-4 cursor-pointer hover:bg-white/10 transition-colors">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center shadow-lg">
+                <div className="w-10 h-10 gradient-primary rounded-full flex items-center justify-center">
                   <span className="text-white font-bold">{user.name[0]}</span>
                 </div>
-                <div>
+                <div className="flex-1">
                   <h4 className="font-bold text-white">{user.name}</h4>
-                  <p className="text-sm text-gray-400">@{user.username}</p>
+                  <p className="text-xs text-gray-400">@{user.username}</p>
                 </div>
+                <span className={`text-xs px-2.5 py-1 rounded-full ${
+                  user.role === 'admin' ? 'bg-red-500/20 text-red-400' :
+                  user.role === 'supervisor' ? 'bg-amber-500/20 text-amber-400' :
+                  'bg-blue-500/20 text-blue-400'
+                }`}>
+                  {user.role === 'admin' ? 'مدير' : user.role === 'supervisor' ? 'مشرف' : 'بائع'}
+                </span>
               </div>
-              <span className={`text-xs px-2.5 py-1 rounded-full ${
-                user.role === 'admin' ? 'bg-red-500/20 text-red-400' :
-                user.role === 'supervisor' ? 'bg-amber-500/20 text-amber-400' :
-                'bg-blue-500/20 text-blue-400'
-              }`}>
-                {user.role === 'admin' ? 'مدير' : user.role === 'supervisor' ? 'مشرف' : 'بائع'}
-              </span>
-            </div>
-            <div className="space-y-2 text-sm">
-              {user.phone && (
-                <p className="text-gray-300 flex items-center gap-2">
-                  <Phone className="w-4 h-4 text-purple-400" />
-                  <span dir="ltr">{user.phone}</span>
-                </p>
-              )}
-              {user.team && (
-                <p className="text-gray-300 flex items-center gap-2">
-                  <Users className="w-4 h-4 text-purple-400" />
-                  الفريق: {user.team}
-                </p>
-              )}
-              <p className={`text-xs ${user.isActive ? 'text-emerald-400' : 'text-red-400'}`}>
-                {user.isActive ? '✓ نشط' : '✗ معطل'}
-              </p>
-            </div>
-          </motion.div>
-        ))}
-      </div>
-
-      {users.length === 0 && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="text-center py-16"
-        >
-          <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400 text-lg">لا يوجد مستخدمين</p>
-        </motion.div>
-      )}
-    </div>
-  );
-}
-
-// Admin Teams View
-function AdminTeamsView({ teams, users, currentUser, onSelect, onAdd }: {
-  teams: Team[];
-  users: User[];
-  currentUser: User;
-  onSelect: (team: Team) => void;
-  onAdd: () => void;
-}) {
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-          <Users className="w-6 h-6" />
-          إدارة الفرق
-        </h2>
-        {canManageUsers(currentUser) && (
-          <motion.button
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
-            onClick={onAdd}
-            className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover"
-          >
-            <Plus className="w-4 h-4" />
-            إضافة فريق
-          </motion.button>
-        )}
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        {teams.map((team, i) => {
-          const supervisor = users.find(u => u.id === team.supervisorId);
-          const members = users.filter(u => team.memberIds.includes(u.id));
-          
-          return (
-            <motion.div
-              key={team.id}
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-              whileHover={{ scale: 1.02, y: -5 }}
-              onClick={() => onSelect(team)}
-              className="glass-card rounded-2xl p-5 cursor-pointer card-hover animated-border"
-            >
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 gradient-accent rounded-full flex items-center justify-center shadow-lg">
-                    <Users className="w-6 h-6 text-white" />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-white">{team.name}</h4>
-                    <p className="text-sm text-gray-400">
-                      المشرف: {supervisor?.name || 'غير محدد'}
-                    </p>
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-2 text-sm">
-                <p className="text-gray-300 flex items-center gap-2">
-                  <Users className="w-4 h-4 text-purple-400" />
-                  عدد الأعضاء: {members.length}
-                </p>
-                <div className="flex flex-wrap gap-1 mt-2">
-                  {members.slice(0, 5).map(member => (
-                    <span key={member.id} className="text-xs bg-purple-500/20 text-purple-400 px-2 py-1 rounded-full">
-                      {member.name}
-                    </span>
-                  ))}
-                  {members.length > 5 && (
-                    <span className="text-xs bg-white/10 text-gray-400 px-2 py-1 rounded-full">
-                      +{members.length - 5}
-                    </span>
-                  )}
-                </div>
+              <div className="mt-2 flex items-center gap-2 text-xs text-gray-500">
+                <span>{user.isActive ? '✓ نشط' : '✗ معطل'}</span>
+                <span>•</span>
+                <span>{formatDateTime(user.createdAt).split(',')[0]}</span>
               </div>
             </motion.div>
-          );
-        })}
-      </div>
-
-      {teams.length === 0 && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="text-center py-16"
-        >
-          <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400 text-lg">لا يوجد فرق</p>
-        </motion.div>
-      )}
-    </div>
-  );
-}
-
-// Admin Settings View
-function AdminSettingsView({ currentUser }: { currentUser: User }) {
-  const handleExportData = () => {
-    const data = {
-      clients: getClients(),
-      reminders: getReminders(),
-      properties: getProperties(),
-      feedbacks: getDailyFeedbacks(),
-      users: getUsers(),
-      teams: getTeams(),
-      exportDate: new Date().toISOString(),
-    };
-    
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `crm-backup-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  return (
-    <div className="space-y-6">
-      <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-        <Edit3 className="w-6 h-6" />
-        إعدادات النظام
-      </h2>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="glass-card rounded-2xl p-6"
-        >
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <FileText className="w-5 h-5 text-purple-400" />
-            النسخ الاحتياطي
-          </h3>
-          <p className="text-gray-400 text-sm mb-4">
-            تصدير جميع البيانات كملف JSON للنسخ الاحتياطي
-          </p>
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={handleExportData}
-            className="w-full gradient-primary text-white py-3 rounded-xl font-bold btn-hover"
-          >
-            تصدير البيانات
-          </motion.button>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="glass-card rounded-2xl p-6"
-        >
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <Activity className="w-5 h-5 text-purple-400" />
-            معلومات النظام
-          </h3>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-gray-400">الإصدار:</span>
-              <span className="text-white">1.0.0</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">المستخدم الحالي:</span>
-              <span className="text-white">{currentUser.name}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">الدور:</span>
-              <span className="text-white">
-                {currentUser.role === 'admin' ? 'مدير' : currentUser.role === 'supervisor' ? 'مشرف' : 'بائع'}
-              </span>
-            </div>
-          </div>
-        </motion.div>
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-// Status Badge
-function StatusBadge({ status }: { status: Client['status'] }) {
-  const getStatusInfo = () => {
-    switch (status) {
-      case 'campaign': return { label: 'كامبين', className: 'status-new' };
-      case 'facebook': return { label: 'فيسبوك', className: 'status-contacted' };
-      case 'external': return { label: 'خارجي', className: 'status-interested' };
-      default: return { label: 'غير معروف', className: 'status-new' };
-    }
-  };
-  const { label, className } = getStatusInfo();
-  return <span className={`text-xs px-2.5 py-1 rounded-full ${className}`}>{label}</span>;
-}
-
-// Stage Badge
-function StageBadge({ stage }: { stage: Client['stage'] }) {
-  const getStageInfo = () => {
-    switch (stage) {
-      case 'new': return { label: 'جديد', className: 'bg-blue-500/20 text-blue-400' };
-      case 'contacted': return { label: 'تم التواصل', className: 'bg-purple-500/20 text-purple-400' };
-      case 'meeting': return { label: 'موعد معاينة', className: 'bg-cyan-500/20 text-cyan-400' };
-      case 'negotiation': return { label: 'تفاوض', className: 'bg-amber-500/20 text-amber-400' };
-      case 'closed': return { label: 'تم البيع', className: 'bg-emerald-500/20 text-emerald-400' };
-      case 'lost': return { label: 'ضائع', className: 'bg-red-500/20 text-red-400' };
-      default: return { label: 'غير معروف', className: 'bg-gray-500/20 text-gray-400' };
-    }
-  };
-  const { label, className } = getStageInfo();
-  return <span className={`text-xs px-2.5 py-1 rounded-full ${className}`}>{label}</span>;
-}
+// ============ Modals ============
 
 // Add Client Modal
-function AddClientModal({ onClose, onAdd }: { 
-  onClose: () => void; 
-  onAdd: (client: Omit<Client, 'id' | 'createdAt' | 'updatedAt' | 'userId'>) => void 
-}) {
+function AddClientModal({ onClose, onAdd }: any) {
   const [form, setForm] = useState({
     name: '', phone: '', property: '', budget: '', monthlyInstallment: '',
-    deliveryPeriod: '', status: 'campaign' as Client['status'],
+    deliveryPeriod: '', source: 'campaign' as Client['source'],
     stage: 'new' as Client['stage'], feedback: '', priority: 'medium' as Client['priority'],
-    source: '', assignedTo: '',
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1757,110 +1271,41 @@ function AddClientModal({ onClose, onAdd }: {
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
-        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-            <UserPlus className="w-6 h-6" /> إضافة عميل جديد
-          </h2>
-          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors">
-            <X className="w-5 h-5 text-gray-400" />
-          </motion.button>
+    <ModalWrapper onClose={onClose} title="إضافة عميل جديد" icon={<UserPlus className="w-6 h-6" />}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <InputField label="الاسم *" value={form.name} onChange={(v) => setForm({ ...form, name: v })} required />
+        <InputField label="رقم الهاتف *" value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} required dir="ltr" />
+        <InputField label="العقار المطلوب" value={form.property} onChange={(v) => setForm({ ...form, property: v })} />
+        <div className="grid grid-cols-2 gap-3">
+          <InputField label="الميزانية" value={form.budget} onChange={(v) => setForm({ ...form, budget: v })} />
+          <InputField label="القسط الشهري" value={form.monthlyInstallment} onChange={(v) => setForm({ ...form, monthlyInstallment: v })} />
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">الاسم *</label>
-            <input type="text" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم العميل" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">رقم الهاتف *</label>
-            <input type="tel" required value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">العقار المطلوب</label>
-            <input type="text" value={form.property} onChange={(e) => setForm({ ...form, property: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="شقة، فيلا، أرض..." />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">الميزانية</label>
-              <input type="text" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الميزانية" />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">القسط الشهري</label>
-              <input type="text" value={form.monthlyInstallment} onChange={(e) => setForm({ ...form, monthlyInstallment: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="القسط" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">مدة الاستلام</label>
-            <input type="text" value={form.deliveryPeriod} onChange={(e) => setForm({ ...form, deliveryPeriod: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="مدة الاستلام" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">المصدر</label>
-              <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as Client['status'] })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-                <option value="campaign" className="bg-gray-900">كامبين</option>
-                <option value="facebook" className="bg-gray-900">فيسبوك</option>
-                <option value="external" className="bg-gray-900">خارجي</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">الأولوية</label>
-              <select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value as Client['priority'] })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-                <option value="high" className="bg-gray-900">عالية</option>
-                <option value="medium" className="bg-gray-900">متوسطة</option>
-                <option value="low" className="bg-gray-900">منخفضة</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">مرحلة العميل</label>
-            <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value as Client['stage'] })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-              <option value="new" className="bg-gray-900">جديد</option>
-              <option value="contacted" className="bg-gray-900">تم التواصل</option>
-              <option value="meeting" className="bg-gray-900">موعد معاينة</option>
-              <option value="negotiation" className="bg-gray-900">تفاوض</option>
-              <option value="closed" className="bg-gray-900">تم البيع</option>
-              <option value="lost" className="bg-gray-900">ضائع</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">ملاحظات / فيدباك</label>
-            <textarea value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24" placeholder="أي ملاحظات عن العميل..." />
-          </div>
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
-            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
-            إضافة العميل ✨
-          </motion.button>
-        </form>
-      </motion.div>
-    </motion.div>
+        <InputField label="مدة الاستلام" value={form.deliveryPeriod} onChange={(v) => setForm({ ...form, deliveryPeriod: v })} />
+        <div className="grid grid-cols-2 gap-3">
+          <SelectField label="المصدر" value={form.source} onChange={(v) => setForm({ ...form, source: v as Client['source'] })}
+            options={[{ value: 'campaign', label: 'كامبين' }, { value: 'facebook', label: 'فيسبوك' }, { value: 'external', label: 'خارجي' }]} />
+          <SelectField label="الأولوية" value={form.priority} onChange={(v) => setForm({ ...form, priority: v as Client['priority'] })}
+            options={[{ value: 'high', label: 'عالية' }, { value: 'medium', label: 'متوسطة' }, { value: 'low', label: 'منخفضة' }]} />
+        </div>
+        <SelectField label="مرحلة العميل" value={form.stage} onChange={(v) => setForm({ ...form, stage: v as Client['stage'] })}
+          options={[
+            { value: 'new', label: 'جديد' }, { value: 'contacted', label: 'تم التواصل' },
+            { value: 'meeting', label: 'موعد معاينة' }, { value: 'negotiation', label: 'تفاوض' },
+            { value: 'closed', label: 'تم البيع' }, { value: 'lost', label: 'ضائع' },
+          ]} />
+        <TextareaField label="ملاحظات" value={form.feedback} onChange={(v) => setForm({ ...form, feedback: v })} />
+        <SubmitButton>إضافة العميل ✨</SubmitButton>
+      </form>
+    </ModalWrapper>
   );
 }
 
 // Add Reminder Modal
-function AddReminderModal({ clients, onClose, onAdd }: {
-  clients: Client[];
-  onClose: () => void;
-  onAdd: (reminder: Omit<Reminder, 'id' | 'isCompleted' | 'isDelayed' | 'delayCount' | 'createdAt' | 'userId'>) => void;
-}) {
+function AddReminderModal({ clients, onClose, onAdd }: any) {
   const [form, setForm] = useState({ clientId: '', clientName: '', clientPhone: '', dateTime: '', note: '' });
 
   const handleClientSelect = (clientId: string) => {
-    const client = clients.find(c => c.id === clientId);
+    const client = clients.find((c: Client) => c.id === clientId);
     if (client) setForm({ ...form, clientId, clientName: client.name, clientPhone: client.phone });
   };
 
@@ -1875,180 +1320,44 @@ function AddReminderModal({ clients, onClose, onAdd }: {
   const minDateTime = now.toISOString().slice(0, 16);
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
-        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gradient-text flex items-center gap-2"><Bell className="w-6 h-6" /> إضافة تذكير</h2>
-          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-5 h-5 text-gray-400" /></motion.button>
-        </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {clients.length > 0 && (
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">اختر عميل</label>
-              <select value={form.clientId} onChange={(e) => handleClientSelect(e.target.value)}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-                <option value="" className="bg-gray-900">-- اختر عميل --</option>
-                {clients.map(c => (<option key={c.id} value={c.id} className="bg-gray-900">{c.name} - {c.phone}</option>))}
-              </select>
-            </div>
-          )}
+    <ModalWrapper onClose={onClose} title="إضافة تذكير" icon={<Bell className="w-6 h-6" />}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {clients.length > 0 && (
           <div>
-            <label className="block text-sm text-gray-300 mb-1">اسم العميل *</label>
-            <input type="text" required value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم العميل" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">رقم الهاتف *</label>
-            <input type="tel" required value={form.clientPhone} onChange={(e) => setForm({ ...form, clientPhone: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">وقت التذكير *</label>
-            <input type="datetime-local" required min={minDateTime} value={form.dateTime} onChange={(e) => setForm({ ...form, dateTime: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" dir="ltr" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">ملاحظة</label>
-            <textarea value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-20" placeholder="سبب المكالمة..." />
-          </div>
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
-            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
-            إضافة التذكير 🔔
-          </motion.button>
-        </form>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// Client Detail Modal
-function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder }: {
-  client: Client; onClose: () => void; onUpdate: (id: string, data: Partial<Client>) => void;
-  onDelete: () => void; onAddReminder: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({
-    name: client.name, phone: client.phone, property: client.property, budget: client.budget,
-    monthlyInstallment: client.monthlyInstallment, deliveryPeriod: client.deliveryPeriod,
-    status: client.status, stage: client.stage, feedback: client.feedback,
-    priority: client.priority, source: client.source,
-  });
-
-  const handleSave = () => { onUpdate(client.id, form); setEditing(false); };
-
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
-        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gradient-text">تفاصيل العميل</h2>
-          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-5 h-5 text-gray-400" /></motion.button>
-        </div>
-        <div className="flex items-center gap-4 mb-6">
-          <div className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg glow-primary">
-            <span className="text-white font-bold text-2xl">{client.name[0]}</span>
-          </div>
-          <div>
-            <h3 className="text-xl font-bold text-white">{client.name}</h3>
-            <div className="flex gap-2 mt-1">
-              <StatusBadge status={client.status} />
-              <StageBadge stage={client.stage} />
-            </div>
-          </div>
-        </div>
-        {editing ? (
-          <div className="space-y-4">
-            <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الاسم" />
-            <input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" dir="ltr" />
-            <input type="text" value={form.property} onChange={(e) => setForm({ ...form, property: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="العقار" />
-            <div className="grid grid-cols-2 gap-3">
-              <input type="text" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الميزانية" />
-              <input type="text" value={form.monthlyInstallment} onChange={(e) => setForm({ ...form, monthlyInstallment: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="القسط" />
-            </div>
-            <input type="text" value={form.deliveryPeriod} onChange={(e) => setForm({ ...form, deliveryPeriod: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="مدة الاستلام" />
-            <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value as Client['stage'] })}
+            <label className="block text-sm text-gray-300 mb-1">اختر عميل</label>
+            <select value={form.clientId} onChange={(e) => handleClientSelect(e.target.value)}
               className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-              <option value="new" className="bg-gray-900">جديد</option>
-              <option value="contacted" className="bg-gray-900">تم التواصل</option>
-              <option value="meeting" className="bg-gray-900">موعد معاينة</option>
-              <option value="negotiation" className="bg-gray-900">تفاوض</option>
-              <option value="closed" className="bg-gray-900">تم البيع</option>
-              <option value="lost" className="bg-gray-900">ضائع</option>
+              <option value="" className="bg-gray-900">-- اختر عميل --</option>
+              {clients.map((c: Client) => (<option key={c.id} value={c.id} className="bg-gray-900">{c.name} - {c.phone}</option>))}
             </select>
-            <textarea value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24" placeholder="ملاحظات" />
-            <div className="flex gap-3">
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handleSave}
-                className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold btn-hover">حفظ ✓</motion.button>
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setEditing(false)}
-                className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors">إلغاء</motion.button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">الهاتف</p><p className="text-white font-medium" dir="ltr">{client.phone}</p></div>
-              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">العقار</p><p className="text-white font-medium">{client.property || '-'}</p></div>
-              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">الميزانية</p><p className="text-white font-medium">{client.budget || '-'}</p></div>
-              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">القسط الشهري</p><p className="text-white font-medium">{client.monthlyInstallment || '-'}</p></div>
-              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">مدة الاستلام</p><p className="text-white font-medium">{client.deliveryPeriod || '-'}</p></div>
-              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">المصدر</p><p className="text-white font-medium">{client.status === 'campaign' ? 'كامبين' : client.status === 'facebook' ? 'فيسبوك' : 'خارجي'}</p></div>
-            </div>
-            {client.feedback && <div className="bg-white/5 rounded-xl p-4"><p className="text-xs text-gray-400 mb-1">ملاحظات</p><p className="text-white text-sm">{client.feedback}</p></div>}
-            <div className="flex flex-wrap gap-2 pt-2">
-              <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={() => setEditing(true)}
-                className="flex-1 flex items-center justify-center gap-2 bg-purple-500/20 text-purple-300 py-2.5 rounded-xl hover:bg-purple-500/30 transition-colors border border-purple-500/20">
-                <Edit3 className="w-4 h-4" /> تعديل
-              </motion.button>
-              <motion.a whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} href={`tel:${client.phone}`}
-                className="flex-1 flex items-center justify-center gap-2 bg-emerald-500/20 text-emerald-400 py-2.5 rounded-xl hover:bg-emerald-500/30 transition-colors border border-emerald-500/20">
-                <PhoneCall className="w-4 h-4" /> اتصال
-              </motion.a>
-              <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onAddReminder}
-                className="flex-1 flex items-center justify-center gap-2 bg-purple-500/20 text-purple-400 py-2.5 rounded-xl hover:bg-purple-500/30 transition-colors border border-purple-500/20">
-                <Bell className="w-4 h-4" /> تذكير
-              </motion.button>
-              <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={onDelete}
-                className="flex items-center justify-center gap-2 bg-red-500/20 text-red-400 py-2.5 px-4 rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20">
-                <Trash2 className="w-4 h-4" />
-              </motion.button>
-            </div>
           </div>
         )}
-      </motion.div>
-    </motion.div>
+        <InputField label="اسم العميل *" value={form.clientName} onChange={(v) => setForm({ ...form, clientName: v })} required />
+        <InputField label="رقم الهاتف *" value={form.clientPhone} onChange={(v) => setForm({ ...form, clientPhone: v })} required dir="ltr" />
+        <div>
+          <label className="block text-sm text-gray-300 mb-1">وقت التذكير *</label>
+          <input type="datetime-local" required min={minDateTime} value={form.dateTime} onChange={(e) => setForm({ ...form, dateTime: e.target.value })}
+            className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" dir="ltr" />
+        </div>
+        <TextareaField label="ملاحظة" value={form.note} onChange={(v) => setForm({ ...form, note: v })} />
+        <SubmitButton>إضافة التذكير 🔔</SubmitButton>
+      </form>
+    </ModalWrapper>
   );
 }
 
 // Add Property Modal
-function AddPropertyModal({ clients, onClose, onAdd }: { 
-  clients: Client[]; onClose: () => void; 
-  onAdd: (property: Omit<Property, 'id' | 'createdAt' | 'userId'>) => void;
-}) {
+function AddPropertyModal({ clients, onClose, onAdd }: any) {
   const [form, setForm] = useState({
     name: '', type: '', area: '', price: '', priceNumeric: 0, location: '',
-    description: '', image: '', clientPhone: '', clientName: '',
-    project: '', compound: '', floor: '', rooms: '', bathrooms: '',
+    description: '', clientPhone: '', clientName: '', project: '',
+    rooms: '', bathrooms: '',
     finishing: 'fully-finished' as Property['finishing'],
     delivery: 'immediate' as Property['delivery'],
   });
 
   const handleClientSelect = (clientPhone: string) => {
-    const client = clients.find(c => c.phone === clientPhone);
+    const client = clients.find((c: Client) => c.phone === clientPhone);
     if (client) setForm({ ...form, clientPhone, clientName: client.name });
     else setForm({ ...form, clientPhone, clientName: '' });
   };
@@ -2064,183 +1373,53 @@ function AddPropertyModal({ clients, onClose, onAdd }: {
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
-        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gradient-text flex items-center gap-2"><Building2 className="w-6 h-6" /> إضافة عقار جديد</h2>
-          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-5 h-5 text-gray-400" /></motion.button>
+    <ModalWrapper onClose={onClose} title="إضافة عقار جديد" icon={<Building2 className="w-6 h-6" />}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <InputField label="اسم العقار *" value={form.name} onChange={(v) => setForm({ ...form, name: v })} required />
+        <SelectField label="نوع العقار *" value={form.type} onChange={(v) => setForm({ ...form, type: v })}
+          options={[
+            { value: 'شقة', label: 'شقة' }, { value: 'فيلا', label: 'فيلا' }, { value: 'أرض', label: 'أرض' },
+            { value: 'محل', label: 'محل' }, { value: 'مكتب', label: 'مكتب' }, { value: 'دوبلكس', label: 'دوبلكس' },
+            { value: 'بنتهاوس', label: 'بنتهاوس' }, { value: 'أخرى', label: 'أخرى' },
+          ]} />
+        <div className="grid grid-cols-2 gap-3">
+          <InputField label="المساحة" value={form.area} onChange={(v) => setForm({ ...form, area: v })} />
+          <InputField label="السعر (رقم أو كلمة)" value={form.price} onChange={handlePriceChange} placeholder="مثل: مليون، 1,500,000" />
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">اسم العقار *</label>
-            <input type="text" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم العقار" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">نوع العقار *</label>
-            <select required value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-              <option value="" className="bg-gray-900">اختر النوع</option>
-              <option value="شقة" className="bg-gray-900">شقة</option>
-              <option value="فيلا" className="bg-gray-900">فيلا</option>
-              <option value="أرض" className="bg-gray-900">أرض</option>
-              <option value="محل" className="bg-gray-900">محل</option>
-              <option value="مكتب" className="bg-gray-900">مكتب</option>
-              <option value="دوبلكس" className="bg-gray-900">دوبلكس</option>
-              <option value="بنتهاوس" className="bg-gray-900">بنتهاوس</option>
-              <option value="أخرى" className="bg-gray-900">أخرى</option>
-            </select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">المساحة</label>
-              <input type="text" value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="المساحة بالمتر" />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">السعر (رقم أو كلمة)</label>
-              <input type="text" value={form.price} onChange={(e) => handlePriceChange(e.target.value)}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="مثل: مليون، 1,500,000" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">الموقع</label>
-            <input type="text" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الموقع" />
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">الغرف</label>
-              <input type="text" value={form.rooms} onChange={(e) => setForm({ ...form, rooms: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="عدد الغرف" />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">الحمامات</label>
-              <input type="text" value={form.bathrooms} onChange={(e) => setForm({ ...form, bathrooms: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="عدد الحمامات" />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">الدور</label>
-              <input type="text" value={form.floor} onChange={(e) => setForm({ ...form, floor: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الدور" />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">التشطيب</label>
-              <select value={form.finishing} onChange={(e) => setForm({ ...form, finishing: e.target.value as Property['finishing'] })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-                <option value="fully-finished" className="bg-gray-900">سوبر لوكس</option>
-                <option value="semi-finished" className="bg-gray-900">نصف تشطيب</option>
-                <option value="core-and-shell" className="bg-gray-900">على المحارة</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">التسليم</label>
-              <select value={form.delivery} onChange={(e) => setForm({ ...form, delivery: e.target.value as Property['delivery'] })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-                <option value="immediate" className="bg-gray-900">فوري</option>
-                <option value="delayed" className="bg-gray-900">آجل</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">المشروع / الكمبوند</label>
-            <input type="text" value={form.project} onChange={(e) => setForm({ ...form, project: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم المشروع أو الكمبوند" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">الوصف</label>
-            <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-20" placeholder="وصف العقار" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">رقم العميل (اختياري)</label>
-            <input type="tel" list="property-client-phones" value={form.clientPhone} onChange={(e) => handleClientSelect(e.target.value)}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
-            <datalist id="property-client-phones">
-              {clients.map(c => (<option key={c.id} value={c.phone}>{c.name}</option>))}
-            </datalist>
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">اسم العميل</label>
-            <input type="text" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم العميل (يتعبأ تلقائياً)" />
-          </div>
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
-            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
-            إضافة العقار ✨
-          </motion.button>
-        </form>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// Property Detail Modal
-function PropertyDetailModal({ property, onClose, onDelete }: {
-  property: Property; onClose: () => void; onDelete: () => void;
-}) {
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
-        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gradient-text">تفاصيل العقار</h2>
-          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-5 h-5 text-gray-400" /></motion.button>
+        <InputField label="الموقع" value={form.location} onChange={(v) => setForm({ ...form, location: v })} />
+        <div className="grid grid-cols-3 gap-3">
+          <InputField label="الغرف" value={form.rooms} onChange={(v) => setForm({ ...form, rooms: v })} />
+          <InputField label="الحمامات" value={form.bathrooms} onChange={(v) => setForm({ ...form, bathrooms: v })} />
+          <InputField label="المشروع" value={form.project} onChange={(v) => setForm({ ...form, project: v })} />
         </div>
-        <div className="flex items-center gap-4 mb-6">
-          <div className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg glow-primary">
-            <Building2 className="w-8 h-8 text-white" />
-          </div>
-          <div>
-            <h3 className="text-xl font-bold text-white">{property.name}</h3>
-            <p className="text-sm text-gray-400">{property.type}</p>
-          </div>
+        <div className="grid grid-cols-2 gap-3">
+          <SelectField label="التشطيب" value={form.finishing} onChange={(v) => setForm({ ...form, finishing: v as Property['finishing'] })}
+            options={[
+              { value: 'fully-finished', label: 'سوبر لوكس' },
+              { value: 'semi-finished', label: 'نصف تشطيب' },
+              { value: 'core-and-shell', label: 'على المحارة' },
+            ]} />
+          <SelectField label="التسليم" value={form.delivery} onChange={(v) => setForm({ ...form, delivery: v as Property['delivery'] })}
+            options={[{ value: 'immediate', label: 'فوري' }, { value: 'delayed', label: 'آجل' }]} />
         </div>
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">المساحة</p><p className="text-white font-medium">{property.area || '-'}</p></div>
-            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">السعر</p><p className="text-white font-medium text-purple-400">{formatPrice(property.price)}</p></div>
-            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">الموقع</p><p className="text-white font-medium">{property.location || '-'}</p></div>
-            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">الغرف / الحمامات</p><p className="text-white font-medium">{property.rooms || '-'} / {property.bathrooms || '-'}</p></div>
-            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">التشطيب</p><p className="text-white font-medium">{property.finishing === 'fully-finished' ? 'سوبر لوكس' : property.finishing === 'semi-finished' ? 'نصف تشطيب' : 'على المحارة'}</p></div>
-            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">التسليم</p><p className="text-white font-medium">{property.delivery === 'immediate' ? 'فوري' : 'آجل'}</p></div>
-          </div>
-          {property.project && <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">المشروع / الكمبوند</p><p className="text-white font-medium">{property.project}</p></div>}
-          {property.clientName && (
-            <div className="bg-white/5 rounded-xl p-3">
-              <p className="text-xs text-gray-400">العميل</p>
-              <p className="text-white font-medium">{property.clientName}</p>
-              {property.clientPhone && <p className="text-sm text-purple-400" dir="ltr">{property.clientPhone}</p>}
-            </div>
-          )}
-          {property.description && <div className="bg-white/5 rounded-xl p-4"><p className="text-xs text-gray-400 mb-1">الوصف</p><p className="text-white text-sm">{property.description}</p></div>}
-          <div className="flex flex-wrap gap-2 pt-2">
-            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={onDelete}
-              className="flex items-center justify-center gap-2 bg-red-500/20 text-red-400 py-2.5 px-4 rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20">
-              <Trash2 className="w-4 h-4" /> حذف
-            </motion.button>
-          </div>
+        <TextareaField label="الوصف" value={form.description} onChange={(v) => setForm({ ...form, description: v })} />
+        <div>
+          <label className="block text-sm text-gray-300 mb-1">رقم العميل (اختياري)</label>
+          <input type="tel" list="property-client-phones" value={form.clientPhone} onChange={(e) => handleClientSelect(e.target.value)}
+            className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
+          <datalist id="property-client-phones">
+            {clients.map((c: Client) => (<option key={c.id} value={c.phone}>{c.name}</option>))}
+          </datalist>
         </div>
-      </motion.div>
-    </motion.div>
+        <InputField label="اسم العميل" value={form.clientName} onChange={(v) => setForm({ ...form, clientName: v })} placeholder="يتعبأ تلقائياً" />
+        <SubmitButton>إضافة العقار ✨</SubmitButton>
+      </form>
+    </ModalWrapper>
   );
 }
 
 // Add Feedback Modal
-function AddFeedbackModal({ clients, onClose, onAdd }: {
-  clients: Client[];
-  onClose: () => void;
-  onAdd: (feedback: Omit<DailyFeedback, 'id' | 'createdAt' | 'userId'>) => void;
-}) {
+function AddFeedbackModal({ clients, onClose, onAdd }: any) {
   const [form, setForm] = useState({
     clientPhone: '', clientName: '', date: new Date().toISOString().slice(0, 16),
     feedback: '', callStatus: 'called' as DailyFeedback['callStatus'],
@@ -2248,7 +1427,7 @@ function AddFeedbackModal({ clients, onClose, onAdd }: {
   });
 
   const handleClientSelect = (clientPhone: string) => {
-    const client = clients.find(c => c.phone === clientPhone);
+    const client = clients.find((c: Client) => c.phone === clientPhone);
     if (client) setForm({ ...form, clientPhone, clientName: client.name });
     else setForm({ ...form, clientPhone, clientName: '' });
   };
@@ -2260,403 +1439,289 @@ function AddFeedbackModal({ clients, onClose, onAdd }: {
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
-        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gradient-text flex items-center gap-2"><MessageSquare className="w-6 h-6" /> إضافة فيدباك يومي</h2>
-          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-5 h-5 text-gray-400" /></motion.button>
+    <ModalWrapper onClose={onClose} title="إضافة فيدباك يومي" icon={<MessageSquare className="w-6 h-6" />}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm text-gray-300 mb-1">رقم العميل *</label>
+          <input type="tel" required list="feedback-client-phones" value={form.clientPhone} onChange={(e) => handleClientSelect(e.target.value)}
+            className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
+          <datalist id="feedback-client-phones">
+            {clients.map((c: Client) => (<option key={c.id} value={c.phone}>{c.name}</option>))}
+          </datalist>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">رقم العميل *</label>
-            <input type="tel" required list="feedback-client-phones" value={form.clientPhone} onChange={(e) => handleClientSelect(e.target.value)}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
-            <datalist id="feedback-client-phones">
-              {clients.map(c => (<option key={c.id} value={c.phone}>{c.name}</option>))}
-            </datalist>
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">اسم العميل *</label>
-            <input type="text" required value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم العميل" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">التاريخ والوقت *</label>
-            <input type="datetime-local" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" dir="ltr" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">حالة الاتصال *</label>
-            <select required value={form.callStatus} onChange={(e) => setForm({ ...form, callStatus: e.target.value as DailyFeedback['callStatus'] })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-              <option value="called" className="bg-gray-900">تم الاتصال</option>
-              <option value="no-answer" className="bg-gray-900">لا رد</option>
-              <option value="busy" className="bg-gray-900">مشغول</option>
-              <option value="not-called" className="bg-gray-900">لم يتصل</option>
-            </select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">مدة المكالمة</label>
-              <input type="text" value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="مثال: 5 دقائق" />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">الإجراء التالي</label>
-              <input type="text" value={form.nextAction} onChange={(e) => setForm({ ...form, nextAction: e.target.value })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="مثال: متابعة" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">الفيدباك</label>
-            <textarea value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24" placeholder="ملاحظات على المكالمة..." />
-          </div>
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
-            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
-            إضافة الفيدباك 📝
-          </motion.button>
-        </form>
-      </motion.div>
-    </motion.div>
+        <InputField label="اسم العميل *" value={form.clientName} onChange={(v) => setForm({ ...form, clientName: v })} required />
+        <div>
+          <label className="block text-sm text-gray-300 mb-1">التاريخ والوقت *</label>
+          <input type="datetime-local" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })}
+            className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" dir="ltr" />
+        </div>
+        <SelectField label="حالة الاتصال *" value={form.callStatus} onChange={(v) => setForm({ ...form, callStatus: v as DailyFeedback['callStatus'] })}
+          options={[
+            { value: 'called', label: 'تم الاتصال' }, { value: 'no-answer', label: 'لا رد' },
+            { value: 'busy', label: 'مشغول' }, { value: 'not-called', label: 'لم يتصل' },
+          ]} />
+        <div className="grid grid-cols-2 gap-3">
+          <InputField label="مدة المكالمة" value={form.duration} onChange={(v) => setForm({ ...form, duration: v })} />
+          <InputField label="الإجراء التالي" value={form.nextAction} onChange={(v) => setForm({ ...form, nextAction: v })} />
+        </div>
+        <TextareaField label="الفيدباك" value={form.feedback} onChange={(v) => setForm({ ...form, feedback: v })} />
+        <SubmitButton>إضافة الفيدباك 📝</SubmitButton>
+      </form>
+    </ModalWrapper>
   );
 }
 
-// Add User Modal
-function AddUserModal({ onClose, onAdd }: {
-  onClose: () => void;
-  onAdd: (user: Omit<User, 'id' | 'createdAt' | 'createdBy'>) => void;
-}) {
+// Create Account Modal (Admin/Supervisor only)
+function CreateAccountModal({ onClose, onCreate }: any) {
   const [form, setForm] = useState({
-    username: '',
-    password: '',
-    name: '',
-    phone: '',
-    role: 'sales' as User['role'],
-    team: '',
-    isActive: true,
+    username: '', password: '', name: '', phone: '', role: 'sales' as User['role'],
   });
+  const [error, setError] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.username || !form.password || !form.name) return;
-    onAdd(form);
-  };
-
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
-        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-            <UserPlus className="w-6 h-6" /> إضافة مستخدم جديد
-          </h2>
-          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors">
-            <X className="w-5 h-5 text-gray-400" />
-          </motion.button>
-        </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">الاسم الكامل *</label>
-            <input type="text" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الاسم الكامل" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">اسم المستخدم *</label>
-            <input type="text" required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم المستخدم" dir="ltr" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">كلمة المرور *</label>
-            <input type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="كلمة المرور" dir="ltr" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">رقم الهاتف</label>
-            <input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">الدور *</label>
-            <select required value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as User['role'] })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-              <option value="sales" className="bg-gray-900">بائع</option>
-              <option value="supervisor" className="bg-gray-900">مشرف</option>
-              <option value="admin" className="bg-gray-900">مدير</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">الفريق</label>
-            <input type="text" value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم الفريق (اختياري)" />
-          </div>
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
-            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
-            إضافة المستخدم ✨
-          </motion.button>
-        </form>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// Add Team Modal
-function AddTeamModal({ users, onClose, onAdd }: {
-  users: User[];
-  onClose: () => void;
-  onAdd: (team: Omit<Team, 'id' | 'createdAt' | 'createdBy'>) => void;
-}) {
-  const [form, setForm] = useState({
-    name: '',
-    supervisorId: '',
-    supervisorName: '',
-    memberIds: [] as string[],
-  });
-
-  const handleSupervisorSelect = (supervisorId: string) => {
-    const supervisor = users.find(u => u.id === supervisorId);
-    if (supervisor) {
-      setForm({ ...form, supervisorId, supervisorName: supervisor.name });
+    setError('');
+    
+    if (!form.username || !form.password || !form.name) {
+      setError('يرجى ملء جميع الحقول المطلوبة');
+      return;
     }
+    
+    const users = DB.getUsers();
+    if (users.find(u => u.username === form.username)) {
+      setError('اسم المستخدم موجود بالفعل');
+      return;
+    }
+    
+    onCreate(form);
   };
-
-  const handleMemberToggle = (userId: string) => {
-    const memberIds = form.memberIds.includes(userId)
-      ? form.memberIds.filter(id => id !== userId)
-      : [...form.memberIds, userId];
-    setForm({ ...form, memberIds });
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!form.name || !form.supervisorId) return;
-    onAdd(form);
-  };
-
-  const salesUsers = users.filter(u => u.role === 'sales');
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
-        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-            <Users className="w-6 h-6" /> إضافة فريق جديد
-          </h2>
-          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors">
-            <X className="w-5 h-5 text-gray-400" />
-          </motion.button>
+    <ModalWrapper onClose={onClose} title="إنشاء حساب جديد" icon={<UserPlus className="w-6 h-6" />}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="p-3 bg-emerald-500/10 rounded-xl border border-emerald-500/20 mb-4">
+          <p className="text-xs text-emerald-400 flex items-center gap-2">
+            <Shield className="w-4 h-4" />
+            سيتم إنشاء حساب جديد بواسطة الإدارة
+          </p>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">اسم الفريق *</label>
-            <input type="text" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم الفريق" />
+        
+        <InputField label="الاسم الكامل *" value={form.name} onChange={(v) => setForm({ ...form, name: v })} required />
+        <InputField label="اسم المستخدم *" value={form.username} onChange={(v) => setForm({ ...form, username: v })} required dir="ltr" />
+        <InputField label="كلمة المرور *" value={form.password} onChange={(v) => setForm({ ...form, password: v })} required type="password" dir="ltr" />
+        <InputField label="رقم الهاتف" value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} dir="ltr" />
+        <SelectField label="الدور *" value={form.role} onChange={(v) => setForm({ ...form, role: v as User['role'] })}
+          options={[
+            { value: 'sales', label: 'بائع' },
+            { value: 'supervisor', label: 'مشرف' },
+            { value: 'admin', label: 'مدير' },
+          ]} />
+        
+        {error && (
+          <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-red-400 text-sm text-center bg-red-500/10 p-2 rounded-lg">
+            {error}
+          </motion.p>
+        )}
+        
+        <SubmitButton>إنشاء الحساب ✨</SubmitButton>
+      </form>
+    </ModalWrapper>
+  );
+}
+
+// Client Detail Modal
+function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder }: any) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({
+    name: client.name, phone: client.phone, property: client.property, budget: client.budget,
+    monthlyInstallment: client.monthlyInstallment, deliveryPeriod: client.deliveryPeriod,
+    source: client.source, stage: client.stage, feedback: client.feedback, priority: client.priority,
+  });
+
+  const handleSave = () => { onUpdate(client.id, form); setEditing(false); };
+
+  return (
+    <ModalWrapper onClose={onClose} title="تفاصيل العميل" icon={null}>
+      <div className="flex items-center gap-4 mb-6">
+        <div className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg glow-primary">
+          <span className="text-white font-bold text-2xl">{client.name[0]}</span>
+        </div>
+        <div>
+          <h3 className="text-xl font-bold text-white">{client.name}</h3>
+          <div className="flex gap-2 mt-1">
+            <SourceBadge source={client.source} />
+            <StageBadge stage={client.stage} />
           </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">المشرف *</label>
-            <select required value={form.supervisorId} onChange={(e) => handleSupervisorSelect(e.target.value)}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-              <option value="" className="bg-gray-900">اختر المشرف</option>
-              {users.filter(u => u.role === 'supervisor' || u.role === 'admin').map(u => (
-                <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
-              ))}
-            </select>
+        </div>
+      </div>
+      {editing ? (
+        <div className="space-y-4">
+          <InputField label="الاسم" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
+          <InputField label="الهاتف" value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} dir="ltr" />
+          <InputField label="العقار" value={form.property} onChange={(v) => setForm({ ...form, property: v })} />
+          <div className="grid grid-cols-2 gap-3">
+            <InputField label="الميزانية" value={form.budget} onChange={(v) => setForm({ ...form, budget: v })} />
+            <InputField label="القسط" value={form.monthlyInstallment} onChange={(v) => setForm({ ...form, monthlyInstallment: v })} />
           </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">الأعضاء</label>
-            <div className="space-y-2 max-h-48 overflow-y-auto bg-white/5 rounded-xl p-3">
-              {salesUsers.map(user => (
-                <label key={user.id} className="flex items-center gap-2 cursor-pointer hover:bg-white/5 p-2 rounded-lg transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={form.memberIds.includes(user.id)}
-                    onChange={() => handleMemberToggle(user.id)}
-                    className="w-4 h-4 rounded"
-                  />
-                  <span className="text-white text-sm">{user.name}</span>
-                </label>
-              ))}
-              {salesUsers.length === 0 && (
-                <p className="text-gray-500 text-sm text-center py-2">لا يوجد بائعين</p>
-              )}
+          <InputField label="مدة الاستلام" value={form.deliveryPeriod} onChange={(v) => setForm({ ...form, deliveryPeriod: v })} />
+          <SelectField label="المرحلة" value={form.stage} onChange={(v) => setForm({ ...form, stage: v as Client['stage'] })}
+            options={[
+              { value: 'new', label: 'جديد' }, { value: 'contacted', label: 'تم التواصل' },
+              { value: 'meeting', label: 'موعد معاينة' }, { value: 'negotiation', label: 'تفاوض' },
+              { value: 'closed', label: 'تم البيع' }, { value: 'lost', label: 'ضائع' },
+            ]} />
+          <TextareaField label="ملاحظات" value={form.feedback} onChange={(v) => setForm({ ...form, feedback: v })} />
+          <div className="flex gap-3">
+            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handleSave}
+              className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold btn-hover">حفظ ✓</motion.button>
+            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setEditing(false)}
+              className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors">إلغاء</motion.button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <InfoCard label="الهاتف" value={client.phone} dir="ltr" />
+            <InfoCard label="العقار" value={client.property || '-'} />
+            <InfoCard label="الميزانية" value={client.budget || '-'} />
+            <InfoCard label="القسط الشهري" value={client.monthlyInstallment || '-'} />
+            <InfoCard label="مدة الاستلام" value={client.deliveryPeriod || '-'} />
+            <InfoCard label="المصدر" value={client.source === 'campaign' ? 'كامبين' : client.source === 'facebook' ? 'فيسبوك' : 'خارجي'} />
+          </div>
+          {client.feedback && (
+            <div className="bg-white/5 rounded-xl p-4">
+              <p className="text-xs text-gray-400 mb-1">ملاحظات</p>
+              <p className="text-white text-sm">{client.feedback}</p>
             </div>
+          )}
+          <div className="flex flex-wrap gap-2 pt-2">
+            <ActionButton icon={<Edit3 className="w-4 h-4" />} label="تعديل" onClick={() => setEditing(true)} color="purple" />
+            <ActionButton icon={<PhoneCall className="w-4 h-4" />} label="اتصال" href={`tel:${client.phone}`} color="emerald" />
+            <ActionButton icon={<Bell className="w-4 h-4" />} label="تذكير" onClick={onAddReminder} color="amber" />
+            <ActionButton icon={<Trash2 className="w-4 h-4" />} label="" onClick={onDelete} color="red" />
           </div>
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
-            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
-            إضافة الفريق ✨
-          </motion.button>
-        </form>
-      </motion.div>
-    </motion.div>
+        </div>
+      )}
+    </ModalWrapper>
+  );
+}
+
+// Property Detail Modal
+function PropertyDetailModal({ property, onClose, onDelete }: any) {
+  return (
+    <ModalWrapper onClose={onClose} title="تفاصيل العقار" icon={null}>
+      <div className="flex items-center gap-4 mb-6">
+        <div className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg glow-primary">
+          <Building2 className="w-8 h-8 text-white" />
+        </div>
+        <div>
+          <h3 className="text-xl font-bold text-white">{property.name}</h3>
+          <p className="text-sm text-gray-400">{property.type}</p>
+        </div>
+      </div>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <InfoCard label="المساحة" value={property.area || '-'} />
+          <InfoCard label="السعر" value={formatPrice(property.price)} highlight />
+          <InfoCard label="الموقع" value={property.location || '-'} />
+          <InfoCard label="الغرف / الحمامات" value={`${property.rooms || '-'} / ${property.bathrooms || '-'}`} />
+          <InfoCard label="التشطيب" value={property.finishing === 'fully-finished' ? 'سوبر لوكس' : property.finishing === 'semi-finished' ? 'نصف تشطيب' : 'على المحارة'} />
+          <InfoCard label="التسليم" value={property.delivery === 'immediate' ? 'فوري' : 'آجل'} />
+        </div>
+        {property.project && <InfoCard label="المشروع" value={property.project} />}
+        {property.clientName && (
+          <div className="bg-white/5 rounded-xl p-3">
+            <p className="text-xs text-gray-400">العميل</p>
+            <p className="text-white font-medium">{property.clientName}</p>
+            {property.clientPhone && <p className="text-sm text-purple-400" dir="ltr">{property.clientPhone}</p>}
+          </div>
+        )}
+        {property.description && (
+          <div className="bg-white/5 rounded-xl p-4">
+            <p className="text-xs text-gray-400 mb-1">الوصف</p>
+            <p className="text-white text-sm">{property.description}</p>
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2 pt-2">
+          <ActionButton icon={<Trash2 className="w-4 h-4" />} label="حذف" onClick={onDelete} color="red" />
+        </div>
+      </div>
+    </ModalWrapper>
   );
 }
 
 // User Detail Modal
-function UserDetailModal({ user, currentUser, onClose, onUpdate, onDelete }: {
-  user: User;
-  currentUser: User;
-  onClose: () => void;
-  onUpdate: (id: string, data: Partial<User>) => void;
-  onDelete: (id: string) => void;
-}) {
+function UserDetailModal({ user, currentUser, onClose, onUpdate, onDelete }: any) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
-    name: user.name,
-    phone: user.phone || '',
-    role: user.role,
-    team: user.team || '',
-    isActive: user.isActive,
+    name: user.name, phone: user.phone || '', role: user.role, isActive: user.isActive,
   });
 
-  const handleSave = () => {
-    onUpdate(user.id, form);
-    setEditing(false);
-  };
+  const handleSave = () => { onUpdate(user.id, form); setEditing(false); };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
-      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
-        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gradient-text">تفاصيل المستخدم</h2>
-          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors">
-            <X className="w-5 h-5 text-gray-400" />
-          </motion.button>
+    <ModalWrapper onClose={onClose} title="تفاصيل المستخدم" icon={null}>
+      <div className="flex items-center gap-4 mb-6">
+        <div className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg glow-primary">
+          <span className="text-white font-bold text-2xl">{user.name[0]}</span>
         </div>
-        <div className="flex items-center gap-4 mb-6">
-          <div className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg glow-primary">
-            <span className="text-white font-bold text-2xl">{user.name[0]}</span>
-          </div>
-          <div>
-            <h3 className="text-xl font-bold text-white">{user.name}</h3>
-            <p className="text-sm text-gray-400">@{user.username}</p>
-            <span className={`text-xs px-2.5 py-1 rounded-full mt-1 inline-block ${
-              user.role === 'admin' ? 'bg-red-500/20 text-red-400' :
-              user.role === 'supervisor' ? 'bg-amber-500/20 text-amber-400' :
-              'bg-blue-500/20 text-blue-400'
-            }`}>
-              {user.role === 'admin' ? 'مدير' : user.role === 'supervisor' ? 'مشرف' : 'بائع'}
-            </span>
+        <div>
+          <h3 className="text-xl font-bold text-white">{user.name}</h3>
+          <p className="text-sm text-gray-400">@{user.username}</p>
+          <span className={`text-xs px-2.5 py-1 rounded-full mt-1 inline-block ${
+            user.role === 'admin' ? 'bg-red-500/20 text-red-400' :
+            user.role === 'supervisor' ? 'bg-amber-500/20 text-amber-400' :
+            'bg-blue-500/20 text-blue-400'
+          }`}>
+            {user.role === 'admin' ? 'مدير' : user.role === 'supervisor' ? 'مشرف' : 'بائع'}
+          </span>
+        </div>
+      </div>
+      {editing ? (
+        <div className="space-y-4">
+          <InputField label="الاسم" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
+          <InputField label="الهاتف" value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} dir="ltr" />
+          <SelectField label="الدور" value={form.role} onChange={(v) => setForm({ ...form, role: v as User['role'] })}
+            options={[
+              { value: 'sales', label: 'بائع' },
+              { value: 'supervisor', label: 'مشرف' },
+              { value: 'admin', label: 'مدير' },
+            ]} />
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+              className="w-4 h-4 rounded" />
+            <span className="text-white">نشط</span>
+          </label>
+          <div className="flex gap-3">
+            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handleSave}
+              className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold btn-hover">حفظ ✓</motion.button>
+            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setEditing(false)}
+              className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors">إلغاء</motion.button>
           </div>
         </div>
-        {editing ? (
-          <div className="space-y-4">
-            <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الاسم" />
-            <input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الهاتف" dir="ltr" />
-            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as User['role'] })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-              <option value="sales" className="bg-gray-900">بائع</option>
-              <option value="supervisor" className="bg-gray-900">مشرف</option>
-              <option value="admin" className="bg-gray-900">مدير</option>
-            </select>
-            <input type="text" value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الفريق" />
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
-                className="w-4 h-4 rounded" />
-              <span className="text-white">نشط</span>
-            </label>
-            <div className="flex gap-3">
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handleSave}
-                className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold btn-hover">حفظ ✓</motion.button>
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setEditing(false)}
-                className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors">إلغاء</motion.button>
-            </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <InfoCard label="الهاتف" value={user.phone || '-'} dir="ltr" />
+            <InfoCard label="الحالة" value={user.isActive ? '✓ نشط' : '✗ معطل'} />
+            <InfoCard label="تاريخ الإنشاء" value={formatDateTime(user.createdAt).split(',')[0]} />
+            <InfoCard label="الدور" value={user.role === 'admin' ? 'مدير' : user.role === 'supervisor' ? 'مشرف' : 'بائع'} />
           </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-white/5 rounded-xl p-3">
-                <p className="text-xs text-gray-400">الهاتف</p>
-                <p className="text-white font-medium" dir="ltr">{user.phone || '-'}</p>
-              </div>
-              <div className="bg-white/5 rounded-xl p-3">
-                <p className="text-xs text-gray-400">الفريق</p>
-                <p className="text-white font-medium">{user.team || '-'}</p>
-              </div>
-              <div className="bg-white/5 rounded-xl p-3">
-                <p className="text-xs text-gray-400">الحالة</p>
-                <p className={`font-medium ${user.isActive ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {user.isActive ? '✓ نشط' : '✗ معطل'}
-                </p>
-              </div>
-              <div className="bg-white/5 rounded-xl p-3">
-                <p className="text-xs text-gray-400">تاريخ الإنشاء</p>
-                <p className="text-white text-sm">{formatDateTime(user.createdAt)}</p>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2 pt-2">
-              {canManageUsers(currentUser) && (
-                <>
-                  <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={() => setEditing(true)}
-                    className="flex-1 flex items-center justify-center gap-2 bg-purple-500/20 text-purple-300 py-2.5 rounded-xl hover:bg-purple-500/30 transition-colors border border-purple-500/20">
-                    <Edit3 className="w-4 h-4" /> تعديل
-                  </motion.button>
-                  {user.id !== currentUser.id && (
-                    <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => onDelete(user.id)}
-                      className="flex items-center justify-center gap-2 bg-red-500/20 text-red-400 py-2.5 px-4 rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20">
-                      <Trash2 className="w-4 h-4" />
-                    </motion.button>
-                  )}
-                </>
-              )}
-            </div>
+          <div className="flex flex-wrap gap-2 pt-2">
+            <ActionButton icon={<Edit3 className="w-4 h-4" />} label="تعديل" onClick={() => setEditing(true)} color="purple" />
+            {user.id !== currentUser.id && (
+              <ActionButton icon={<Trash2 className="w-4 h-4" />} label="حذف" onClick={() => onDelete(user.id)} color="red" />
+            )}
           </div>
-        )}
-      </motion.div>
-    </motion.div>
+        </div>
+      )}
+    </ModalWrapper>
   );
 }
 
-// Team Detail Modal
-function TeamDetailModal({ team, users, currentUser, onClose, onUpdate, onDelete }: {
-  team: Team;
-  users: User[];
-  currentUser: User;
-  onClose: () => void;
-  onUpdate: (id: string, data: Partial<Team>) => void;
-  onDelete: (id: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({
-    name: team.name,
-    supervisorId: team.supervisorId,
-    supervisorName: team.supervisorName,
-    memberIds: team.memberIds,
-  });
+// ============ Reusable Components ============
 
-  const handleSave = () => {
-    onUpdate(team.id, form);
-    setEditing(false);
-  };
-
-  const handleMemberToggle = (userId: string) => {
-    const memberIds = form.memberIds.includes(userId)
-      ? form.memberIds.filter(id => id !== userId)
-      : [...form.memberIds, userId];
-    setForm({ ...form, memberIds });
-  };
-
-  const supervisor = users.find(u => u.id === team.supervisorId);
-  const members = users.filter(u => team.memberIds.includes(u.id));
-  const salesUsers = users.filter(u => u.role === 'sales');
-
+function ModalWrapper({ children, onClose, title, icon }: any) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
@@ -2664,97 +1729,109 @@ function TeamDetailModal({ team, users, currentUser, onClose, onUpdate, onDelete
         transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
         className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold gradient-text">تفاصيل الفريق</h2>
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+            {icon} {title}
+          </h2>
           <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
             className="p-2 hover:bg-white/10 rounded-lg transition-colors">
             <X className="w-5 h-5 text-gray-400" />
           </motion.button>
         </div>
-        <div className="flex items-center gap-4 mb-6">
-          <div className="w-16 h-16 gradient-accent rounded-full flex items-center justify-center shadow-lg glow-primary">
-            <Users className="w-8 h-8 text-white" />
-          </div>
-          <div>
-            <h3 className="text-xl font-bold text-white">{team.name}</h3>
-            <p className="text-sm text-gray-400">المشرف: {supervisor?.name || 'غير محدد'}</p>
-            <p className="text-sm text-gray-400">عدد الأعضاء: {members.length}</p>
-          </div>
-        </div>
-        {editing ? (
-          <div className="space-y-4">
-            <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم الفريق" />
-            <select value={form.supervisorId} onChange={(e) => {
-              const supervisor = users.find(u => u.id === e.target.value);
-              setForm({ ...form, supervisorId: e.target.value, supervisorName: supervisor?.name || '' });
-            }}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
-              <option value="" className="bg-gray-900">اختر المشرف</option>
-              {users.filter(u => u.role === 'supervisor' || u.role === 'admin').map(u => (
-                <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
-              ))}
-            </select>
-            <div>
-              <label className="block text-sm text-gray-300 mb-1">الأعضاء</label>
-              <div className="space-y-2 max-h-48 overflow-y-auto bg-white/5 rounded-xl p-3">
-                {salesUsers.map(user => (
-                  <label key={user.id} className="flex items-center gap-2 cursor-pointer hover:bg-white/5 p-2 rounded-lg transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={form.memberIds.includes(user.id)}
-                      onChange={() => handleMemberToggle(user.id)}
-                      className="w-4 h-4 rounded"
-                    />
-                    <span className="text-white text-sm">{user.name}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handleSave}
-                className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold btn-hover">حفظ ✓</motion.button>
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setEditing(false)}
-                className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors">إلغاء</motion.button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="bg-white/5 rounded-xl p-4">
-              <p className="text-xs text-gray-400 mb-2">المشرف</p>
-              <p className="text-white font-medium">{supervisor?.name || 'غير محدد'}</p>
-            </div>
-            <div className="bg-white/5 rounded-xl p-4">
-              <p className="text-xs text-gray-400 mb-2">الأعضاء ({members.length})</p>
-              <div className="flex flex-wrap gap-2">
-                {members.map(member => (
-                  <span key={member.id} className="text-xs bg-purple-500/20 text-purple-400 px-2 py-1 rounded-full">
-                    {member.name}
-                  </span>
-                ))}
-                {members.length === 0 && (
-                  <p className="text-gray-500 text-sm">لا يوجد أعضاء</p>
-                )}
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2 pt-2">
-              {canManageUsers(currentUser) && (
-                <>
-                  <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={() => setEditing(true)}
-                    className="flex-1 flex items-center justify-center gap-2 bg-purple-500/20 text-purple-300 py-2.5 rounded-xl hover:bg-purple-500/30 transition-colors border border-purple-500/20">
-                    <Edit3 className="w-4 h-4" /> تعديل
-                  </motion.button>
-                  <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => onDelete(team.id)}
-                    className="flex items-center justify-center gap-2 bg-red-500/20 text-red-400 py-2.5 px-4 rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20">
-                    <Trash2 className="w-4 h-4" /> حذف
-                  </motion.button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
+        {children}
       </motion.div>
     </motion.div>
   );
+}
+
+function InputField({ label, value, onChange, required, type = 'text', dir, placeholder }: any) {
+  return (
+    <div>
+      <label className="block text-sm text-gray-300 mb-1">{label}</label>
+      <input type={type} required={required} value={value} onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+        dir={dir} />
+    </div>
+  );
+}
+
+function SelectField({ label, value, onChange, options }: any) {
+  return (
+    <div>
+      <label className="block text-sm text-gray-300 mb-1">{label}</label>
+      <select value={value} onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+        {options.map((opt: any) => (<option key={opt.value} value={opt.value} className="bg-gray-900">{opt.label}</option>))}
+      </select>
+    </div>
+  );
+}
+
+function TextareaField({ label, value, onChange }: any) {
+  return (
+    <div>
+      <label className="block text-sm text-gray-300 mb-1">{label}</label>
+      <textarea value={value} onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24" />
+    </div>
+  );
+}
+
+function SubmitButton({ children }: any) {
+  return (
+    <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
+      className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
+      {children}
+    </motion.button>
+  );
+}
+
+function InfoCard({ label, value, dir, highlight }: any) {
+  return (
+    <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
+      <p className="text-xs text-gray-400">{label}</p>
+      <p className={`font-medium ${highlight ? 'text-purple-400' : 'text-white'}`} dir={dir}>{value}</p>
+    </div>
+  );
+}
+
+function ActionButton({ icon, label, onClick, href, color }: any) {
+  const colorClasses = {
+    purple: 'bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border-purple-500/20',
+    emerald: 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border-emerald-500/20',
+    amber: 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border-amber-500/20',
+    red: 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border-red-500/20',
+  };
+  
+  const classes = `flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl transition-colors border ${colorClasses[color as keyof typeof colorClasses]}`;
+  
+  if (href) {
+    return <motion.a whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} href={href} className={classes}>{icon} {label}</motion.a>;
+  }
+  return <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onClick} className={classes}>{icon} {label}</motion.button>;
+}
+
+function SourceBadge({ source }: { source: Client['source'] }) {
+  const config = {
+    campaign: { label: 'كامبين', class: 'status-new' },
+    facebook: { label: 'فيسبوك', class: 'status-contacted' },
+    external: { label: 'خارجي', class: 'status-interested' },
+  };
+  const { label, class: className } = config[source];
+  return <span className={`text-xs px-2.5 py-1 rounded-full ${className}`}>{label}</span>;
+}
+
+function StageBadge({ stage }: { stage: Client['stage'] }) {
+  const config = {
+    new: { label: 'جديد', class: 'bg-blue-500/20 text-blue-400' },
+    contacted: { label: 'تم التواصل', class: 'bg-purple-500/20 text-purple-400' },
+    meeting: { label: 'موعد معاينة', class: 'bg-cyan-500/20 text-cyan-400' },
+    negotiation: { label: 'تفاوض', class: 'bg-amber-500/20 text-amber-400' },
+    closed: { label: 'تم البيع', class: 'bg-emerald-500/20 text-emerald-400' },
+    lost: { label: 'ضائع', class: 'bg-red-500/20 text-red-400' },
+  };
+  const { label, class: className } = config[stage];
+  return <span className={`text-xs px-2.5 py-1 rounded-full ${className}`}>{label}</span>;
 }
 
 export default App;
