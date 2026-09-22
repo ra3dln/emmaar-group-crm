@@ -315,15 +315,26 @@ function App() {
     const searchLower = propertySearch.toLowerCase();
     const searchNumeric = parsePrice(propertySearch);
     
+    // Text matching
     const textMatch = p.name.toLowerCase().includes(searchLower) ||
                      p.type.toLowerCase().includes(searchLower) ||
                      p.location.toLowerCase().includes(searchLower);
     
+    // Price matching - support both numbers and Arabic words
     const priceMatch = p.price.toLowerCase().includes(searchLower) ||
                       p.priceNumeric === searchNumeric ||
                       (searchNumeric > 0 && Math.abs(p.priceNumeric - searchNumeric) < 1000);
     
-    return textMatch || priceMatch;
+    // Check if search contains Arabic number words
+    const arabicNumberWords = ['مليون', 'مليونين', 'الف', 'ألف', 'الفين', 'ألفين', 'مليار', 'نص مليون', 'نصف مليون'];
+    const containsArabicWord = arabicNumberWords.some(word => searchLower.includes(word));
+    
+    // If search contains Arabic word, match properties with that word in price
+    const arabicWordMatch = containsArabicWord && arabicNumberWords.some(word => 
+      p.price.toLowerCase().includes(word)
+    );
+    
+    return textMatch || priceMatch || arabicWordMatch;
   });
 
   const activeReminders = reminders.filter(r => !r.isCompleted);
@@ -514,14 +525,24 @@ function App() {
             setDailyFeedbacks(dailyFeedbacks.filter(f => f.id !== id));
             localStorage.setItem('crm_daily_feedback', JSON.stringify(JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]').filter((f: DailyFeedback) => f.id !== id)));
           }} onAdd={() => setShowAddFeedback(true)} />}
-          {activeTab === 'assigned-leads' && <AssignedLeadsView assignedLeads={currentUser.role === 'admin' ? assignedLeads : assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} currentUser={currentUser} users={users} onAdd={() => setShowAddAssignedLead(true)} onDelete={(id: string) => {
-            setAssignedLeads(assignedLeads.filter(l => l.id !== id));
-            localStorage.setItem('crm_assigned_leads', JSON.stringify(assignedLeads.filter(l => l.id !== id)));
+          {activeTab === 'new-leads' && currentUser.role === 'sales' && <NewLeadsViewForSales assignedLeads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} onMarkViewed={(id: string) => {
+            const updated = assignedLeads.map(l => l.id === id ? { ...l, status: 'viewed' as const, viewedAt: new Date().toISOString() } : l);
+            setAssignedLeads(updated);
+            localStorage.setItem('crm_assigned_leads', JSON.stringify(updated));
           }} />}
           {activeTab === 'reports' && currentUser.role === 'sales' && <ReportsView stats={stats} clients={clients} properties={properties} feedbacks={dailyFeedbacks} />}
           {activeTab === 'admin-users' && currentUser.role !== 'sales' && <AdminUsersView users={users} currentUser={currentUser} onSelect={setSelectedUserFeedback} onAdd={() => setShowAddUser(true)} />}
           {activeTab === 'admin-feedback' && currentUser.role !== 'sales' && <AdminFeedbackView users={users.filter((u: User) => u.role === 'sales')} dailyFeedbacks={dailyFeedbacks} onSelect={setSelectedUserFeedback} />}
-          {activeTab === 'admin-teams' && currentUser.role !== 'sales' && <AdminTeamsView teams={teams} users={users} currentUser={currentUser} onSelect={setSelectedTeam} onAdd={() => setShowAddTeam(true)} />}
+          {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={assignedLeads} users={users} currentUser={currentUser} onAdd={() => setShowAddAssignedLead(true)} onDelete={(id: string) => {
+            const updated = assignedLeads.filter(l => l.id !== id);
+            setAssignedLeads(updated);
+            localStorage.setItem('crm_assigned_leads', JSON.stringify(updated));
+          }} />}
+          {activeTab === 'admin-create-sales' && currentUser.role !== 'sales' && <AdminCreateSalesView users={users} currentUser={currentUser} onAdd={() => setShowAddUser(true)} onDelete={(id: string) => {
+            const updated = users.filter((u: User) => u.id !== id);
+            setUsers(updated);
+            localStorage.setItem('crm_users', JSON.stringify(updated));
+          }} />}
           {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} users={users} />}
         </AnimatePresence>
       </main>
@@ -553,7 +574,7 @@ function getNavigationTabs(role: string) {
     { id: 'properties' as TabType, icon: Building2, label: 'العقارات' },
     { id: 'reminders' as TabType, icon: Bell, label: 'التذكيرات' },
     { id: 'daily-feedback' as TabType, icon: MessageSquare, label: 'الفيدباك' },
-    { id: 'assigned-leads' as TabType, icon: UserPlus, label: 'أرقام جديدة' },
+    { id: 'new-leads' as TabType, icon: UserPlus, label: 'أرقام جديدة' },
     { id: 'reports' as TabType, icon: BarChart3, label: 'التقارير' },
   ];
   
@@ -561,8 +582,8 @@ function getNavigationTabs(role: string) {
   const adminTabs = [
     { id: 'admin-users' as TabType, icon: UserCheck, label: 'فريق العمل' },
     { id: 'admin-feedback' as TabType, icon: MessageSquare, label: 'الفيدباك اليومي' },
-    { id: 'assigned-leads' as TabType, icon: UserPlus, label: 'أرقام جديدة' },
-    { id: 'admin-teams' as TabType, icon: Users, label: 'الفرق' },
+    { id: 'admin-leads' as TabType, icon: UserPlus, label: 'توزيع الأرقام' },
+    { id: 'admin-create-sales' as TabType, icon: UserPlus, label: 'إنشاء حسابات سيلز' },
     { id: 'admin-settings' as TabType, icon: Settings, label: 'الإعدادات' },
   ];
   
@@ -1102,19 +1123,77 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd }: any) {
   );
 }
 
-// Assigned Leads View - For Sales
-function AssignedLeadsView({ assignedLeads, currentUser, users, onAdd, onDelete }: any) {
-  const isAdmin = currentUser.role === 'admin' || currentUser.role === 'supervisor';
+// New Leads View - For Sales (shows leads assigned to this sales person)
+function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-bold gradient-text">أرقام جديدة</h2>
+
+      <div className="space-y-3">
+        {assignedLeads.map((lead: AssignedLead) => (
+          <motion.div key={lead.id} whileHover={{ scale: 1.01 }}
+            className="glass-card rounded-2xl p-4">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <h4 className="font-bold text-white text-lg">{lead.name}</h4>
+                <p className="text-purple-400 text-lg" dir="ltr">{lead.phone}</p>
+                {lead.description && <p className="text-sm text-gray-400 mt-2">{lead.description}</p>}
+                <p className="text-xs text-gray-500 mt-2">
+                  {formatDateTime(lead.createdAt)}
+                </p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className={`text-xs px-3 py-1 rounded-full ${
+                  lead.status === 'new' ? 'bg-blue-500/20 text-blue-400' :
+                  lead.status === 'viewed' ? 'bg-purple-500/20 text-purple-400' :
+                  lead.status === 'contacted' ? 'bg-amber-500/20 text-amber-400' :
+                  'bg-emerald-500/20 text-emerald-400'
+                }`}>
+                  {lead.status === 'new' ? 'رقم جديد' : 
+                   lead.status === 'viewed' ? 'تم العرض' :
+                   lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
+                </span>
+                {lead.status === 'new' && (
+                  <button 
+                    onClick={() => onMarkViewed(lead.id)}
+                    className="gradient-primary text-white px-4 py-2 rounded-lg font-bold text-sm"
+                  >
+                    تم العرض
+                  </button>
+                )}
+                <a 
+                  href={`tel:${lead.phone}`}
+                  className="bg-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg font-bold text-sm text-center hover:bg-emerald-500/30 transition-colors"
+                >
+                  اتصال
+                </a>
+              </div>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+
+      {assignedLeads.length === 0 && (
+        <div className="text-center py-16">
+          <UserPlus className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          <p className="text-gray-400">لا يوجد أرقام جديدة</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Admin Leads View - For Admin to assign leads to sales
+function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete }: any) {
+  const salesUsers = users.filter((u: User) => u.role === 'sales' || u.role === 'supervisor');
   
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold gradient-text">أرقام جديدة</h2>
-        {isAdmin && (
-          <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
-            <Plus className="w-4 h-4" /> إضافة رقم
-          </button>
-        )}
+        <h2 className="text-xl font-bold gradient-text">توزيع الأرقام</h2>
+        <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
+          <Plus className="w-4 h-4" /> إضافة رقم
+        </button>
       </div>
 
       <div className="space-y-3">
@@ -1126,25 +1205,24 @@ function AssignedLeadsView({ assignedLeads, currentUser, users, onAdd, onDelete 
                 <h4 className="font-bold text-white text-lg">{lead.name}</h4>
                 <p className="text-purple-400" dir="ltr">{lead.phone}</p>
                 {lead.description && <p className="text-sm text-gray-400 mt-2">{lead.description}</p>}
-                {isAdmin && (
-                  <p className="text-xs text-gray-500 mt-2">
-                    مخصص لـ: {users.find((u: User) => u.id === lead.salesId)?.name || 'غير محدد'}
-                  </p>
-                )}
+                <p className="text-xs text-gray-500 mt-2">
+                  مخصص لـ: <span className="text-purple-400">{users.find((u: User) => u.id === lead.salesId)?.name || 'غير محدد'}</span>
+                </p>
               </div>
               <div className="flex gap-2">
                 <span className={`text-xs px-2 py-1 rounded-full ${
                   lead.status === 'new' ? 'bg-blue-500/20 text-blue-400' :
+                  lead.status === 'viewed' ? 'bg-purple-500/20 text-purple-400' :
                   lead.status === 'contacted' ? 'bg-amber-500/20 text-amber-400' :
                   'bg-emerald-500/20 text-emerald-400'
                 }`}>
-                  {lead.status === 'new' ? 'جديد' : lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
+                  {lead.status === 'new' ? 'رقم جديد' : 
+                   lead.status === 'viewed' ? 'تم العرض' :
+                   lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
                 </span>
-                {isAdmin && (
-                  <button onClick={() => onDelete(lead.id)} className="p-1 bg-red-500/20 rounded-lg">
-                    <Trash2 className="w-4 h-4 text-red-400" />
-                  </button>
-                )}
+                <button onClick={() => onDelete(lead.id)} className="p-1 bg-red-500/20 rounded-lg">
+                  <Trash2 className="w-4 h-4 text-red-400" />
+                </button>
               </div>
             </div>
           </motion.div>
@@ -1154,7 +1232,54 @@ function AssignedLeadsView({ assignedLeads, currentUser, users, onAdd, onDelete 
       {assignedLeads.length === 0 && (
         <div className="text-center py-16">
           <UserPlus className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400">لا يوجد أرقام جديدة</p>
+          <p className="text-gray-400">لا يوجد أرقام موزعة</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Admin Create Sales View - For Admin to create sales accounts
+function AdminCreateSalesView({ users, currentUser, onAdd, onDelete }: any) {
+  const salesUsers = users.filter((u: User) => u.role === 'sales');
+  
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold gradient-text">إنشاء حسابات سيلز</h2>
+        <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
+          <Plus className="w-4 h-4" /> إنشاء حساب سيلز
+        </button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {salesUsers.map((user: User) => (
+          <motion.div key={user.id} whileHover={{ scale: 1.02 }}
+            className="glass-card rounded-2xl p-5">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center">
+                <span className="text-white font-bold">{user.name[0]}</span>
+              </div>
+              <div className="flex-1">
+                <h4 className="font-bold text-white">{user.name}</h4>
+                <p className="text-sm text-gray-400">@{user.username}</p>
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-gray-500" dir="ltr">{user.phone || 'لا يوجد رقم'}</p>
+              <button onClick={() => onDelete(user.id)} className="p-2 bg-red-500/20 rounded-lg hover:bg-red-500/30 transition-colors">
+                <Trash2 className="w-4 h-4 text-red-400" />
+              </button>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+
+      {salesUsers.length === 0 && (
+        <div className="text-center py-16">
+          <UserPlus className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          <p className="text-gray-400">لا يوجد حسابات سيلز</p>
+          <p className="text-gray-500 text-sm mt-2">اضغط على "إنشاء حساب سيلز" لإضافة حساب جديد</p>
         </div>
       )}
     </div>
@@ -1414,12 +1539,29 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
 }
 
 function AddUserModal({ currentUser, onClose, onSuccess }: any) {
-  const [form, setForm] = useState({ username: '', password: '', name: '', phone: '', role: 'sales', team: '' });
+  const [form, setForm] = useState({ username: '', password: '', name: '', phone: '' });
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const users = JSON.parse(localStorage.getItem('crm_users') || '[]');
-    const newUser = { ...form, id: crypto.randomUUID(), isActive: true, createdAt: new Date().toISOString(), createdBy: currentUser.id };
+    
+    // Check if username already exists
+    if (users.some((u: User) => u.username === form.username)) {
+      alert('اسم المستخدم موجود بالفعل');
+      return;
+    }
+    
+    const newUser: User = { 
+      username: form.username,
+      password: form.password,
+      name: form.name,
+      phone: form.phone,
+      role: 'sales',
+      isActive: true, 
+      id: crypto.randomUUID(), 
+      createdAt: new Date().toISOString(), 
+      createdBy: currentUser.id 
+    };
     localStorage.setItem('crm_users', JSON.stringify([...users, newUser]));
     onSuccess();
     onClose();
@@ -1428,17 +1570,13 @@ function AddUserModal({ currentUser, onClose, onSuccess }: any) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-xl font-bold gradient-text mb-6">إضافة سيلز</h2>
+        <h2 className="text-xl font-bold gradient-text mb-6">إنشاء حساب سيلز جديد</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input type="text" placeholder="الاسم *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
+          <input type="text" placeholder="الاسم الكامل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
           <input type="text" placeholder="اسم المستخدم *" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
           <input type="password" placeholder="كلمة المرور *" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
           <input type="tel" placeholder="رقم الهاتف" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" />
-          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white">
-            <option value="sales" className="bg-gray-900">سيلز</option>
-            <option value="supervisor" className="bg-gray-900">مشرف</option>
-          </select>
-          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إضافة</button>
+          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إنشاء الحساب</button>
         </form>
       </motion.div>
     </motion.div>
@@ -1484,7 +1622,7 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const leads = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
-    const newLead = { 
+    const newLead: AssignedLead = { 
       ...form, 
       id: crypto.randomUUID(), 
       adminId: currentUser.id, 
@@ -1496,21 +1634,23 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
     onClose();
   };
   
+  const salesUsers = users.filter((u: User) => u.role === 'sales' || u.role === 'supervisor');
+  
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-xl font-bold gradient-text mb-6">إضافة رقم جديد</h2>
+        <h2 className="text-xl font-bold gradient-text mb-6">توزيع رقم جديد</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <input type="text" placeholder="اسم العميل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
           <input type="tel" placeholder="رقم الهاتف *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
           <textarea placeholder="وصف/ملاحظات" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white resize-none h-20" />
           <select value={form.salesId} onChange={(e) => setForm({ ...form, salesId: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required>
             <option value="" className="bg-gray-900">اختر السيلز</option>
-            {users.filter((u: User) => u.role === 'sales').map((u: User) => (
+            {salesUsers.map((u: User) => (
               <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
             ))}
           </select>
-          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إضافة</button>
+          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">توزيع الرقم</button>
         </form>
       </motion.div>
     </motion.div>

@@ -48,7 +48,8 @@ export interface AssignedLead {
   name: string;
   phone: string;
   description: string;
-  status: 'new' | 'contacted' | 'closed';
+  status: 'new' | 'viewed' | 'contacted' | 'closed';
+  viewedAt?: string;
   createdAt: string;
 }
 
@@ -102,4 +103,4 @@ export interface DailyFeedback {
   createdAt: string;
 }
 
-export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'assigned-leads' | 'reports' | 'admin-users' | 'admin-feedback' | 'admin-teams' | 'admin-settings';
+export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'new-leads' | 'reports' | 'admin-users' | 'admin-feedback' | 'admin-leads' | 'admin-create-sales' | 'admin-settings';
