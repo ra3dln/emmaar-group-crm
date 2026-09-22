@@ -1,5 +1,15 @@
+export interface User {
+  id: string;
+  username: string;
+  password: string;
+  name: string;
+  role: 'admin' | 'sales';
+  createdAt: string;
+}
+
 export interface Client {
   id: string;
+  userId: string;
   name: string;
   phone: string;
   property: string;
@@ -9,12 +19,16 @@ export interface Client {
   status: 'campaign' | 'facebook' | 'external';
   stage: 'new' | 'contacted' | 'meeting' | 'negotiation' | 'closed' | 'lost';
   feedback: string;
+  assignedTo?: string;
+  priority: 'high' | 'medium' | 'low';
+  source: string;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface Reminder {
   id: string;
+  userId: string;
   clientId: string;
   clientName: string;
   clientPhone: string;
@@ -28,26 +42,50 @@ export interface Reminder {
 
 export interface Property {
   id: string;
+  userId: string;
   name: string;
   type: string;
   area: string;
   price: string;
+  priceNumeric: number;
   location: string;
   description: string;
   image: string;
   clientPhone?: string;
   clientName?: string;
+  project?: string;
+  compound?: string;
+  floor?: string;
+  rooms?: string;
+  bathrooms?: string;
+  finishing: 'fully-finished' | 'semi-finished' | 'core-and-shell';
+  delivery: 'immediate' | 'delayed';
   createdAt: string;
 }
 
 export interface DailyFeedback {
   id: string;
+  userId: string;
   clientPhone: string;
   clientName: string;
   date: string;
   feedback: string;
   callStatus: 'called' | 'no-answer' | 'busy' | 'not-called';
+  duration?: string;
+  nextAction?: string;
   createdAt: string;
 }
 
-export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback';
+export interface Task {
+  id: string;
+  userId: string;
+  title: string;
+  description: string;
+  dueDate: string;
+  priority: 'high' | 'medium' | 'low';
+  status: 'pending' | 'in-progress' | 'completed';
+  assignedTo?: string;
+  createdAt: string;
+}
+
+export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'tasks' | 'reminders' | 'daily-feedback' | 'reports';
