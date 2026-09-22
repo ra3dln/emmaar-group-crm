@@ -1139,7 +1139,7 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
                 onMarkViewed(lead.id);
               }
             }}
-            className={`glass-card rounded-2xl p-4 ${lead.status === 'new' ? 'cursor-pointer border-2 border-blue-500/30' : ''}`}
+            className={`glass-card rounded-2xl p-4 ${lead.status === 'new' ? 'cursor-pointer border-2 border-blue-500/30 hover:border-blue-500/50' : ''}`}
           >
             <div className="flex items-start justify-between">
               <div className="flex-1">
@@ -1151,41 +1151,29 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
                 </p>
               </div>
               <div className="flex flex-col gap-2 items-end">
-                {/* لو الرقم جديد - يظهر "رقم جديد" فقط */}
                 {lead.status === 'new' && (
-                  <span className="text-xs px-3 py-1 rounded-full bg-blue-500/20 text-blue-400 animate-pulse">
+                  <span className="text-sm px-4 py-2 rounded-full bg-blue-500/20 text-blue-400 font-bold animate-pulse">
                     رقم جديد
                   </span>
                 )}
                 
-                {/* لو الرقم اتشوف - يظهر "تم العرض" فقط */}
                 {lead.status === 'viewed' && (
-                  <span className="text-xs px-3 py-1 rounded-full bg-purple-500/20 text-purple-400">
+                  <span className="text-sm px-4 py-2 rounded-full bg-purple-500/20 text-purple-400 font-bold">
                     تم العرض
                   </span>
                 )}
                 
-                {/* لو تم التواصل */}
                 {lead.status === 'contacted' && (
-                  <span className="text-xs px-3 py-1 rounded-full bg-amber-500/20 text-amber-400">
+                  <span className="text-sm px-4 py-2 rounded-full bg-amber-500/20 text-amber-400 font-bold">
                     تم التواصل
                   </span>
                 )}
                 
-                {/* لو مغلق */}
                 {lead.status === 'closed' && (
-                  <span className="text-xs px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400">
+                  <span className="text-sm px-4 py-2 rounded-full bg-emerald-500/20 text-emerald-400 font-bold">
                     مغلق
                   </span>
                 )}
-                
-                <a 
-                  href={`tel:${lead.phone}`}
-                  onClick={(e) => e.stopPropagation()}
-                  className="bg-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg font-bold text-sm text-center hover:bg-emerald-500/30 transition-colors"
-                >
-                  اتصال
-                </a>
               </div>
             </div>
           </motion.div>
