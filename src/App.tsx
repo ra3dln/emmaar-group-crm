@@ -1142,8 +1142,9 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
                   {formatDateTime(lead.createdAt)}
                 </p>
               </div>
-              <div className="flex flex-col gap-2">
-                {lead.status === 'new' ? (
+              <div className="flex flex-col gap-2 items-end">
+                {/* لو الرقم جديد - يظهر "رقم جديد" + زرار "تم العرض" */}
+                {lead.status === 'new' && (
                   <>
                     <span className="text-xs px-3 py-1 rounded-full bg-blue-500/20 text-blue-400">
                       رقم جديد
@@ -1155,16 +1156,29 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
                       تم العرض
                     </button>
                   </>
-                ) : (
-                  <span className={`text-xs px-3 py-1 rounded-full ${
-                    lead.status === 'viewed' ? 'bg-purple-500/20 text-purple-400' :
-                    lead.status === 'contacted' ? 'bg-amber-500/20 text-amber-400' :
-                    'bg-emerald-500/20 text-emerald-400'
-                  }`}>
-                    {lead.status === 'viewed' ? 'تم العرض' :
-                     lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
+                )}
+                
+                {/* لو الرقم اتشوف - يظهر "تم العرض" فقط */}
+                {lead.status === 'viewed' && (
+                  <span className="text-xs px-3 py-1 rounded-full bg-purple-500/20 text-purple-400">
+                    تم العرض
                   </span>
                 )}
+                
+                {/* لو تم التواصل */}
+                {lead.status === 'contacted' && (
+                  <span className="text-xs px-3 py-1 rounded-full bg-amber-500/20 text-amber-400">
+                    تم التواصل
+                  </span>
+                )}
+                
+                {/* لو مغلق */}
+                {lead.status === 'closed' && (
+                  <span className="text-xs px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400">
+                    مغلق
+                  </span>
+                )}
+                
                 <a 
                   href={`tel:${lead.phone}`}
                   className="bg-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg font-bold text-sm text-center hover:bg-emerald-500/30 transition-colors"
