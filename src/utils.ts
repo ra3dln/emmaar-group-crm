@@ -1,4 +1,4 @@
-import { Client, Reminder, Property, DailyFeedback, User } from './types';
+import { Client, Reminder, Property, DailyFeedback, User, Team } from './types';
 
 const CLIENTS_KEY = 'crm_clients';
 const REMINDERS_KEY = 'crm_reminders';
@@ -232,7 +232,7 @@ export function addUser(user: Omit<User, 'id' | 'createdAt'>): User {
   return newUser;
 }
 
-export function updateUser(id: string,  Partial<User>): void {
+export function updateUser(id: string, data: Partial<User>): void {
   const users = getUsers();
   const updated = users.map(u => u.id === id ? { ...u, ...data } : u);
   saveUsers(updated);
@@ -307,7 +307,7 @@ export function addTeam(team: Omit<Team, 'id' | 'createdAt'>): Team {
   return newTeam;
 }
 
-export function updateTeam(id: string,  Partial<Team>): void {
+export function updateTeam(id: string, data: Partial<Team>): void {
   const teams = getTeams();
   const updated = teams.map(t => t.id === id ? { ...t, ...data } : t);
   saveTeams(updated);

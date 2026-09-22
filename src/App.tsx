@@ -9,14 +9,19 @@ import {
   LogOut, TrendingUp, DollarSign, Filter,
   BarChart3, PieChart, Activity, FileText
 } from 'lucide-react';
-import { Client, Reminder, Property, DailyFeedback, Task, User, TabType } from './types';
+import { Client, Reminder, Property, DailyFeedback, Task, User, Team, TabType } from './types';
 import { 
   getClients, saveClients, getReminders, saveReminders,
   getProperties, saveProperties, getDailyFeedbacks, saveDailyFeedbacks,
   requestNotificationPermission, sendNotification, vibrateDevice,
   formatDateTime, isReminderDue, getTimeUntil,
   getNotifiedReminders, addNotifiedReminder, playNotificationSound,
-  formatPrice, parsePrice
+  formatPrice, parsePrice,
+  getUsers, addUser, updateUser, deleteUser, getUserById,
+  getTeams, addTeam, updateTeam, deleteTeam,
+  assignClientToUser, assignClientsToUser, distributeClientsEqually,
+  getUserStats, getTeamStats, getAllUsersStats,
+  isAdmin, isSupervisor, canManageUsers, canViewAllData
 } from './utils';
 
 function App() {
@@ -26,12 +31,19 @@ function App() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [dailyFeedbacks, setDailyFeedbacks] = useState<DailyFeedback[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [showAddClient, setShowAddClient] = useState(false);
   const [showAddReminder, setShowAddReminder] = useState(false);
   const [showAddProperty, setShowAddProperty] = useState(false);
   const [showAddFeedback, setShowAddFeedback] = useState(false);
+  const [showAddUser, setShowAddUser] = useState(false);
+  const [showAddTeam, setShowAddTeam] = useState(false);
+  const [showAssignClients, setShowAssignClients] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [propertySearch, setPropertySearch] = useState('');
   const [showPermissionModal, setShowPermissionModal] = useState(false);
@@ -83,10 +95,27 @@ function App() {
   // Load data
   useEffect(() => {
     if (!currentUser) return;
-    setClients(getClients().filter(c => c.userId === currentUser.id));
-    setReminders(getReminders().filter(r => r.userId === currentUser.id));
-    setProperties(getProperties().filter(p => p.userId === currentUser.id));
-    setDailyFeedbacks(getDailyFeedbacks().filter(f => f.userId === currentUser.id));
+    
+    // Load user-specific data based on role
+    if (isAdmin(currentUser) || isSupervisor(currentUser)) {
+      // Admin/Supervisor can see all data
+      setClients(getClients());
+      setReminders(getReminders());
+      setProperties(getProperties());
+      setDailyFeedbacks(getDailyFeedbacks());
+    } else {
+      // Regular sales can only see their own data
+      setClients(getClients().filter(c => c.userId === currentUser.id || c.assignedTo === currentUser.id));
+      setReminders(getReminders().filter(r => r.userId === currentUser.id));
+      setProperties(getProperties().filter(p => p.userId === currentUser.id));
+      setDailyFeedbacks(getDailyFeedbacks().filter(f => f.userId === currentUser.id));
+    }
+    
+    // Load users and teams for admin/supervisor
+    if (canManageUsers(currentUser)) {
+      setUsers(getUsers());
+      setTeams(getTeams());
+    }
   }, [currentUser]);
 
   // Check reminders every 5 seconds
@@ -247,6 +276,76 @@ function App() {
     return textMatch || priceMatch;
   });
 
+  // User Management Functions
+  const handleAddUser = useCallback((userData: Omit<User, 'id' | 'createdAt' | 'createdBy'>) => {
+    if (!currentUser || !canManageUsers(currentUser)) return;
+    
+    const newUser = addUser({
+      ...userData,
+      createdBy: currentUser.id,
+      isActive: true,
+    });
+    
+    setUsers([...users, newUser]);
+    setShowAddUser(false);
+  }, [currentUser, users]);
+
+  const handleUpdateUser = useCallback((id: string, data: Partial<User>) => {
+    updateUser(id, data);
+    setUsers(getUsers());
+    setSelectedUser(null);
+  }, []);
+
+  const handleDeleteUser = useCallback((id: string) => {
+    deleteUser(id);
+    setUsers(getUsers());
+    setSelectedUser(null);
+  }, []);
+
+  // Team Management Functions
+  const handleAddTeam = useCallback((teamData: Omit<Team, 'id' | 'createdAt' | 'createdBy'>) => {
+    if (!currentUser || !canManageUsers(currentUser)) return;
+    
+    const newTeam = addTeam({
+      ...teamData,
+      createdBy: currentUser.id,
+    });
+    
+    setTeams([...teams, newTeam]);
+    setShowAddTeam(false);
+  }, [currentUser, teams]);
+
+  const handleUpdateTeam = useCallback((id: string, data: Partial<Team>) => {
+    updateTeam(id, data);
+    setTeams(getTeams());
+    setSelectedTeam(null);
+  }, []);
+
+  const handleDeleteTeam = useCallback((id: string) => {
+    deleteTeam(id);
+    setTeams(getTeams());
+    setSelectedTeam(null);
+  }, []);
+
+  // Client Assignment Functions
+  const handleAssignClient = useCallback((clientId: string, userId: string) => {
+    assignClientToUser(clientId, userId);
+    setClients(getClients());
+    setShowAssignClients(false);
+  }, []);
+
+  const handleAssignMultipleClients = useCallback((clientIds: string[], userId: string) => {
+    assignClientsToUser(clientIds, userId);
+    setClients(getClients());
+    setShowAssignClients(false);
+  }, []);
+
+  const handleDistributeClients = useCallback((clientIds: string[], userIds: string[]) => {
+    distributeClientsEqually(clientIds, userIds);
+    setClients(getClients());
+    setShowAssignClients(false);
+  }, []);
+
   const activeReminders = reminders.filter(r => !r.isCompleted);
   const dueReminders = reminders.filter(r => isReminderDue(r));
   
@@ -379,6 +478,9 @@ function App() {
               { id: 'reminders' as TabType, icon: Bell, label: 'التذكيرات' },
               { id: 'daily-feedback' as TabType, icon: MessageSquare, label: 'الفيدباك' },
               { id: 'reports' as TabType, icon: BarChart3, label: 'التقارير' },
+              { id: 'admin-users' as TabType, icon: Users, label: 'إدارة المستخدمين' },
+              { id: 'admin-teams' as TabType, icon: Users, label: 'الفرق' },
+              { id: 'admin-settings' as TabType, icon: Edit3, label: 'الإعدادات' },
             ].map((tab, i) => (
               <motion.button key={tab.id}
                 initial={{ opacity: 0, y: -10 }}
@@ -457,6 +559,35 @@ function App() {
               <ReportsView stats={stats} clients={clients} properties={properties} feedbacks={dailyFeedbacks} />
             </motion.div>
           )}
+
+          {activeTab === 'admin-users' && canManageUsers(currentUser) && (
+            <motion.div key="admin-users" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
+              <AdminUsersView 
+                users={users} 
+                currentUser={currentUser}
+                onSelect={setSelectedUser}
+                onAdd={() => setShowAddUser(true)}
+              />
+            </motion.div>
+          )}
+
+          {activeTab === 'admin-teams' && canManageUsers(currentUser) && (
+            <motion.div key="admin-teams" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
+              <AdminTeamsView 
+                teams={teams}
+                users={users}
+                currentUser={currentUser}
+                onSelect={setSelectedTeam}
+                onAdd={() => setShowAddTeam(true)}
+              />
+            </motion.div>
+          )}
+
+          {activeTab === 'admin-settings' && canManageUsers(currentUser) && (
+            <motion.div key="admin-settings" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
+              <AdminSettingsView currentUser={currentUser} />
+            </motion.div>
+          )}
         </AnimatePresence>
       </main>
 
@@ -489,6 +620,38 @@ function App() {
               saveDailyFeedbacks([newFeedback, ...getDailyFeedbacks()]);
               setShowAddFeedback(false);
             }} />
+        )}
+        {showAddUser && (
+          <AddUserModal 
+            onClose={() => setShowAddUser(false)} 
+            onAdd={handleAddUser} 
+          />
+        )}
+        {showAddTeam && (
+          <AddTeamModal 
+            users={users}
+            onClose={() => setShowAddTeam(false)} 
+            onAdd={handleAddTeam} 
+          />
+        )}
+        {selectedUser && (
+          <UserDetailModal 
+            user={selectedUser}
+            currentUser={currentUser}
+            onClose={() => setSelectedUser(null)}
+            onUpdate={handleUpdateUser}
+            onDelete={handleDeleteUser}
+          />
+        )}
+        {selectedTeam && (
+          <TeamDetailModal 
+            team={selectedTeam}
+            users={users}
+            currentUser={currentUser}
+            onClose={() => setSelectedTeam(null)}
+            onUpdate={handleUpdateTeam}
+            onDelete={handleDeleteTeam}
+          />
         )}
       </AnimatePresence>
     </div>
@@ -1276,6 +1439,274 @@ function ReportsView({ stats, clients, properties, feedbacks }: {
   );
 }
 
+// Admin Users View
+function AdminUsersView({ users, currentUser, onSelect, onAdd }: {
+  users: User[];
+  currentUser: User;
+  onSelect: (user: User) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+          <Users className="w-6 h-6" />
+          إدارة المستخدمين
+        </h2>
+        {canManageUsers(currentUser) && (
+          <motion.button
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={onAdd}
+            className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover"
+          >
+            <Plus className="w-4 h-4" />
+            إضافة مستخدم
+          </motion.button>
+        )}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {users.map((user, i) => (
+          <motion.div
+            key={user.id}
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.05 }}
+            whileHover={{ scale: 1.02, y: -5 }}
+            onClick={() => onSelect(user)}
+            className="glass-card rounded-2xl p-5 cursor-pointer card-hover animated-border"
+          >
+            <div className="flex items-start justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center shadow-lg">
+                  <span className="text-white font-bold">{user.name[0]}</span>
+                </div>
+                <div>
+                  <h4 className="font-bold text-white">{user.name}</h4>
+                  <p className="text-sm text-gray-400">@{user.username}</p>
+                </div>
+              </div>
+              <span className={`text-xs px-2.5 py-1 rounded-full ${
+                user.role === 'admin' ? 'bg-red-500/20 text-red-400' :
+                user.role === 'supervisor' ? 'bg-amber-500/20 text-amber-400' :
+                'bg-blue-500/20 text-blue-400'
+              }`}>
+                {user.role === 'admin' ? 'مدير' : user.role === 'supervisor' ? 'مشرف' : 'بائع'}
+              </span>
+            </div>
+            <div className="space-y-2 text-sm">
+              {user.phone && (
+                <p className="text-gray-300 flex items-center gap-2">
+                  <Phone className="w-4 h-4 text-purple-400" />
+                  <span dir="ltr">{user.phone}</span>
+                </p>
+              )}
+              {user.team && (
+                <p className="text-gray-300 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-purple-400" />
+                  الفريق: {user.team}
+                </p>
+              )}
+              <p className={`text-xs ${user.isActive ? 'text-emerald-400' : 'text-red-400'}`}>
+                {user.isActive ? '✓ نشط' : '✗ معطل'}
+              </p>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+
+      {users.length === 0 && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="text-center py-16"
+        >
+          <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          <p className="text-gray-400 text-lg">لا يوجد مستخدمين</p>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+// Admin Teams View
+function AdminTeamsView({ teams, users, currentUser, onSelect, onAdd }: {
+  teams: Team[];
+  users: User[];
+  currentUser: User;
+  onSelect: (team: Team) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+          <Users className="w-6 h-6" />
+          إدارة الفرق
+        </h2>
+        {canManageUsers(currentUser) && (
+          <motion.button
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={onAdd}
+            className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover"
+          >
+            <Plus className="w-4 h-4" />
+            إضافة فريق
+          </motion.button>
+        )}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        {teams.map((team, i) => {
+          const supervisor = users.find(u => u.id === team.supervisorId);
+          const members = users.filter(u => team.memberIds.includes(u.id));
+          
+          return (
+            <motion.div
+              key={team.id}
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.05 }}
+              whileHover={{ scale: 1.02, y: -5 }}
+              onClick={() => onSelect(team)}
+              className="glass-card rounded-2xl p-5 cursor-pointer card-hover animated-border"
+            >
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 gradient-accent rounded-full flex items-center justify-center shadow-lg">
+                    <Users className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-white">{team.name}</h4>
+                    <p className="text-sm text-gray-400">
+                      المشرف: {supervisor?.name || 'غير محدد'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-2 text-sm">
+                <p className="text-gray-300 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-purple-400" />
+                  عدد الأعضاء: {members.length}
+                </p>
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {members.slice(0, 5).map(member => (
+                    <span key={member.id} className="text-xs bg-purple-500/20 text-purple-400 px-2 py-1 rounded-full">
+                      {member.name}
+                    </span>
+                  ))}
+                  {members.length > 5 && (
+                    <span className="text-xs bg-white/10 text-gray-400 px-2 py-1 rounded-full">
+                      +{members.length - 5}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+
+      {teams.length === 0 && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="text-center py-16"
+        >
+          <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          <p className="text-gray-400 text-lg">لا يوجد فرق</p>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+// Admin Settings View
+function AdminSettingsView({ currentUser }: { currentUser: User }) {
+  const handleExportData = () => {
+    const data = {
+      clients: getClients(),
+      reminders: getReminders(),
+      properties: getProperties(),
+      feedbacks: getDailyFeedbacks(),
+      users: getUsers(),
+      teams: getTeams(),
+      exportDate: new Date().toISOString(),
+    };
+    
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `crm-backup-${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+        <Edit3 className="w-6 h-6" />
+        إعدادات النظام
+      </h2>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="glass-card rounded-2xl p-6"
+        >
+          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+            <FileText className="w-5 h-5 text-purple-400" />
+            النسخ الاحتياطي
+          </h3>
+          <p className="text-gray-400 text-sm mb-4">
+            تصدير جميع البيانات كملف JSON للنسخ الاحتياطي
+          </p>
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={handleExportData}
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold btn-hover"
+          >
+            تصدير البيانات
+          </motion.button>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="glass-card rounded-2xl p-6"
+        >
+          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+            <Activity className="w-5 h-5 text-purple-400" />
+            معلومات النظام
+          </h3>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-gray-400">الإصدار:</span>
+              <span className="text-white">1.0.0</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">المستخدم الحالي:</span>
+              <span className="text-white">{currentUser.name}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">الدور:</span>
+              <span className="text-white">
+                {currentUser.role === 'admin' ? 'مدير' : currentUser.role === 'supervisor' ? 'مشرف' : 'بائع'}
+              </span>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+
 // Status Badge
 function StatusBadge({ status }: { status: Client['status'] }) {
   const getStatusInfo = () => {
@@ -1890,6 +2321,437 @@ function AddFeedbackModal({ clients, onClose, onAdd }: {
             إضافة الفيدباك 📝
           </motion.button>
         </form>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Add User Modal
+function AddUserModal({ onClose, onAdd }: {
+  onClose: () => void;
+  onAdd: (user: Omit<User, 'id' | 'createdAt' | 'createdBy'>) => void;
+}) {
+  const [form, setForm] = useState({
+    username: '',
+    password: '',
+    name: '',
+    phone: '',
+    role: 'sales' as User['role'],
+    team: '',
+    isActive: true,
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.username || !form.password || !form.name) return;
+    onAdd(form);
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+            <UserPlus className="w-6 h-6" /> إضافة مستخدم جديد
+          </h2>
+          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+            <X className="w-5 h-5 text-gray-400" />
+          </motion.button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">الاسم الكامل *</label>
+            <input type="text" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الاسم الكامل" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">اسم المستخدم *</label>
+            <input type="text" required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم المستخدم" dir="ltr" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">كلمة المرور *</label>
+            <input type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="كلمة المرور" dir="ltr" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">رقم الهاتف</label>
+            <input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">الدور *</label>
+            <select required value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as User['role'] })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+              <option value="sales" className="bg-gray-900">بائع</option>
+              <option value="supervisor" className="bg-gray-900">مشرف</option>
+              <option value="admin" className="bg-gray-900">مدير</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">الفريق</label>
+            <input type="text" value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم الفريق (اختياري)" />
+          </div>
+          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
+            إضافة المستخدم ✨
+          </motion.button>
+        </form>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Add Team Modal
+function AddTeamModal({ users, onClose, onAdd }: {
+  users: User[];
+  onClose: () => void;
+  onAdd: (team: Omit<Team, 'id' | 'createdAt' | 'createdBy'>) => void;
+}) {
+  const [form, setForm] = useState({
+    name: '',
+    supervisorId: '',
+    supervisorName: '',
+    memberIds: [] as string[],
+  });
+
+  const handleSupervisorSelect = (supervisorId: string) => {
+    const supervisor = users.find(u => u.id === supervisorId);
+    if (supervisor) {
+      setForm({ ...form, supervisorId, supervisorName: supervisor.name });
+    }
+  };
+
+  const handleMemberToggle = (userId: string) => {
+    const memberIds = form.memberIds.includes(userId)
+      ? form.memberIds.filter(id => id !== userId)
+      : [...form.memberIds, userId];
+    setForm({ ...form, memberIds });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name || !form.supervisorId) return;
+    onAdd(form);
+  };
+
+  const salesUsers = users.filter(u => u.role === 'sales');
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+            <Users className="w-6 h-6" /> إضافة فريق جديد
+          </h2>
+          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+            <X className="w-5 h-5 text-gray-400" />
+          </motion.button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">اسم الفريق *</label>
+            <input type="text" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم الفريق" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">المشرف *</label>
+            <select required value={form.supervisorId} onChange={(e) => handleSupervisorSelect(e.target.value)}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+              <option value="" className="bg-gray-900">اختر المشرف</option>
+              {users.filter(u => u.role === 'supervisor' || u.role === 'admin').map(u => (
+                <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">الأعضاء</label>
+            <div className="space-y-2 max-h-48 overflow-y-auto bg-white/5 rounded-xl p-3">
+              {salesUsers.map(user => (
+                <label key={user.id} className="flex items-center gap-2 cursor-pointer hover:bg-white/5 p-2 rounded-lg transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={form.memberIds.includes(user.id)}
+                    onChange={() => handleMemberToggle(user.id)}
+                    className="w-4 h-4 rounded"
+                  />
+                  <span className="text-white text-sm">{user.name}</span>
+                </label>
+              ))}
+              {salesUsers.length === 0 && (
+                <p className="text-gray-500 text-sm text-center py-2">لا يوجد بائعين</p>
+              )}
+            </div>
+          </div>
+          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
+            إضافة الفريق ✨
+          </motion.button>
+        </form>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// User Detail Modal
+function UserDetailModal({ user, currentUser, onClose, onUpdate, onDelete }: {
+  user: User;
+  currentUser: User;
+  onClose: () => void;
+  onUpdate: (id: string, data: Partial<User>) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({
+    name: user.name,
+    phone: user.phone || '',
+    role: user.role,
+    team: user.team || '',
+    isActive: user.isActive,
+  });
+
+  const handleSave = () => {
+    onUpdate(user.id, form);
+    setEditing(false);
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text">تفاصيل المستخدم</h2>
+          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+            <X className="w-5 h-5 text-gray-400" />
+          </motion.button>
+        </div>
+        <div className="flex items-center gap-4 mb-6">
+          <div className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg glow-primary">
+            <span className="text-white font-bold text-2xl">{user.name[0]}</span>
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-white">{user.name}</h3>
+            <p className="text-sm text-gray-400">@{user.username}</p>
+            <span className={`text-xs px-2.5 py-1 rounded-full mt-1 inline-block ${
+              user.role === 'admin' ? 'bg-red-500/20 text-red-400' :
+              user.role === 'supervisor' ? 'bg-amber-500/20 text-amber-400' :
+              'bg-blue-500/20 text-blue-400'
+            }`}>
+              {user.role === 'admin' ? 'مدير' : user.role === 'supervisor' ? 'مشرف' : 'بائع'}
+            </span>
+          </div>
+        </div>
+        {editing ? (
+          <div className="space-y-4">
+            <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الاسم" />
+            <input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الهاتف" dir="ltr" />
+            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as User['role'] })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+              <option value="sales" className="bg-gray-900">بائع</option>
+              <option value="supervisor" className="bg-gray-900">مشرف</option>
+              <option value="admin" className="bg-gray-900">مدير</option>
+            </select>
+            <input type="text" value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الفريق" />
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+                className="w-4 h-4 rounded" />
+              <span className="text-white">نشط</span>
+            </label>
+            <div className="flex gap-3">
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handleSave}
+                className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold btn-hover">حفظ ✓</motion.button>
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setEditing(false)}
+                className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors">إلغاء</motion.button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white/5 rounded-xl p-3">
+                <p className="text-xs text-gray-400">الهاتف</p>
+                <p className="text-white font-medium" dir="ltr">{user.phone || '-'}</p>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3">
+                <p className="text-xs text-gray-400">الفريق</p>
+                <p className="text-white font-medium">{user.team || '-'}</p>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3">
+                <p className="text-xs text-gray-400">الحالة</p>
+                <p className={`font-medium ${user.isActive ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {user.isActive ? '✓ نشط' : '✗ معطل'}
+                </p>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3">
+                <p className="text-xs text-gray-400">تاريخ الإنشاء</p>
+                <p className="text-white text-sm">{formatDateTime(user.createdAt)}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 pt-2">
+              {canManageUsers(currentUser) && (
+                <>
+                  <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={() => setEditing(true)}
+                    className="flex-1 flex items-center justify-center gap-2 bg-purple-500/20 text-purple-300 py-2.5 rounded-xl hover:bg-purple-500/30 transition-colors border border-purple-500/20">
+                    <Edit3 className="w-4 h-4" /> تعديل
+                  </motion.button>
+                  {user.id !== currentUser.id && (
+                    <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => onDelete(user.id)}
+                      className="flex items-center justify-center gap-2 bg-red-500/20 text-red-400 py-2.5 px-4 rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20">
+                      <Trash2 className="w-4 h-4" />
+                    </motion.button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Team Detail Modal
+function TeamDetailModal({ team, users, currentUser, onClose, onUpdate, onDelete }: {
+  team: Team;
+  users: User[];
+  currentUser: User;
+  onClose: () => void;
+  onUpdate: (id: string, data: Partial<Team>) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({
+    name: team.name,
+    supervisorId: team.supervisorId,
+    supervisorName: team.supervisorName,
+    memberIds: team.memberIds,
+  });
+
+  const handleSave = () => {
+    onUpdate(team.id, form);
+    setEditing(false);
+  };
+
+  const handleMemberToggle = (userId: string) => {
+    const memberIds = form.memberIds.includes(userId)
+      ? form.memberIds.filter(id => id !== userId)
+      : [...form.memberIds, userId];
+    setForm({ ...form, memberIds });
+  };
+
+  const supervisor = users.find(u => u.id === team.supervisorId);
+  const members = users.filter(u => team.memberIds.includes(u.id));
+  const salesUsers = users.filter(u => u.role === 'sales');
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text">تفاصيل الفريق</h2>
+          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+            <X className="w-5 h-5 text-gray-400" />
+          </motion.button>
+        </div>
+        <div className="flex items-center gap-4 mb-6">
+          <div className="w-16 h-16 gradient-accent rounded-full flex items-center justify-center shadow-lg glow-primary">
+            <Users className="w-8 h-8 text-white" />
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-white">{team.name}</h3>
+            <p className="text-sm text-gray-400">المشرف: {supervisor?.name || 'غير محدد'}</p>
+            <p className="text-sm text-gray-400">عدد الأعضاء: {members.length}</p>
+          </div>
+        </div>
+        {editing ? (
+          <div className="space-y-4">
+            <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم الفريق" />
+            <select value={form.supervisorId} onChange={(e) => {
+              const supervisor = users.find(u => u.id === e.target.value);
+              setForm({ ...form, supervisorId: e.target.value, supervisorName: supervisor?.name || '' });
+            }}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+              <option value="" className="bg-gray-900">اختر المشرف</option>
+              {users.filter(u => u.role === 'supervisor' || u.role === 'admin').map(u => (
+                <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
+              ))}
+            </select>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">الأعضاء</label>
+              <div className="space-y-2 max-h-48 overflow-y-auto bg-white/5 rounded-xl p-3">
+                {salesUsers.map(user => (
+                  <label key={user.id} className="flex items-center gap-2 cursor-pointer hover:bg-white/5 p-2 rounded-lg transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={form.memberIds.includes(user.id)}
+                      onChange={() => handleMemberToggle(user.id)}
+                      className="w-4 h-4 rounded"
+                    />
+                    <span className="text-white text-sm">{user.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handleSave}
+                className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold btn-hover">حفظ ✓</motion.button>
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setEditing(false)}
+                className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors">إلغاء</motion.button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="bg-white/5 rounded-xl p-4">
+              <p className="text-xs text-gray-400 mb-2">المشرف</p>
+              <p className="text-white font-medium">{supervisor?.name || 'غير محدد'}</p>
+            </div>
+            <div className="bg-white/5 rounded-xl p-4">
+              <p className="text-xs text-gray-400 mb-2">الأعضاء ({members.length})</p>
+              <div className="flex flex-wrap gap-2">
+                {members.map(member => (
+                  <span key={member.id} className="text-xs bg-purple-500/20 text-purple-400 px-2 py-1 rounded-full">
+                    {member.name}
+                  </span>
+                ))}
+                {members.length === 0 && (
+                  <p className="text-gray-500 text-sm">لا يوجد أعضاء</p>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 pt-2">
+              {canManageUsers(currentUser) && (
+                <>
+                  <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={() => setEditing(true)}
+                    className="flex-1 flex items-center justify-center gap-2 bg-purple-500/20 text-purple-300 py-2.5 rounded-xl hover:bg-purple-500/30 transition-colors border border-purple-500/20">
+                    <Edit3 className="w-4 h-4" /> تعديل
+                  </motion.button>
+                  <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => onDelete(team.id)}
+                    className="flex items-center justify-center gap-2 bg-red-500/20 text-red-400 py-2.5 px-4 rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20">
+                    <Trash2 className="w-4 h-4" /> حذف
+                  </motion.button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </motion.div>
     </motion.div>
   );
