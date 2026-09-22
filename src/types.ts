@@ -25,4 +25,30 @@ export interface Reminder {
   createdAt: string;
 }
 
-export type TabType = 'dashboard' | 'clients' | 'reminders' | 'add-client';
+export interface Property {
+  id: string;
+  name: string;
+  type: string;
+  location: string;
+  price: string;
+  area: string;
+  rooms: string;
+  bathrooms: string;
+  description: string;
+  clientPhone: string;
+  status: 'available' | 'reserved' | 'sold';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DailyFeedback {
+  id: string;
+  clientPhone: string;
+  clientName: string;
+  date: string;
+  feedback: string;
+  followUp: string;
+  createdAt: string;
+}
+
+export type TabType = 'dashboard' | 'clients' | 'properties' | 'feedback' | 'reminders';

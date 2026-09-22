@@ -1,8 +1,10 @@
-import { Client, Reminder } from './types';
+import { Client, Reminder, Property, DailyFeedback } from './types';
 
 const CLIENTS_KEY = 'crm_clients';
 const REMINDERS_KEY = 'crm_reminders';
 const NOTIFIED_KEY = 'crm_notified_reminders';
+const PROPERTIES_KEY = 'crm_properties';
+const DAILY_FEEDBACK_KEY = 'crm_daily_feedback';
 
 export function getClients(): Client[] {
   const data = localStorage.getItem(CLIENTS_KEY);
@@ -152,4 +154,24 @@ export function getTimeUntil(reminder: Reminder): string {
   if (days > 0) return `${days} يوم`;
   if (hours > 0) return `${hours} ساعة`;
   return `${minutes} دقيقة`;
+}
+
+// Properties functions
+export function getProperties(): Property[] {
+  const data = localStorage.getItem(PROPERTIES_KEY);
+  return data ? JSON.parse(data) : [];
+}
+
+export function saveProperties(properties: Property[]): void {
+  localStorage.setItem(PROPERTIES_KEY, JSON.stringify(properties));
+}
+
+// Daily Feedback functions
+export function getDailyFeedbacks(): DailyFeedback[] {
+  const data = localStorage.getItem(DAILY_FEEDBACK_KEY);
+  return data ? JSON.parse(data) : [];
+}
+
+export function saveDailyFeedbacks(feedbacks: DailyFeedback[]): void {
+  localStorage.setItem(DAILY_FEEDBACK_KEY, JSON.stringify(feedbacks));
 }

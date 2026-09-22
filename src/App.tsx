@@ -7,9 +7,10 @@ import {
   PhoneCall, UserPlus, Building2, Sparkles,
   Zap, Target, Award, Volume2, VolumeX
 } from 'lucide-react';
-import { Client, Reminder, TabType } from './types';
+import { Client, Reminder, Property, DailyFeedback, TabType } from './types';
 import { 
   getClients, saveClients, getReminders, saveReminders,
+  getProperties, saveProperties, getDailyFeedbacks, saveDailyFeedbacks,
   requestNotificationPermission, sendNotification, vibrateDevice,
   formatDateTime, isReminderDue, getTimeUntil,
   getNotifiedReminders, addNotifiedReminder, playNotificationSound
@@ -19,9 +20,14 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [clients, setClients] = useState<Client[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [dailyFeedbacks, setDailyFeedbacks] = useState<DailyFeedback[]>([]);
   const [showAddClient, setShowAddClient] = useState(false);
   const [showAddReminder, setShowAddReminder] = useState(false);
+  const [showAddProperty, setShowAddProperty] = useState(false);
+  const [showAddFeedback, setShowAddFeedback] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+  const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState(false);
@@ -59,6 +65,8 @@ function App() {
   useEffect(() => {
     setClients(getClients());
     setReminders(getReminders());
+    setProperties(getProperties());
+    setDailyFeedbacks(getDailyFeedbacks());
   }, []);
 
   // Check reminders every 5 seconds
@@ -188,6 +196,52 @@ function App() {
     setReminders(updated);
     saveReminders(updated);
   }, [reminders]);
+
+  const addProperty = useCallback((property: Omit<Property, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const newProperty: Property = {
+      ...property,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const updated = [newProperty, ...properties];
+    setProperties(updated);
+    saveProperties(updated);
+    setShowAddProperty(false);
+  }, [properties]);
+
+  const updateProperty = useCallback((id: string,  Partial<Property>) => {
+    const updated = properties.map(p => 
+      p.id === id ? { ...p, ...data, updatedAt: new Date().toISOString() } : p
+    );
+    setProperties(updated);
+    saveProperties(updated);
+    setSelectedProperty(null);
+  }, [properties]);
+
+  const deleteProperty = useCallback((id: string) => {
+    const updated = properties.filter(p => p.id !== id);
+    setProperties(updated);
+    saveProperties(updated);
+  }, [properties]);
+
+  const addDailyFeedback = useCallback((feedback: Omit<DailyFeedback, 'id' | 'createdAt'>) => {
+    const newFeedback: DailyFeedback = {
+      ...feedback,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+    };
+    const updated = [newFeedback, ...dailyFeedbacks];
+    setDailyFeedbacks(updated);
+    saveDailyFeedbacks(updated);
+    setShowAddFeedback(false);
+  }, [dailyFeedbacks]);
+
+  const deleteDailyFeedback = useCallback((id: string) => {
+    const updated = dailyFeedbacks.filter(f => f.id !== id);
+    setDailyFeedbacks(updated);
+    saveDailyFeedbacks(updated);
+  }, [dailyFeedbacks]);
 
   const filteredClients = clients.filter(c => 
     c.name.includes(searchTerm) || 
