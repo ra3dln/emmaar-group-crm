@@ -10,7 +10,7 @@ import {
   BarChart3, PieChart, Activity, FileText,
   Shield, UserCheck, Settings
 } from 'lucide-react';
-import { Client, Reminder, Property, DailyFeedback, User, Team, TabType } from './types';
+import { Client, Reminder, Property, DailyFeedback, User, Team, AssignedLead, TabType } from './types';
 
 // Initialize default admin account
 const initializeSystem = () => {
@@ -181,6 +181,8 @@ function App() {
   const [dailyFeedbacks, setDailyFeedbacks] = useState<DailyFeedback[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [assignedLeads, setAssignedLeads] = useState<AssignedLead[]>([]);
+  const [selectedUserFeedback, setSelectedUserFeedback] = useState<User | null>(null);
   
   const [showAddClient, setShowAddClient] = useState(false);
   const [showAddReminder, setShowAddReminder] = useState(false);
@@ -188,6 +190,7 @@ function App() {
   const [showAddFeedback, setShowAddFeedback] = useState(false);
   const [showAddUser, setShowAddUser] = useState(false);
   const [showAddTeam, setShowAddTeam] = useState(false);
+  const [showAddAssignedLead, setShowAddAssignedLead] = useState(false);
   
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
@@ -264,9 +267,11 @@ function App() {
     const allFeedbacks = JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]');
     const allUsers = JSON.parse(localStorage.getItem('crm_users') || '[]');
     const allTeams = JSON.parse(localStorage.getItem('crm_teams') || '[]');
+    const allAssignedLeads = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
     
     setUsers(allUsers);
     setTeams(allTeams);
+    setAssignedLeads(allAssignedLeads);
     
     if (currentUser.role === 'admin') {
       setClients(allClients);
@@ -509,8 +514,12 @@ function App() {
             setDailyFeedbacks(dailyFeedbacks.filter(f => f.id !== id));
             localStorage.setItem('crm_daily_feedback', JSON.stringify(JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]').filter((f: DailyFeedback) => f.id !== id)));
           }} onAdd={() => setShowAddFeedback(true)} />}
+          {activeTab === 'assigned-leads' && <AssignedLeadsView assignedLeads={currentUser.role === 'admin' ? assignedLeads : assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} currentUser={currentUser} users={users} onAdd={() => setShowAddAssignedLead(true)} onDelete={(id: string) => {
+            setAssignedLeads(assignedLeads.filter(l => l.id !== id));
+            localStorage.setItem('crm_assigned_leads', JSON.stringify(assignedLeads.filter(l => l.id !== id)));
+          }} />}
           {activeTab === 'reports' && <ReportsView stats={stats} clients={clients} properties={properties} feedbacks={dailyFeedbacks} />}
-          {activeTab === 'admin-users' && currentUser.role !== 'sales' && <AdminUsersView users={users} currentUser={currentUser} onSelect={setSelectedUser} onAdd={() => setShowAddUser(true)} />}
+          {activeTab === 'admin-users' && currentUser.role !== 'sales' && <AdminUsersView users={users} currentUser={currentUser} onSelect={setSelectedUserFeedback} onAdd={() => setShowAddUser(true)} />}
           {activeTab === 'admin-teams' && currentUser.role !== 'sales' && <AdminTeamsView teams={teams} users={users} currentUser={currentUser} onSelect={setSelectedTeam} onAdd={() => setShowAddTeam(true)} />}
           {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} users={users} />}
         </AnimatePresence>
@@ -523,6 +532,8 @@ function App() {
         {showAddFeedback && <AddFeedbackModal clients={clients} currentUser={currentUser} onClose={() => setShowAddFeedback(false)} onSuccess={loadData} />}
         {showAddUser && <AddUserModal currentUser={currentUser} onClose={() => setShowAddUser(false)} onSuccess={loadData} />}
         {showAddTeam && <AddTeamModal users={users} currentUser={currentUser} onClose={() => setShowAddTeam(false)} onSuccess={loadData} />}
+        {showAddAssignedLead && <AddAssignedLeadModal users={users} currentUser={currentUser} onClose={() => setShowAddAssignedLead(false)} onSuccess={loadData} />}
+        {selectedUserFeedback && <UserFeedbackModal user={selectedUserFeedback} feedbacks={dailyFeedbacks.filter((f: DailyFeedback) => f.userId === selectedUserFeedback.id)} onClose={() => setSelectedUserFeedback(null)} />}
         {selectedClient && <ClientDetailModal client={selectedClient} onClose={() => setSelectedClient(null)} onSuccess={loadData} />}
         {selectedProperty && <PropertyDetailModal property={selectedProperty} onClose={() => setSelectedProperty(null)} onSuccess={loadData} />}
         {selectedUser && <UserDetailModal user={selectedUser} currentUser={currentUser} onClose={() => setSelectedUser(null)} onSuccess={loadData} />}
@@ -540,6 +551,7 @@ function getNavigationTabs(role: string) {
     { id: 'properties' as TabType, icon: Building2, label: 'العقارات' },
     { id: 'reminders' as TabType, icon: Bell, label: 'التذكيرات' },
     { id: 'daily-feedback' as TabType, icon: MessageSquare, label: 'الفيدباك' },
+    { id: 'assigned-leads' as TabType, icon: UserPlus, label: 'أرقام جديدة' },
     { id: 'reports' as TabType, icon: BarChart3, label: 'التقارير' },
   ];
   
@@ -613,7 +625,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
               className="w-full bg-white/10 text-white py-4 rounded-xl font-bold text-lg hover:bg-white/20 transition-colors border border-white/10 flex items-center justify-center gap-3"
             >
               <UserCheck className="w-6 h-6" />
-              دخول البائعين
+              دخول السيلز
             </button>
           </div>
           
@@ -637,7 +649,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
             {loginType === 'admin' ? <Shield className="w-10 h-10 text-white" /> : <UserCheck className="w-10 h-10 text-white" />}
           </div>
           <h1 className="text-2xl font-bold gradient-text mb-2">
-            {loginType === 'admin' ? 'دخول الإدارة' : 'دخول البائعين'}
+            {loginType === 'admin' ? 'دخول الإدارة' : 'دخول السيلز'}
           </h1>
         </div>
         
@@ -770,6 +782,15 @@ function ClientsView({ clients, searchTerm, onSearch, onSelect, onAdd }: any) {
                 <div>
                   <h4 className="font-bold text-white">{client.name}</h4>
                   <p className="text-sm text-gray-400" dir="ltr">{client.phone}</p>
+                  {client.phones && client.phones.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {client.phones.map((phone, index) => (
+                        <span key={index} className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full" dir="ltr">
+                          {phone}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
               <StatusBadge status={client.status} />
@@ -972,14 +993,14 @@ function ReportsView({ stats, clients, properties, feedbacks }: any) {
   );
 }
 
-// Admin Users View
+// Admin Users View - Simplified
 function AdminUsersView({ users, currentUser, onSelect, onAdd }: any) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold gradient-text">إدارة المستخدمين</h2>
+        <h2 className="text-xl font-bold gradient-text">فريق العمل</h2>
         <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
-          <Plus className="w-4 h-4" /> إضافة مستخدم
+          <Plus className="w-4 h-4" /> إضافة سيلز
         </button>
       </div>
 
@@ -993,19 +1014,71 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd }: any) {
               </div>
               <div className="flex-1">
                 <h4 className="font-bold text-white">{user.name}</h4>
-                <p className="text-sm text-gray-400">@{user.username}</p>
+                <p className="text-sm text-gray-400">{user.role === 'admin' ? 'مدير' : user.role === 'supervisor' ? 'مشرف' : 'سيلز'}</p>
               </div>
-              <span className={`text-xs px-2 py-1 rounded-full ${
-                user.role === 'admin' ? 'bg-red-500/20 text-red-400' :
-                user.role === 'supervisor' ? 'bg-amber-500/20 text-amber-400' :
-                'bg-blue-500/20 text-blue-400'
-              }`}>
-                {user.role === 'admin' ? 'مدير' : user.role === 'supervisor' ? 'مشرف' : 'بائع'}
-              </span>
             </div>
           </motion.div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// Assigned Leads View - For Sales
+function AssignedLeadsView({ assignedLeads, currentUser, users, onAdd, onDelete }: any) {
+  const isAdmin = currentUser.role === 'admin' || currentUser.role === 'supervisor';
+  
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold gradient-text">أرقام جديدة</h2>
+        {isAdmin && (
+          <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
+            <Plus className="w-4 h-4" /> إضافة رقم
+          </button>
+        )}
+      </div>
+
+      <div className="space-y-3">
+        {assignedLeads.map((lead: AssignedLead) => (
+          <motion.div key={lead.id} whileHover={{ scale: 1.01 }}
+            className="glass-card rounded-2xl p-4">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <h4 className="font-bold text-white text-lg">{lead.name}</h4>
+                <p className="text-purple-400" dir="ltr">{lead.phone}</p>
+                {lead.description && <p className="text-sm text-gray-400 mt-2">{lead.description}</p>}
+                {isAdmin && (
+                  <p className="text-xs text-gray-500 mt-2">
+                    مخصص لـ: {users.find((u: User) => u.id === lead.salesId)?.name || 'غير محدد'}
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <span className={`text-xs px-2 py-1 rounded-full ${
+                  lead.status === 'new' ? 'bg-blue-500/20 text-blue-400' :
+                  lead.status === 'contacted' ? 'bg-amber-500/20 text-amber-400' :
+                  'bg-emerald-500/20 text-emerald-400'
+                }`}>
+                  {lead.status === 'new' ? 'جديد' : lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
+                </span>
+                {isAdmin && (
+                  <button onClick={() => onDelete(lead.id)} className="p-1 bg-red-500/20 rounded-lg">
+                    <Trash2 className="w-4 h-4 text-red-400" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+
+      {assignedLeads.length === 0 && (
+        <div className="text-center py-16">
+          <UserPlus className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          <p className="text-gray-400">لا يوجد أرقام جديدة</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -1086,7 +1159,19 @@ function StatusBadge({ status }: { status: Client['status'] }) {
 
 // Modal Components (simplified)
 function AddClientModal({ currentUser, onClose, onSuccess }: any) {
-  const [form, setForm] = useState({ name: '', phone: '', property: '', budget: '', monthlyInstallment: '', deliveryPeriod: '', status: 'campaign', stage: 'new', feedback: '', priority: 'medium', source: '' });
+  const [form, setForm] = useState({ name: '', phone: '', phones: [] as string[], property: '', budget: '', monthlyInstallment: '', deliveryPeriod: '', status: 'campaign', stage: 'new', feedback: '', priority: 'medium', source: '' });
+  const [newPhone, setNewPhone] = useState('');
+  
+  const addPhone = () => {
+    if (newPhone && !form.phones.includes(newPhone)) {
+      setForm({ ...form, phones: [...form.phones, newPhone] });
+      setNewPhone('');
+    }
+  };
+  
+  const removePhone = (phone: string) => {
+    setForm({ ...form, phones: form.phones.filter(p => p !== phone) });
+  };
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1103,7 +1188,30 @@ function AddClientModal({ currentUser, onClose, onSuccess }: any) {
         <h2 className="text-xl font-bold gradient-text mb-6">إضافة عميل جديد</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <input type="text" placeholder="الاسم *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
-          <input type="tel" placeholder="رقم الهاتف *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
+          <input type="tel" placeholder="رقم الهاتف الرئيسي *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
+          
+          <div>
+            <label className="block text-sm text-gray-300 mb-2">أرقام إضافية</label>
+            <div className="flex gap-2">
+              <input type="tel" placeholder="رقم إضافي" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} className="flex-1 bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" />
+              <button type="button" onClick={addPhone} className="gradient-primary text-white px-4 py-3 rounded-xl font-bold">
+                <Plus className="w-5 h-5" />
+              </button>
+            </div>
+            {form.phones.length > 0 && (
+              <div className="mt-2 space-y-2">
+                {form.phones.map((phone, index) => (
+                  <div key={index} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
+                    <span className="text-white text-sm" dir="ltr">{phone}</span>
+                    <button type="button" onClick={() => removePhone(phone)} className="p-1 hover:bg-red-500/20 rounded">
+                      <X className="w-4 h-4 text-red-400" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          
           <input type="text" placeholder="العقار" value={form.property} onChange={(e) => setForm({ ...form, property: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
           <input type="text" placeholder="الميزانية" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
           <input type="text" placeholder="القسط الشهري" value={form.monthlyInstallment} onChange={(e) => setForm({ ...form, monthlyInstallment: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
@@ -1242,14 +1350,14 @@ function AddUserModal({ currentUser, onClose, onSuccess }: any) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-xl font-bold gradient-text mb-6">إضافة مستخدم</h2>
+        <h2 className="text-xl font-bold gradient-text mb-6">إضافة سيلز</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <input type="text" placeholder="الاسم *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
           <input type="text" placeholder="اسم المستخدم *" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
           <input type="password" placeholder="كلمة المرور *" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
           <input type="tel" placeholder="رقم الهاتف" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" />
           <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white">
-            <option value="sales" className="bg-gray-900">بائع</option>
+            <option value="sales" className="bg-gray-900">سيلز</option>
             <option value="supervisor" className="bg-gray-900">مشرف</option>
           </select>
           <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إضافة</button>
@@ -1286,6 +1394,102 @@ function AddTeamModal({ users, currentUser, onClose, onSuccess }: any) {
           </select>
           <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إضافة</button>
         </form>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Add Assigned Lead Modal
+function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
+  const [form, setForm] = useState({ name: '', phone: '', description: '', salesId: '' });
+  
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const leads = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
+    const newLead = { 
+      ...form, 
+      id: crypto.randomUUID(), 
+      adminId: currentUser.id, 
+      status: 'new',
+      createdAt: new Date().toISOString() 
+    };
+    localStorage.setItem('crm_assigned_leads', JSON.stringify([newLead, ...leads]));
+    onSuccess();
+    onClose();
+  };
+  
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-xl font-bold gradient-text mb-6">إضافة رقم جديد</h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <input type="text" placeholder="اسم العميل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
+          <input type="tel" placeholder="رقم الهاتف *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
+          <textarea placeholder="وصف/ملاحظات" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white resize-none h-20" />
+          <select value={form.salesId} onChange={(e) => setForm({ ...form, salesId: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required>
+            <option value="" className="bg-gray-900">اختر السيلز</option>
+            {users.filter((u: User) => u.role === 'sales').map((u: User) => (
+              <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
+            ))}
+          </select>
+          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إضافة</button>
+        </form>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// User Feedback Modal - Show daily feedback for a user
+function UserFeedbackModal({ user, feedbacks, onClose }: any) {
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center">
+              <span className="text-white font-bold">{user.name[0]}</span>
+            </div>
+            <div>
+              <h2 className="text-xl font-bold gradient-text">{user.name}</h2>
+              <p className="text-sm text-gray-400">الفيدباك اليومي</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {feedbacks.length === 0 ? (
+          <div className="text-center py-8">
+            <MessageSquare className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+            <p className="text-gray-400">لا يوجد فيدباك يومي</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {feedbacks.map((feedback: DailyFeedback) => (
+              <div key={feedback.id} className="bg-white/5 rounded-xl p-4">
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <p className="font-bold text-white">{feedback.clientName}</p>
+                    <p className="text-sm text-purple-400" dir="ltr">{feedback.clientPhone}</p>
+                  </div>
+                  <span className={`text-xs px-2 py-1 rounded-full ${
+                    feedback.callStatus === 'called' ? 'bg-emerald-500/20 text-emerald-400' :
+                    feedback.callStatus === 'no-answer' ? 'bg-amber-500/20 text-amber-400' :
+                    feedback.callStatus === 'busy' ? 'bg-red-500/20 text-red-400' :
+                    'bg-gray-500/20 text-gray-400'
+                  }`}>
+                    {feedback.callStatus === 'called' ? 'تم الاتصال' :
+                     feedback.callStatus === 'no-answer' ? 'لا رد' :
+                     feedback.callStatus === 'busy' ? 'مشغول' : 'لم يتصل'}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-400">{formatDateTime(feedback.date)}</p>
+                {feedback.feedback && <p className="text-sm text-gray-300 mt-2">{feedback.feedback}</p>}
+              </div>
+            ))}
+          </div>
+        )}
       </motion.div>
     </motion.div>
   );

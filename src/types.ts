@@ -26,6 +26,7 @@ export interface Client {
   userId: string;
   name: string;
   phone: string;
+  phones: string[];
   property: string;
   budget: string;
   monthlyInstallment: string;
@@ -38,6 +39,17 @@ export interface Client {
   source: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AssignedLead {
+  id: string;
+  adminId: string;
+  salesId: string;
+  name: string;
+  phone: string;
+  description: string;
+  status: 'new' | 'contacted' | 'closed';
+  createdAt: string;
 }
 
 export interface Reminder {
@@ -90,4 +102,4 @@ export interface DailyFeedback {
   createdAt: string;
 }
 
-export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'reports' | 'admin-users' | 'admin-teams' | 'admin-settings';
+export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'assigned-leads' | 'reports' | 'admin-users' | 'admin-teams' | 'admin-settings';
