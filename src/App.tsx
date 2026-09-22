@@ -1125,6 +1125,15 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd }: any) {
 
 // New Leads View - For Sales (shows leads assigned to this sales person)
 function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
+  const [selectedLead, setSelectedLead] = useState<AssignedLead | null>(null);
+
+  const handleLeadClick = (lead: AssignedLead) => {
+    setSelectedLead(lead);
+    if (lead.status === 'new') {
+      onMarkViewed(lead.id);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold gradient-text">أرقام جديدة</h2>
@@ -1134,12 +1143,8 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
           <motion.div 
             key={lead.id} 
             whileHover={{ scale: 1.01 }}
-            onClick={() => {
-              if (lead.status === 'new') {
-                onMarkViewed(lead.id);
-              }
-            }}
-            className={`glass-card rounded-2xl p-4 ${lead.status === 'new' ? 'cursor-pointer border-2 border-blue-500/30 hover:border-blue-500/50' : ''}`}
+            onClick={() => handleLeadClick(lead)}
+            className={`glass-card rounded-2xl p-4 cursor-pointer ${lead.status === 'new' ? 'border-2 border-blue-500/30 hover:border-blue-500/50' : ''}`}
           >
             <div className="flex items-start justify-between">
               <div className="flex-1">
@@ -1186,6 +1191,91 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
           <p className="text-gray-400">لا يوجد أرقام جديدة</p>
         </div>
       )}
+
+      {/* نافذة تفاصيل الرقم */}
+      <AnimatePresence>
+        {selectedLead && (
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+            onClick={() => setSelectedLead(null)}
+          >
+            <motion.div 
+              initial={{ scale: 0.9 }} 
+              animate={{ scale: 1 }} 
+              exit={{ scale: 0.9 }}
+              className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-bold gradient-text">تفاصيل الرقم</h2>
+                <button 
+                  onClick={() => setSelectedLead(null)}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5 text-gray-400" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="bg-white/5 rounded-xl p-4">
+                  <p className="text-xs text-gray-400 mb-1">اسم العميل</p>
+                  <p className="text-white font-bold text-lg">{selectedLead.name}</p>
+                </div>
+
+                <div className="bg-white/5 rounded-xl p-4">
+                  <p className="text-xs text-gray-400 mb-1">رقم الهاتف</p>
+                  <p className="text-purple-400 font-bold text-lg" dir="ltr">{selectedLead.phone}</p>
+                </div>
+
+                {selectedLead.description && (
+                  <div className="bg-white/5 rounded-xl p-4">
+                    <p className="text-xs text-gray-400 mb-1">الوصف / الملاحظات</p>
+                    <p className="text-white">{selectedLead.description}</p>
+                  </div>
+                )}
+
+                <div className="bg-white/5 rounded-xl p-4">
+                  <p className="text-xs text-gray-400 mb-1">تاريخ الإضافة</p>
+                  <p className="text-white">{formatDateTime(selectedLead.createdAt)}</p>
+                </div>
+
+                <div className="bg-white/5 rounded-xl p-4">
+                  <p className="text-xs text-gray-400 mb-1">الحالة</p>
+                  <span className={`text-sm px-4 py-2 rounded-full font-bold ${
+                    selectedLead.status === 'new' ? 'bg-blue-500/20 text-blue-400' :
+                    selectedLead.status === 'viewed' ? 'bg-purple-500/20 text-purple-400' :
+                    selectedLead.status === 'contacted' ? 'bg-amber-500/20 text-amber-400' :
+                    'bg-emerald-500/20 text-emerald-400'
+                  }`}>
+                    {selectedLead.status === 'new' ? 'رقم جديد' :
+                     selectedLead.status === 'viewed' ? 'تم العرض' :
+                     selectedLead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
+                  </span>
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <a 
+                    href={`tel:${selectedLead.phone}`}
+                    className="flex-1 bg-emerald-500/20 text-emerald-400 py-3 rounded-xl font-bold text-center hover:bg-emerald-500/30 transition-colors border border-emerald-500/20"
+                  >
+                    <PhoneCall className="w-4 h-4 inline mr-2" />
+                    اتصال
+                  </a>
+                  <button 
+                    onClick={() => setSelectedLead(null)}
+                    className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors"
+                  >
+                    إغلاق
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
