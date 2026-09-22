@@ -1131,8 +1131,16 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
 
       <div className="space-y-3">
         {assignedLeads.map((lead: AssignedLead) => (
-          <motion.div key={lead.id} whileHover={{ scale: 1.01 }}
-            className="glass-card rounded-2xl p-4">
+          <motion.div 
+            key={lead.id} 
+            whileHover={{ scale: 1.01 }}
+            onClick={() => {
+              if (lead.status === 'new') {
+                onMarkViewed(lead.id);
+              }
+            }}
+            className={`glass-card rounded-2xl p-4 ${lead.status === 'new' ? 'cursor-pointer border-2 border-blue-500/30' : ''}`}
+          >
             <div className="flex items-start justify-between">
               <div className="flex-1">
                 <h4 className="font-bold text-white text-lg">{lead.name}</h4>
@@ -1143,19 +1151,11 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
                 </p>
               </div>
               <div className="flex flex-col gap-2 items-end">
-                {/* لو الرقم جديد - يظهر "رقم جديد" + زرار "تم العرض" */}
+                {/* لو الرقم جديد - يظهر "رقم جديد" فقط */}
                 {lead.status === 'new' && (
-                  <>
-                    <span className="text-xs px-3 py-1 rounded-full bg-blue-500/20 text-blue-400">
-                      رقم جديد
-                    </span>
-                    <button 
-                      onClick={() => onMarkViewed(lead.id)}
-                      className="gradient-primary text-white px-4 py-2 rounded-lg font-bold text-sm"
-                    >
-                      تم العرض
-                    </button>
-                  </>
+                  <span className="text-xs px-3 py-1 rounded-full bg-blue-500/20 text-blue-400 animate-pulse">
+                    رقم جديد
+                  </span>
                 )}
                 
                 {/* لو الرقم اتشوف - يظهر "تم العرض" فقط */}
@@ -1181,6 +1181,7 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
                 
                 <a 
                   href={`tel:${lead.phone}`}
+                  onClick={(e) => e.stopPropagation()}
                   className="bg-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg font-bold text-sm text-center hover:bg-emerald-500/30 transition-colors"
                 >
                   اتصال
