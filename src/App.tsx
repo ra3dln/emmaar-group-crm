@@ -477,16 +477,16 @@ function App() {
 
       <main className="relative z-10 max-w-7xl mx-auto px-4 py-6">
         <AnimatePresence mode="wait">
-          {activeTab === 'dashboard' && <DashboardView stats={stats} clients={clients} reminders={reminders} properties={properties} />}
-          {activeTab === 'clients' && <ClientsView clients={filteredClients} searchTerm={searchTerm} onSearch={setSearchTerm} onSelect={setSelectedClient} onAdd={() => setShowAddClient(true)} />}
-          {activeTab === 'pipeline' && <PipelineView clients={clients} onUpdateStage={(id: string, stage: Client['stage']) => {
+          {activeTab === 'dashboard' && currentUser.role === 'sales' && <DashboardView stats={stats} clients={clients} reminders={reminders} properties={properties} />}
+          {activeTab === 'clients' && currentUser.role === 'sales' && <ClientsView clients={filteredClients} searchTerm={searchTerm} onSearch={setSearchTerm} onSelect={setSelectedClient} onAdd={() => setShowAddClient(true)} />}
+          {activeTab === 'pipeline' && currentUser.role === 'sales' && <PipelineView clients={clients} onUpdateStage={(id: string, stage: Client['stage']) => {
             const updated = clients.map(c => c.id === id ? { ...c, stage } : c);
             setClients(updated);
             const allClients = JSON.parse(localStorage.getItem('crm_clients') || '[]');
             localStorage.setItem('crm_clients', JSON.stringify(allClients.map((c: Client) => c.id === id ? { ...c, stage } : c)));
           }} />}
-          {activeTab === 'properties' && <PropertiesView properties={filteredProperties} searchTerm={propertySearch} onSearch={setPropertySearch} onSelect={setSelectedProperty} onAdd={() => setShowAddProperty(true)} />}
-          {activeTab === 'reminders' && <RemindersView reminders={reminders} onComplete={(id: string) => {
+          {activeTab === 'properties' && currentUser.role === 'sales' && <PropertiesView properties={filteredProperties} searchTerm={propertySearch} onSearch={setPropertySearch} onSelect={setSelectedProperty} onAdd={() => setShowAddProperty(true)} />}
+          {activeTab === 'reminders' && currentUser.role === 'sales' && <RemindersView reminders={reminders} onComplete={(id: string) => {
             const updated = reminders.map(r => r.id === id ? { ...r, isCompleted: true } : r);
             setReminders(updated);
             localStorage.setItem('crm_reminders', JSON.stringify(JSON.parse(localStorage.getItem('crm_reminders') || '[]').map((r: Reminder) => r.id === id ? { ...r, isCompleted: true } : r)));
@@ -510,7 +510,7 @@ function App() {
             setReminders(reminders.filter(r => r.id !== id));
             localStorage.setItem('crm_reminders', JSON.stringify(JSON.parse(localStorage.getItem('crm_reminders') || '[]').filter((r: Reminder) => r.id !== id)));
           }} onAdd={() => setShowAddReminder(true)} />}
-          {activeTab === 'daily-feedback' && <DailyFeedbackView feedbacks={dailyFeedbacks} clients={clients} onDelete={(id: string) => {
+          {activeTab === 'daily-feedback' && currentUser.role === 'sales' && <DailyFeedbackView feedbacks={dailyFeedbacks} clients={clients} onDelete={(id: string) => {
             setDailyFeedbacks(dailyFeedbacks.filter(f => f.id !== id));
             localStorage.setItem('crm_daily_feedback', JSON.stringify(JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]').filter((f: DailyFeedback) => f.id !== id)));
           }} onAdd={() => setShowAddFeedback(true)} />}
@@ -518,8 +518,9 @@ function App() {
             setAssignedLeads(assignedLeads.filter(l => l.id !== id));
             localStorage.setItem('crm_assigned_leads', JSON.stringify(assignedLeads.filter(l => l.id !== id)));
           }} />}
-          {activeTab === 'reports' && <ReportsView stats={stats} clients={clients} properties={properties} feedbacks={dailyFeedbacks} />}
+          {activeTab === 'reports' && currentUser.role === 'sales' && <ReportsView stats={stats} clients={clients} properties={properties} feedbacks={dailyFeedbacks} />}
           {activeTab === 'admin-users' && currentUser.role !== 'sales' && <AdminUsersView users={users} currentUser={currentUser} onSelect={setSelectedUserFeedback} onAdd={() => setShowAddUser(true)} />}
+          {activeTab === 'admin-feedback' && currentUser.role !== 'sales' && <AdminFeedbackView users={users.filter((u: User) => u.role === 'sales')} dailyFeedbacks={dailyFeedbacks} onSelect={setSelectedUserFeedback} />}
           {activeTab === 'admin-teams' && currentUser.role !== 'sales' && <AdminTeamsView teams={teams} users={users} currentUser={currentUser} onSelect={setSelectedTeam} onAdd={() => setShowAddTeam(true)} />}
           {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} users={users} />}
         </AnimatePresence>
@@ -544,7 +545,8 @@ function App() {
 }
 
 function getNavigationTabs(role: string) {
-  const commonTabs = [
+  // تبويبات السيلز فقط
+  const salesTabs = [
     { id: 'dashboard' as TabType, icon: Home, label: 'الرئيسية' },
     { id: 'clients' as TabType, icon: Users, label: 'العملاء' },
     { id: 'pipeline' as TabType, icon: Target, label: 'المراحل' },
@@ -555,13 +557,16 @@ function getNavigationTabs(role: string) {
     { id: 'reports' as TabType, icon: BarChart3, label: 'التقارير' },
   ];
   
+  // تبويبات الإدارة فقط
   const adminTabs = [
-    { id: 'admin-users' as TabType, icon: UserCheck, label: 'المستخدمين' },
+    { id: 'admin-users' as TabType, icon: UserCheck, label: 'فريق العمل' },
+    { id: 'admin-feedback' as TabType, icon: MessageSquare, label: 'الفيدباك اليومي' },
+    { id: 'assigned-leads' as TabType, icon: UserPlus, label: 'أرقام جديدة' },
     { id: 'admin-teams' as TabType, icon: Users, label: 'الفرق' },
     { id: 'admin-settings' as TabType, icon: Settings, label: 'الإعدادات' },
   ];
   
-  return role === 'sales' ? commonTabs : [...commonTabs, ...adminTabs];
+  return role === 'sales' ? salesTabs : adminTabs;
 }
 
 // Login Screen
@@ -989,6 +994,79 @@ function ReportsView({ stats, clients, properties, feedbacks }: any) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Admin Feedback View - Show feedback for each sales person
+function AdminFeedbackView({ users, dailyFeedbacks, onSelect }: any) {
+  const salesUsers = users.filter((u: User) => u.role === 'sales' || u.role === 'supervisor');
+  
+  return (
+    <div className="space-y-6">
+      <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+        <MessageSquare className="w-6 h-6" />
+        الفيدباك اليومي لكل سيلز
+      </h2>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {salesUsers.map((user: User) => {
+          const userFeedbacks = dailyFeedbacks.filter((f: DailyFeedback) => f.userId === user.id);
+          const today = new Date().toDateString();
+          const todayFeedbacks = userFeedbacks.filter((f: DailyFeedback) => 
+            new Date(f.date).toDateString() === today
+          );
+          const calledToday = todayFeedbacks.filter((f: DailyFeedback) => f.callStatus === 'called').length;
+          const totalCalls = userFeedbacks.filter((f: DailyFeedback) => f.callStatus === 'called').length;
+          
+          return (
+            <motion.div
+              key={user.id}
+              whileHover={{ scale: 1.02, y: -5 }}
+              onClick={() => onSelect(user)}
+              className="glass-card rounded-2xl p-5 cursor-pointer"
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center">
+                  <span className="text-white font-bold">{user.name[0]}</span>
+                </div>
+                <div>
+                  <h4 className="font-bold text-white">{user.name}</h4>
+                  <p className="text-sm text-gray-400">{user.role === 'sales' ? 'سيلز' : 'مشرف'}</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-purple-500/10 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-purple-400">{todayFeedbacks.length}</p>
+                  <p className="text-xs text-gray-400">فيدباك اليوم</p>
+                </div>
+                <div className="bg-emerald-500/10 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-emerald-400">{calledToday}</p>
+                  <p className="text-xs text-gray-400">مكالمات اليوم</p>
+                </div>
+                <div className="bg-blue-500/10 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-blue-400">{userFeedbacks.length}</p>
+                  <p className="text-xs text-gray-400">إجمالي الفيدباك</p>
+                </div>
+                <div className="bg-amber-500/10 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-amber-400">{totalCalls}</p>
+                  <p className="text-xs text-gray-400">إجمالي المكالمات</p>
+                </div>
+              </div>
+              
+              <p className="text-xs text-gray-500 mt-3 text-center">اضغط لعرض التفاصيل</p>
+            </motion.div>
+          );
+        })}
+      </div>
+
+      {salesUsers.length === 0 && (
+        <div className="text-center py-16">
+          <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          <p className="text-gray-400">لا يوجد سيلز في الفريق</p>
+        </div>
+      )}
     </div>
   );
 }

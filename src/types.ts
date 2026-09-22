@@ -102,4 +102,4 @@ export interface DailyFeedback {
   createdAt: string;
 }
 
-export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'assigned-leads' | 'reports' | 'admin-users' | 'admin-teams' | 'admin-settings';
+export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'assigned-leads' | 'reports' | 'admin-users' | 'admin-feedback' | 'admin-teams' | 'admin-settings';
