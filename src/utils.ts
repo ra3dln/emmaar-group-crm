@@ -283,3 +283,136 @@ export function canViewAllData(user: User): boolean {
 export function canViewTeamData(user: User): boolean {
   return user.role === 'admin' || user.role === 'supervisor';
 }
+
+// Team Management functions
+const TEAMS_KEY = 'crm_teams';
+
+export function getTeams(): Team[] {
+  const data = localStorage.getItem(TEAMS_KEY);
+  return data ? JSON.parse(data) : [];
+}
+
+export function saveTeams(teams: Team[]): void {
+  localStorage.setItem(TEAMS_KEY, JSON.stringify(teams));
+}
+
+export function addTeam(team: Omit<Team, 'id' | 'createdAt'>): Team {
+  const teams = getTeams();
+  const newTeam: Team = {
+    ...team,
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+  };
+  saveTeams([...teams, newTeam]);
+  return newTeam;
+}
+
+export function updateTeam(id: string,  Partial<Team>): void {
+  const teams = getTeams();
+  const updated = teams.map(t => t.id === id ? { ...t, ...data } : t);
+  saveTeams(updated);
+}
+
+export function deleteTeam(id: string): void {
+  const teams = getTeams();
+  saveTeams(teams.filter(t => t.id !== id));
+}
+
+export function getTeamById(id: string): Team | undefined {
+  return getTeams().find(t => t.id === id);
+}
+
+export function getTeamBySupervisor(supervisorId: string): Team | undefined {
+  return getTeams().find(t => t.supervisorId === supervisorId);
+}
+
+// Client Assignment functions
+export function assignClientToUser(clientId: string, userId: string): void {
+  const clients = getClients();
+  const updated = clients.map(c => 
+    c.id === clientId ? { ...c, assignedTo: userId, updatedAt: new Date().toISOString() } : c
+  );
+  saveClients(updated);
+}
+
+export function assignClientsToUser(clientIds: string[], userId: string): void {
+  const clients = getClients();
+  const updated = clients.map(c => 
+    clientIds.includes(c.id) ? { ...c, assignedTo: userId, updatedAt: new Date().toISOString() } : c
+  );
+  saveClients(updated);
+}
+
+export function distributeClientsEqually(clientIds: string[], userIds: string[]): void {
+  const clients = getClients();
+  const unassigned = clientIds.map(id => clients.find(c => c.id === id)).filter(Boolean) as Client[];
+  
+  userIds.forEach((userId, index) => {
+    const clientsForUser = unassigned.filter((_, i) => i % userIds.length === index);
+    const updated = clients.map(c => 
+      clientsForUser.find(uc => uc.id === c.id) 
+        ? { ...c, assignedTo: userId, updatedAt: new Date().toISOString() }
+        : c
+    );
+    saveClients(updated);
+  });
+}
+
+export function getClientsByUser(userId: string): Client[] {
+  return getClients().filter(c => c.assignedTo === userId);
+}
+
+export function getClientsByTeam(teamId: string): Client[] {
+  const team = getTeamById(teamId);
+  if (!team) return [];
+  return getClients().filter(c => team.memberIds.includes(c.assignedTo || ''));
+}
+
+// Reporting functions
+export function getUserStats(userId: string) {
+  const clients = getClientsByUser(userId);
+  const feedbacks = getDailyFeedbacks().filter(f => f.userId === userId);
+  
+  return {
+    totalClients: clients.length,
+    newClients: clients.filter(c => c.stage === 'new').length,
+    contactedClients: clients.filter(c => c.stage === 'contacted').length,
+    meetingClients: clients.filter(c => c.stage === 'meeting').length,
+    negotiationClients: clients.filter(c => c.stage === 'negotiation').length,
+    closedClients: clients.filter(c => c.stage === 'closed').length,
+    lostClients: clients.filter(c => c.stage === 'lost').length,
+    conversionRate: clients.length > 0 
+      ? ((clients.filter(c => c.stage === 'closed').length / clients.length) * 100).toFixed(1)
+      : '0',
+    totalCalls: feedbacks.filter(f => f.callStatus === 'called').length,
+    noAnswerCalls: feedbacks.filter(f => f.callStatus === 'no-answer').length,
+    busyCalls: feedbacks.filter(f => f.callStatus === 'busy').length,
+  };
+}
+
+export function getTeamStats(teamId: string) {
+  const team = getTeamById(teamId);
+  if (!team) return null;
+  
+  const members = team.memberIds.map(id => getUserById(id)).filter(Boolean) as User[];
+  const memberStats = members.map(member => ({
+    user: member,
+    stats: getUserStats(member.id),
+  }));
+  
+  return {
+    team,
+    members: memberStats,
+    totalClients: memberStats.reduce((sum, m) => sum + m.stats.totalClients, 0),
+    totalClosed: memberStats.reduce((sum, m) => sum + m.stats.closedClients, 0),
+    totalCalls: memberStats.reduce((sum, m) => sum + m.stats.totalCalls, 0),
+  };
+}
+
+export function getAllUsersStats() {
+  const users = getUsers().filter(u => u.isActive);
+  return users.map(user => ({
+    user,
+    stats: getUserStats(user.id),
+  }));
+}
