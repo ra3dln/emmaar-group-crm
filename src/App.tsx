@@ -1143,23 +1143,27 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed }: any) {
                 </p>
               </div>
               <div className="flex flex-col gap-2">
-                <span className={`text-xs px-3 py-1 rounded-full ${
-                  lead.status === 'new' ? 'bg-blue-500/20 text-blue-400' :
-                  lead.status === 'viewed' ? 'bg-purple-500/20 text-purple-400' :
-                  lead.status === 'contacted' ? 'bg-amber-500/20 text-amber-400' :
-                  'bg-emerald-500/20 text-emerald-400'
-                }`}>
-                  {lead.status === 'new' ? 'رقم جديد' : 
-                   lead.status === 'viewed' ? 'تم العرض' :
-                   lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
-                </span>
-                {lead.status === 'new' && (
-                  <button 
-                    onClick={() => onMarkViewed(lead.id)}
-                    className="gradient-primary text-white px-4 py-2 rounded-lg font-bold text-sm"
-                  >
-                    تم العرض
-                  </button>
+                {lead.status === 'new' ? (
+                  <>
+                    <span className="text-xs px-3 py-1 rounded-full bg-blue-500/20 text-blue-400">
+                      رقم جديد
+                    </span>
+                    <button 
+                      onClick={() => onMarkViewed(lead.id)}
+                      className="gradient-primary text-white px-4 py-2 rounded-lg font-bold text-sm"
+                    >
+                      تم العرض
+                    </button>
+                  </>
+                ) : (
+                  <span className={`text-xs px-3 py-1 rounded-full ${
+                    lead.status === 'viewed' ? 'bg-purple-500/20 text-purple-400' :
+                    lead.status === 'contacted' ? 'bg-amber-500/20 text-amber-400' :
+                    'bg-emerald-500/20 text-emerald-400'
+                  }`}>
+                    {lead.status === 'viewed' ? 'تم العرض' :
+                     lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
+                  </span>
                 )}
                 <a 
                   href={`tel:${lead.phone}`}
