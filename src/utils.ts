@@ -1,10 +1,11 @@
-import { Client, Reminder, Property, DailyFeedback } from './types';
+import { Client, Reminder, Property, DailyFeedback, User } from './types';
 
 const CLIENTS_KEY = 'crm_clients';
 const REMINDERS_KEY = 'crm_reminders';
 const NOTIFIED_KEY = 'crm_notified_reminders';
 const PROPERTIES_KEY = 'crm_properties';
 const DAILY_FEEDBACK_KEY = 'crm_daily_feedback';
+const USERS_KEY = 'crm_users';
 
 export function getClients(): Client[] {
   const data = localStorage.getItem(CLIENTS_KEY);
@@ -46,7 +47,6 @@ export async function requestNotificationPermission(): Promise<boolean> {
     return false;
   }
   
-  // Register Service Worker
   if ('serviceWorker' in navigator) {
     try {
       await navigator.serviceWorker.register('/sw.js');
@@ -84,11 +84,9 @@ export function sendNotification(title: string, body: string, tag?: string): voi
 }
 
 export function playNotificationSound(): void {
-  // Create audio context for notification sound
   try {
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
     
-    // Play a pleasant notification melody
     const playTone = (frequency: number, startTime: number, duration: number) => {
       const oscillator = audioContext.createOscillator();
       const gainNode = audioContext.createGain();
@@ -108,11 +106,10 @@ export function playNotificationSound(): void {
     };
 
     const now = audioContext.currentTime;
-    // Play a pleasant ascending melody
-    playTone(523.25, now, 0.2);        // C5
-    playTone(659.25, now + 0.15, 0.2); // E5
-    playTone(783.99, now + 0.3, 0.2);  // G5
-    playTone(1046.50, now + 0.45, 0.4); // C6
+    playTone(523.25, now, 0.2);
+    playTone(659.25, now + 0.15, 0.2);
+    playTone(783.99, now + 0.3, 0.2);
+    playTone(1046.50, now + 0.45, 0.4);
   } catch (e) {
     console.log('Audio not supported');
   }
@@ -156,7 +153,6 @@ export function getTimeUntil(reminder: Reminder): string {
   return `${minutes} دقيقة`;
 }
 
-// Properties functions
 export function getProperties(): Property[] {
   const data = localStorage.getItem(PROPERTIES_KEY);
   return data ? JSON.parse(data) : [];
@@ -166,7 +162,6 @@ export function saveProperties(properties: Property[]): void {
   localStorage.setItem(PROPERTIES_KEY, JSON.stringify(properties));
 }
 
-// Daily Feedback functions
 export function getDailyFeedbacks(): DailyFeedback[] {
   const data = localStorage.getItem(DAILY_FEEDBACK_KEY);
   return data ? JSON.parse(data) : [];
@@ -176,10 +171,8 @@ export function saveDailyFeedbacks(feedbacks: DailyFeedback[]): void {
   localStorage.setItem(DAILY_FEEDBACK_KEY, JSON.stringify(feedbacks));
 }
 
-// Price formatting functions
 export function formatPrice(price: string): string {
   if (!price) return '0';
-  // Remove existing commas and spaces
   const cleanPrice = price.replace(/[,\s]/g, '');
   const num = parseFloat(cleanPrice);
   if (isNaN(num)) return price;
@@ -188,7 +181,6 @@ export function formatPrice(price: string): string {
 
 export function parsePrice(price: string): number {
   if (!price) return 0;
-  // Handle Arabic number words
   const arabicNumbers: Record<string, number> = {
     'مليون': 1000000,
     'مليونين': 2000000,
@@ -204,10 +196,8 @@ export function parsePrice(price: string): number {
   
   const lowerPrice = price.toLowerCase().trim();
   
-  // Check for Arabic number words
   for (const [word, value] of Object.entries(arabicNumbers)) {
     if (lowerPrice.includes(word)) {
-      // Check if there's a number before the word
       const match = lowerPrice.match(/(\d+\.?\d*)\s*[\*×x]?\s*[\u0600-\u06FF]+/);
       if (match) {
         return parseFloat(match[1]) * value;
@@ -216,15 +206,12 @@ export function parsePrice(price: string): number {
     }
   }
   
-  // Remove commas, spaces, and currency symbols
   const cleanPrice = price.replace(/[,\s$€£ج.م]/g, '');
   const num = parseFloat(cleanPrice);
   return isNaN(num) ? 0 : num;
 }
 
 // User Management functions
-const USERS_KEY = 'crm_users';
-
 export function getUsers(): User[] {
   const data = localStorage.getItem(USERS_KEY);
   return data ? JSON.parse(data) : [];

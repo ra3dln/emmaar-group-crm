@@ -12,6 +12,16 @@ export interface User {
   createdBy?: string;
 }
 
+export interface Team {
+  id: string;
+  name: string;
+  supervisorId: string;
+  supervisorName: string;
+  memberIds: string[];
+  createdAt: string;
+  createdBy: string;
+}
+
 export interface Client {
   id: string;
   userId: string;
