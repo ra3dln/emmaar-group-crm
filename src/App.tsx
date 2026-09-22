@@ -14,8 +14,43 @@ import { Client, Reminder, Property, DailyFeedback, User, Team, TabType } from '
 
 // Initialize default admin account
 const initializeSystem = () => {
-  const users = JSON.parse(localStorage.getItem('crm_users') || '[]');
-  if (users.length === 0) {
+  try {
+    const usersData = localStorage.getItem('crm_users');
+    let users: User[] = [];
+    
+    if (usersData) {
+      users = JSON.parse(usersData);
+    }
+    
+    // Check if admin account exists
+    const adminExists = users.some(u => u.username === 'admin' && u.role === 'admin');
+    
+    if (!adminExists) {
+      const adminUser: User = {
+        id: 'admin-001',
+        username: 'admin',
+        password: 'admin123',
+        name: 'المدير العام',
+        phone: '',
+        role: 'admin',
+        team: '',
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        createdBy: 'system',
+      };
+      
+      // Add admin to existing users or create new array
+      const updatedUsers = [...users.filter(u => u.username !== 'admin'), adminUser];
+      localStorage.setItem('crm_users', JSON.stringify(updatedUsers));
+      console.log('✅ تم إنشاء حساب المدير الافتراضي');
+      console.log('📝 اسم المستخدم: admin');
+      console.log('🔑 كلمة المرور: admin123');
+    } else {
+      console.log('✅ حساب المدير موجود بالفعل');
+    }
+  } catch (error) {
+    console.error('❌ خطأ في تهيئة النظام:', error);
+    // If there's an error, reset and create admin
     const adminUser: User = {
       id: 'admin-001',
       username: 'admin',
@@ -242,20 +277,56 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
     e.preventDefault();
     setError('');
     
-    const users: User[] = JSON.parse(localStorage.getItem('crm_users') || '[]');
-    const user = users.find(u => 
-      u.username === username && 
-      u.password === password && 
-      u.isActive &&
-      (loginType === 'admin' ? u.role === 'admin' || u.role === 'supervisor' : u.role === 'sales')
-    );
+    console.log('🔍 محاولة تسجيل الدخول...');
+    console.log('📝 اسم المستخدم:', username);
+    console.log('🔑 كلمة المرور:', password);
+    console.log('🎯 نوع الدخول:', loginType);
     
-    if (!user) {
-      setError('اسم المستخدم أو كلمة المرور غير صحيحة');
-      return;
+    try {
+      const usersData = localStorage.getItem('crm_users');
+      console.log('📦 البيانات المخزنة:', usersData);
+      
+      if (!usersData) {
+        setError('لا توجد حسابات في النظام. يرجى إعادة تحميل الصفحة.');
+        return;
+      }
+      
+      const users: User[] = JSON.parse(usersData);
+      console.log('👥 عدد المستخدمين:', users.length);
+      console.log('📋 المستخدمين:', users.map(u => ({ username: u.username, role: u.role, isActive: u.isActive })));
+      
+      const user = users.find(u => 
+        u.username === username && 
+        u.password === password && 
+        u.isActive === true &&
+        (loginType === 'admin' ? (u.role === 'admin' || u.role === 'supervisor') : u.role === 'sales')
+      );
+      
+      if (!user) {
+        // Provide more specific error message
+        const userExists = users.find(u => u.username === username);
+        if (!userExists) {
+          setError('اسم المستخدم غير موجود');
+        } else if (!userExists.isActive) {
+          setError('هذا الحساب معطل. يرجى التواصل مع المدير.');
+        } else if (userExists.password !== password) {
+          setError('كلمة المرور غير صحيحة');
+        } else if (loginType === 'admin' && userExists.role === 'sales') {
+          setError('هذا حساب بائع. يرجى استخدام "دخول البائعين"');
+        } else if (loginType === 'sales' && (userExists.role === 'admin' || userExists.role === 'supervisor')) {
+          setError('هذا حساب إداري. يرجى استخدام "دخول الإدارة"');
+        } else {
+          setError('اسم المستخدم أو كلمة المرور غير صحيحة');
+        }
+        return;
+      }
+      
+      console.log('✅ تم تسجيل الدخول بنجاح:', user);
+      onLogin(user);
+    } catch (error) {
+      console.error('❌ خطأ في تسجيل الدخول:', error);
+      setError('حدث خطأ في النظام. يرجى إعادة تحميل الصفحة.');
     }
-    
-    onLogin(user);
   };
 
   if (!loginType) {
@@ -295,6 +366,19 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
               كلمة المرور: admin123
             </p>
           </div>
+          
+          <button
+            onClick={() => {
+              if (confirm('هل أنت متأكد من إعادة تعيين النظام؟ سيتم حذف جميع البيانات وإنشاء حساب المدير الافتراضي.')) {
+                localStorage.clear();
+                initializeSystem();
+                window.location.reload();
+              }
+            }}
+            className="w-full mt-4 bg-red-500/10 text-red-400 py-2 rounded-xl text-sm hover:bg-red-500/20 transition-colors border border-red-500/20"
+          >
+            🔄 إعادة تعيين النظام (مسح جميع البيانات)
+          </button>
         </div>
       </div>
     );
@@ -340,7 +424,9 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
           </div>
           
           {error && (
-            <p className="text-red-400 text-sm text-center">{error}</p>
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl">
+              <p className="text-red-400 text-sm text-center">{error}</p>
+            </div>
           )}
           
           <button
@@ -356,6 +442,20 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
             className="w-full bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors"
           >
             رجوع
+          </button>
+          
+          <button
+            type="button"
+            onClick={() => {
+              if (confirm('هل أنت متأكد من إعادة تعيين النظام؟ سيتم حذف جميع البيانات وإنشاء حساب المدير الافتراضي.')) {
+                localStorage.clear();
+                initializeSystem();
+                window.location.reload();
+              }
+            }}
+            className="w-full bg-red-500/10 text-red-400 py-2 rounded-xl text-sm hover:bg-red-500/20 transition-colors border border-red-500/20"
+          >
+            🔄 إعادة تعيين النظام
           </button>
         </form>
       </div>
