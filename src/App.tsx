@@ -233,6 +233,11 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
+  // Initialize system when login screen loads
+  useEffect(() => {
+    initializeSystem();
+  }, []);
+
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
