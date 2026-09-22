@@ -175,3 +175,49 @@ export function getDailyFeedbacks(): DailyFeedback[] {
 export function saveDailyFeedbacks(feedbacks: DailyFeedback[]): void {
   localStorage.setItem(DAILY_FEEDBACK_KEY, JSON.stringify(feedbacks));
 }
+
+// Price formatting functions
+export function formatPrice(price: string): string {
+  if (!price) return '0';
+  // Remove existing commas and spaces
+  const cleanPrice = price.replace(/[,\s]/g, '');
+  const num = parseFloat(cleanPrice);
+  if (isNaN(num)) return price;
+  return num.toLocaleString('en-US');
+}
+
+export function parsePrice(price: string): number {
+  if (!price) return 0;
+  // Handle Arabic number words
+  const arabicNumbers: Record<string, number> = {
+    'مليون': 1000000,
+    'مليونين': 2000000,
+    'مليوني': 2000000,
+    'الف': 1000,
+    'ألف': 1000,
+    'الفين': 2000,
+    'ألفين': 2000,
+    'مليار': 1000000000,
+    'نص مليون': 500000,
+    'نصف مليون': 500000,
+  };
+  
+  const lowerPrice = price.toLowerCase().trim();
+  
+  // Check for Arabic number words
+  for (const [word, value] of Object.entries(arabicNumbers)) {
+    if (lowerPrice.includes(word)) {
+      // Check if there's a number before the word
+      const match = lowerPrice.match(/(\d+\.?\d*)\s*[\*×x]?\s*[\u0600-\u06FF]+/);
+      if (match) {
+        return parseFloat(match[1]) * value;
+      }
+      return value;
+    }
+  }
+  
+  // Remove commas, spaces, and currency symbols
+  const cleanPrice = price.replace(/[,\s$€£ج.م]/g, '');
+  const num = parseFloat(cleanPrice);
+  return isNaN(num) ? 0 : num;
+}

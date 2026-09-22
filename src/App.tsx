@@ -136,7 +136,7 @@ function App() {
     setShowAddClient(false);
   }, [clients, currentUser]);
 
-  const updateClient = useCallback((id: string,  Partial<Client>) => {
+  const updateClient = useCallback((id: string, data: Partial<Client>) => {
     const updated = clients.map(c => 
       c.id === id ? { ...c, ...data, updatedAt: new Date().toISOString() } : c
     );
@@ -1304,6 +1304,594 @@ function StageBadge({ stage }: { stage: Client['stage'] }) {
   };
   const { label, className } = getStageInfo();
   return <span className={`text-xs px-2.5 py-1 rounded-full ${className}`}>{label}</span>;
+}
+
+// Add Client Modal
+function AddClientModal({ onClose, onAdd }: { 
+  onClose: () => void; 
+  onAdd: (client: Omit<Client, 'id' | 'createdAt' | 'updatedAt' | 'userId'>) => void 
+}) {
+  const [form, setForm] = useState({
+    name: '', phone: '', property: '', budget: '', monthlyInstallment: '',
+    deliveryPeriod: '', status: 'campaign' as Client['status'],
+    stage: 'new' as Client['stage'], feedback: '', priority: 'medium' as Client['priority'],
+    source: '', assignedTo: '',
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name || !form.phone) return;
+    onAdd(form);
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+            <UserPlus className="w-6 h-6" /> إضافة عميل جديد
+          </h2>
+          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+            <X className="w-5 h-5 text-gray-400" />
+          </motion.button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">الاسم *</label>
+            <input type="text" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم العميل" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">رقم الهاتف *</label>
+            <input type="tel" required value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">العقار المطلوب</label>
+            <input type="text" value={form.property} onChange={(e) => setForm({ ...form, property: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="شقة، فيلا، أرض..." />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">الميزانية</label>
+              <input type="text" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الميزانية" />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">القسط الشهري</label>
+              <input type="text" value={form.monthlyInstallment} onChange={(e) => setForm({ ...form, monthlyInstallment: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="القسط" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">مدة الاستلام</label>
+            <input type="text" value={form.deliveryPeriod} onChange={(e) => setForm({ ...form, deliveryPeriod: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="مدة الاستلام" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">المصدر</label>
+              <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as Client['status'] })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+                <option value="campaign" className="bg-gray-900">كامبين</option>
+                <option value="facebook" className="bg-gray-900">فيسبوك</option>
+                <option value="external" className="bg-gray-900">خارجي</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">الأولوية</label>
+              <select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value as Client['priority'] })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+                <option value="high" className="bg-gray-900">عالية</option>
+                <option value="medium" className="bg-gray-900">متوسطة</option>
+                <option value="low" className="bg-gray-900">منخفضة</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">مرحلة العميل</label>
+            <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value as Client['stage'] })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+              <option value="new" className="bg-gray-900">جديد</option>
+              <option value="contacted" className="bg-gray-900">تم التواصل</option>
+              <option value="meeting" className="bg-gray-900">موعد معاينة</option>
+              <option value="negotiation" className="bg-gray-900">تفاوض</option>
+              <option value="closed" className="bg-gray-900">تم البيع</option>
+              <option value="lost" className="bg-gray-900">ضائع</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">ملاحظات / فيدباك</label>
+            <textarea value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24" placeholder="أي ملاحظات عن العميل..." />
+          </div>
+          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
+            إضافة العميل ✨
+          </motion.button>
+        </form>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Add Reminder Modal
+function AddReminderModal({ clients, onClose, onAdd }: {
+  clients: Client[];
+  onClose: () => void;
+  onAdd: (reminder: Omit<Reminder, 'id' | 'isCompleted' | 'isDelayed' | 'delayCount' | 'createdAt' | 'userId'>) => void;
+}) {
+  const [form, setForm] = useState({ clientId: '', clientName: '', clientPhone: '', dateTime: '', note: '' });
+
+  const handleClientSelect = (clientId: string) => {
+    const client = clients.find(c => c.id === clientId);
+    if (client) setForm({ ...form, clientId, clientName: client.name, clientPhone: client.phone });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.clientName || !form.clientPhone || !form.dateTime) return;
+    onAdd(form);
+  };
+
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  const minDateTime = now.toISOString().slice(0, 16);
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2"><Bell className="w-6 h-6" /> إضافة تذكير</h2>
+          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-5 h-5 text-gray-400" /></motion.button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {clients.length > 0 && (
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">اختر عميل</label>
+              <select value={form.clientId} onChange={(e) => handleClientSelect(e.target.value)}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+                <option value="" className="bg-gray-900">-- اختر عميل --</option>
+                {clients.map(c => (<option key={c.id} value={c.id} className="bg-gray-900">{c.name} - {c.phone}</option>))}
+              </select>
+            </div>
+          )}
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">اسم العميل *</label>
+            <input type="text" required value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم العميل" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">رقم الهاتف *</label>
+            <input type="tel" required value={form.clientPhone} onChange={(e) => setForm({ ...form, clientPhone: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">وقت التذكير *</label>
+            <input type="datetime-local" required min={minDateTime} value={form.dateTime} onChange={(e) => setForm({ ...form, dateTime: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" dir="ltr" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">ملاحظة</label>
+            <textarea value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-20" placeholder="سبب المكالمة..." />
+          </div>
+          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
+            إضافة التذكير 🔔
+          </motion.button>
+        </form>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Client Detail Modal
+function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder }: {
+  client: Client; onClose: () => void; onUpdate: (id: string, data: Partial<Client>) => void;
+  onDelete: () => void; onAddReminder: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({
+    name: client.name, phone: client.phone, property: client.property, budget: client.budget,
+    monthlyInstallment: client.monthlyInstallment, deliveryPeriod: client.deliveryPeriod,
+    status: client.status, stage: client.stage, feedback: client.feedback,
+    priority: client.priority, source: client.source,
+  });
+
+  const handleSave = () => { onUpdate(client.id, form); setEditing(false); };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text">تفاصيل العميل</h2>
+          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-5 h-5 text-gray-400" /></motion.button>
+        </div>
+        <div className="flex items-center gap-4 mb-6">
+          <div className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg glow-primary">
+            <span className="text-white font-bold text-2xl">{client.name[0]}</span>
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-white">{client.name}</h3>
+            <div className="flex gap-2 mt-1">
+              <StatusBadge status={client.status} />
+              <StageBadge stage={client.stage} />
+            </div>
+          </div>
+        </div>
+        {editing ? (
+          <div className="space-y-4">
+            <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الاسم" />
+            <input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" dir="ltr" />
+            <input type="text" value={form.property} onChange={(e) => setForm({ ...form, property: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="العقار" />
+            <div className="grid grid-cols-2 gap-3">
+              <input type="text" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الميزانية" />
+              <input type="text" value={form.monthlyInstallment} onChange={(e) => setForm({ ...form, monthlyInstallment: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="القسط" />
+            </div>
+            <input type="text" value={form.deliveryPeriod} onChange={(e) => setForm({ ...form, deliveryPeriod: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="مدة الاستلام" />
+            <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value as Client['stage'] })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+              <option value="new" className="bg-gray-900">جديد</option>
+              <option value="contacted" className="bg-gray-900">تم التواصل</option>
+              <option value="meeting" className="bg-gray-900">موعد معاينة</option>
+              <option value="negotiation" className="bg-gray-900">تفاوض</option>
+              <option value="closed" className="bg-gray-900">تم البيع</option>
+              <option value="lost" className="bg-gray-900">ضائع</option>
+            </select>
+            <textarea value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24" placeholder="ملاحظات" />
+            <div className="flex gap-3">
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handleSave}
+                className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold btn-hover">حفظ ✓</motion.button>
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setEditing(false)}
+                className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors">إلغاء</motion.button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">الهاتف</p><p className="text-white font-medium" dir="ltr">{client.phone}</p></div>
+              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">العقار</p><p className="text-white font-medium">{client.property || '-'}</p></div>
+              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">الميزانية</p><p className="text-white font-medium">{client.budget || '-'}</p></div>
+              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">القسط الشهري</p><p className="text-white font-medium">{client.monthlyInstallment || '-'}</p></div>
+              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">مدة الاستلام</p><p className="text-white font-medium">{client.deliveryPeriod || '-'}</p></div>
+              <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">المصدر</p><p className="text-white font-medium">{client.status === 'campaign' ? 'كامبين' : client.status === 'facebook' ? 'فيسبوك' : 'خارجي'}</p></div>
+            </div>
+            {client.feedback && <div className="bg-white/5 rounded-xl p-4"><p className="text-xs text-gray-400 mb-1">ملاحظات</p><p className="text-white text-sm">{client.feedback}</p></div>}
+            <div className="flex flex-wrap gap-2 pt-2">
+              <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={() => setEditing(true)}
+                className="flex-1 flex items-center justify-center gap-2 bg-purple-500/20 text-purple-300 py-2.5 rounded-xl hover:bg-purple-500/30 transition-colors border border-purple-500/20">
+                <Edit3 className="w-4 h-4" /> تعديل
+              </motion.button>
+              <motion.a whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} href={`tel:${client.phone}`}
+                className="flex-1 flex items-center justify-center gap-2 bg-emerald-500/20 text-emerald-400 py-2.5 rounded-xl hover:bg-emerald-500/30 transition-colors border border-emerald-500/20">
+                <PhoneCall className="w-4 h-4" /> اتصال
+              </motion.a>
+              <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onAddReminder}
+                className="flex-1 flex items-center justify-center gap-2 bg-purple-500/20 text-purple-400 py-2.5 rounded-xl hover:bg-purple-500/30 transition-colors border border-purple-500/20">
+                <Bell className="w-4 h-4" /> تذكير
+              </motion.button>
+              <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={onDelete}
+                className="flex items-center justify-center gap-2 bg-red-500/20 text-red-400 py-2.5 px-4 rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20">
+                <Trash2 className="w-4 h-4" />
+              </motion.button>
+            </div>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Add Property Modal
+function AddPropertyModal({ clients, onClose, onAdd }: { 
+  clients: Client[]; onClose: () => void; 
+  onAdd: (property: Omit<Property, 'id' | 'createdAt' | 'userId'>) => void;
+}) {
+  const [form, setForm] = useState({
+    name: '', type: '', area: '', price: '', priceNumeric: 0, location: '',
+    description: '', image: '', clientPhone: '', clientName: '',
+    project: '', compound: '', floor: '', rooms: '', bathrooms: '',
+    finishing: 'fully-finished' as Property['finishing'],
+    delivery: 'immediate' as Property['delivery'],
+  });
+
+  const handleClientSelect = (clientPhone: string) => {
+    const client = clients.find(c => c.phone === clientPhone);
+    if (client) setForm({ ...form, clientPhone, clientName: client.name });
+    else setForm({ ...form, clientPhone, clientName: '' });
+  };
+
+  const handlePriceChange = (value: string) => {
+    setForm({ ...form, price: value, priceNumeric: parsePrice(value) });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name || !form.type) return;
+    onAdd({ ...form, priceNumeric: parsePrice(form.price) });
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2"><Building2 className="w-6 h-6" /> إضافة عقار جديد</h2>
+          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-5 h-5 text-gray-400" /></motion.button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">اسم العقار *</label>
+            <input type="text" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم العقار" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">نوع العقار *</label>
+            <select required value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+              <option value="" className="bg-gray-900">اختر النوع</option>
+              <option value="شقة" className="bg-gray-900">شقة</option>
+              <option value="فيلا" className="bg-gray-900">فيلا</option>
+              <option value="أرض" className="bg-gray-900">أرض</option>
+              <option value="محل" className="bg-gray-900">محل</option>
+              <option value="مكتب" className="bg-gray-900">مكتب</option>
+              <option value="دوبلكس" className="bg-gray-900">دوبلكس</option>
+              <option value="بنتهاوس" className="bg-gray-900">بنتهاوس</option>
+              <option value="أخرى" className="bg-gray-900">أخرى</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">المساحة</label>
+              <input type="text" value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="المساحة بالمتر" />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">السعر (رقم أو كلمة)</label>
+              <input type="text" value={form.price} onChange={(e) => handlePriceChange(e.target.value)}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="مثل: مليون، 1,500,000" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">الموقع</label>
+            <input type="text" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الموقع" />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">الغرف</label>
+              <input type="text" value={form.rooms} onChange={(e) => setForm({ ...form, rooms: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="عدد الغرف" />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">الحمامات</label>
+              <input type="text" value={form.bathrooms} onChange={(e) => setForm({ ...form, bathrooms: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="عدد الحمامات" />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">الدور</label>
+              <input type="text" value={form.floor} onChange={(e) => setForm({ ...form, floor: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="الدور" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">التشطيب</label>
+              <select value={form.finishing} onChange={(e) => setForm({ ...form, finishing: e.target.value as Property['finishing'] })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+                <option value="fully-finished" className="bg-gray-900">سوبر لوكس</option>
+                <option value="semi-finished" className="bg-gray-900">نصف تشطيب</option>
+                <option value="core-and-shell" className="bg-gray-900">على المحارة</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">التسليم</label>
+              <select value={form.delivery} onChange={(e) => setForm({ ...form, delivery: e.target.value as Property['delivery'] })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+                <option value="immediate" className="bg-gray-900">فوري</option>
+                <option value="delayed" className="bg-gray-900">آجل</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">المشروع / الكمبوند</label>
+            <input type="text" value={form.project} onChange={(e) => setForm({ ...form, project: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم المشروع أو الكمبوند" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">الوصف</label>
+            <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-20" placeholder="وصف العقار" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">رقم العميل (اختياري)</label>
+            <input type="tel" list="property-client-phones" value={form.clientPhone} onChange={(e) => handleClientSelect(e.target.value)}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
+            <datalist id="property-client-phones">
+              {clients.map(c => (<option key={c.id} value={c.phone}>{c.name}</option>))}
+            </datalist>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">اسم العميل</label>
+            <input type="text" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم العميل (يتعبأ تلقائياً)" />
+          </div>
+          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
+            إضافة العقار ✨
+          </motion.button>
+        </form>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Property Detail Modal
+function PropertyDetailModal({ property, onClose, onDelete }: {
+  property: Property; onClose: () => void; onDelete: () => void;
+}) {
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30 glow-primary">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text">تفاصيل العقار</h2>
+          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-5 h-5 text-gray-400" /></motion.button>
+        </div>
+        <div className="flex items-center gap-4 mb-6">
+          <div className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center shadow-lg glow-primary">
+            <Building2 className="w-8 h-8 text-white" />
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-white">{property.name}</h3>
+            <p className="text-sm text-gray-400">{property.type}</p>
+          </div>
+        </div>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">المساحة</p><p className="text-white font-medium">{property.area || '-'}</p></div>
+            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">السعر</p><p className="text-white font-medium text-purple-400">{formatPrice(property.price)}</p></div>
+            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">الموقع</p><p className="text-white font-medium">{property.location || '-'}</p></div>
+            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">الغرف / الحمامات</p><p className="text-white font-medium">{property.rooms || '-'} / {property.bathrooms || '-'}</p></div>
+            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">التشطيب</p><p className="text-white font-medium">{property.finishing === 'fully-finished' ? 'سوبر لوكس' : property.finishing === 'semi-finished' ? 'نصف تشطيب' : 'على المحارة'}</p></div>
+            <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">التسليم</p><p className="text-white font-medium">{property.delivery === 'immediate' ? 'فوري' : 'آجل'}</p></div>
+          </div>
+          {property.project && <div className="bg-white/5 rounded-xl p-3"><p className="text-xs text-gray-400">المشروع / الكمبوند</p><p className="text-white font-medium">{property.project}</p></div>}
+          {property.clientName && (
+            <div className="bg-white/5 rounded-xl p-3">
+              <p className="text-xs text-gray-400">العميل</p>
+              <p className="text-white font-medium">{property.clientName}</p>
+              {property.clientPhone && <p className="text-sm text-purple-400" dir="ltr">{property.clientPhone}</p>}
+            </div>
+          )}
+          {property.description && <div className="bg-white/5 rounded-xl p-4"><p className="text-xs text-gray-400 mb-1">الوصف</p><p className="text-white text-sm">{property.description}</p></div>}
+          <div className="flex flex-wrap gap-2 pt-2">
+            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={onDelete}
+              className="flex items-center justify-center gap-2 bg-red-500/20 text-red-400 py-2.5 px-4 rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20">
+              <Trash2 className="w-4 h-4" /> حذف
+            </motion.button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// Add Feedback Modal
+function AddFeedbackModal({ clients, onClose, onAdd }: {
+  clients: Client[];
+  onClose: () => void;
+  onAdd: (feedback: Omit<DailyFeedback, 'id' | 'createdAt' | 'userId'>) => void;
+}) {
+  const [form, setForm] = useState({
+    clientPhone: '', clientName: '', date: new Date().toISOString().slice(0, 16),
+    feedback: '', callStatus: 'called' as DailyFeedback['callStatus'],
+    duration: '', nextAction: '',
+  });
+
+  const handleClientSelect = (clientPhone: string) => {
+    const client = clients.find(c => c.phone === clientPhone);
+    if (client) setForm({ ...form, clientPhone, clientName: client.name });
+    else setForm({ ...form, clientPhone, clientName: '' });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.clientPhone || !form.clientName || !form.date) return;
+    onAdd(form);
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.5 }} onClick={(e) => e.stopPropagation()}
+        className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2"><MessageSquare className="w-6 h-6" /> إضافة فيدباك يومي</h2>
+          <motion.button whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }} onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-5 h-5 text-gray-400" /></motion.button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">رقم العميل *</label>
+            <input type="tel" required list="feedback-client-phones" value={form.clientPhone} onChange={(e) => handleClientSelect(e.target.value)}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="05xxxxxxxx" dir="ltr" />
+            <datalist id="feedback-client-phones">
+              {clients.map(c => (<option key={c.id} value={c.phone}>{c.name}</option>))}
+            </datalist>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">اسم العميل *</label>
+            <input type="text" required value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="اسم العميل" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">التاريخ والوقت *</label>
+            <input type="datetime-local" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" dir="ltr" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">حالة الاتصال *</label>
+            <select required value={form.callStatus} onChange={(e) => setForm({ ...form, callStatus: e.target.value as DailyFeedback['callStatus'] })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all">
+              <option value="called" className="bg-gray-900">تم الاتصال</option>
+              <option value="no-answer" className="bg-gray-900">لا رد</option>
+              <option value="busy" className="bg-gray-900">مشغول</option>
+              <option value="not-called" className="bg-gray-900">لم يتصل</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">مدة المكالمة</label>
+              <input type="text" value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="مثال: 5 دقائق" />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">الإجراء التالي</label>
+              <input type="text" value={form.nextAction} onChange={(e) => setForm({ ...form, nextAction: e.target.value })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all" placeholder="مثال: متابعة" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">الفيدباك</label>
+            <textarea value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24" placeholder="ملاحظات على المكالمة..." />
+          </div>
+          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit"
+            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover">
+            إضافة الفيدباك 📝
+          </motion.button>
+        </form>
+      </motion.div>
+    </motion.div>
+  );
 }
 
 export default App;
