@@ -388,6 +388,7 @@ function App() {
             {[
               { id: 'dashboard' as TabType, icon: Home, label: 'الرئيسية' },
               { id: 'clients' as TabType, icon: Users, label: 'العملاء' },
+              { id: 'pipeline' as TabType, icon: Target, label: 'المراحل' },
               { id: 'properties' as TabType, icon: Building2, label: 'العقارات' },
               { id: 'reminders' as TabType, icon: Bell, label: 'التذكيرات' },
               { id: 'daily-feedback' as TabType, icon: MessageSquare, label: 'الفيدباك اليومي' },
@@ -459,6 +460,21 @@ function App() {
                 onSelect={setSelectedClient}
                 onDelete={deleteClient}
                 onAdd={() => setShowAddClient(true)}
+              />
+            </motion.div>
+          )}
+
+          {activeTab === 'pipeline' && (
+            <motion.div
+              key="pipeline"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+            >
+              <PipelineView 
+                clients={clients}
+                onUpdateStage={(id, stage) => updateClient(id, { stage })}
               />
             </motion.div>
           )}
@@ -556,6 +572,7 @@ function App() {
         )}
         {showAddProperty && (
           <AddPropertyModal 
+            clients={clients}
             onClose={() => setShowAddProperty(false)} 
             onAdd={addProperty} 
           />
@@ -899,7 +916,10 @@ function ClientsView({ clients, searchTerm, onSearch, onSelect, onDelete, onAdd 
                   </p>
                 </div>
               </div>
-              <StatusBadge status={client.status} />
+              <div className="flex gap-2">
+                <StatusBadge status={client.status} />
+                <StageBadge stage={client.stage} />
+              </div>
             </div>
             <div className="space-y-2 text-sm">
               <p className="text-gray-300 flex items-center gap-2">
@@ -1146,6 +1166,7 @@ function AddClientModal({ onClose, onAdd }: {
     monthlyInstallment: '',
     deliveryPeriod: '',
     status: 'campaign' as Client['status'],
+    stage: 'new' as Client['stage'],
     feedback: '',
   });
 
@@ -1260,6 +1281,21 @@ function AddClientModal({ onClose, onAdd }: {
               <option value="campaign" className="bg-gray-900">كامبين</option>
               <option value="facebook" className="bg-gray-900">فيسبوك</option>
               <option value="external" className="bg-gray-900">خارجي</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">مرحلة العميل</label>
+            <select
+              value={form.stage}
+              onChange={(e) => setForm({ ...form, stage: e.target.value as Client['stage'] })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+            >
+              <option value="new" className="bg-gray-900">جديد</option>
+              <option value="contacted" className="bg-gray-900">تم التواصل</option>
+              <option value="meeting" className="bg-gray-900">موعد معاينة</option>
+              <option value="negotiation" className="bg-gray-900">تفاوض</option>
+              <option value="closed" className="bg-gray-900">تم البيع</option>
+              <option value="lost" className="bg-gray-900">ضائع</option>
             </select>
           </div>
           <div>
@@ -1440,6 +1476,7 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
     monthlyInstallment: client.monthlyInstallment,
     deliveryPeriod: client.deliveryPeriod,
     status: client.status,
+    stage: client.stage,
     feedback: client.feedback,
   });
 
@@ -1559,6 +1596,21 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
               </select>
             </div>
             <div>
+              <label className="block text-sm text-gray-300 mb-1">مرحلة العميل</label>
+              <select
+                value={form.stage}
+                onChange={(e) => setForm({ ...form, stage: e.target.value as Client['stage'] })}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              >
+                <option value="new" className="bg-gray-900">جديد</option>
+                <option value="contacted" className="bg-gray-900">تم التواصل</option>
+                <option value="meeting" className="bg-gray-900">موعد معاينة</option>
+                <option value="negotiation" className="bg-gray-900">تفاوض</option>
+                <option value="closed" className="bg-gray-900">تم البيع</option>
+                <option value="lost" className="bg-gray-900">ضائع</option>
+              </select>
+            </div>
+            <div>
               <label className="block text-sm text-gray-300 mb-1">ملاحظات</label>
               <textarea
                 value={form.feedback}
@@ -1613,6 +1665,10 @@ function ClientDetailModal({ client, onClose, onUpdate, onDelete, onAddReminder 
                 <p className="text-white font-medium">
                   {client.status === 'campaign' ? 'كامبين' : client.status === 'facebook' ? 'فيسبوك' : 'خارجي'}
                 </p>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3 hover:bg-white/10 transition-colors">
+                <p className="text-xs text-gray-400">المرحلة</p>
+                <StageBadge stage={client.stage} />
               </div>
             </div>
             {client.feedback && (
@@ -1694,10 +1750,41 @@ function StatusBadge({ status }: { status: Client['status'] }) {
   );
 }
 
+// Stage Badge Component
+function StageBadge({ stage }: { stage: Client['stage'] }) {
+  const getStageInfo = () => {
+    switch (stage) {
+      case 'new':
+        return { label: 'جديد', className: 'bg-blue-500/20 text-blue-400' };
+      case 'contacted':
+        return { label: 'تم التواصل', className: 'bg-purple-500/20 text-purple-400' };
+      case 'meeting':
+        return { label: 'موعد معاينة', className: 'bg-cyan-500/20 text-cyan-400' };
+      case 'negotiation':
+        return { label: 'تفاوض', className: 'bg-amber-500/20 text-amber-400' };
+      case 'closed':
+        return { label: 'تم البيع', className: 'bg-emerald-500/20 text-emerald-400' };
+      case 'lost':
+        return { label: 'ضائع', className: 'bg-red-500/20 text-red-400' };
+      default:
+        return { label: 'غير معروف', className: 'bg-gray-500/20 text-gray-400' };
+    }
+  };
+
+  const { label, className } = getStageInfo();
+
+  return (
+    <span className={`text-xs px-2.5 py-1 rounded-full ${className}`}>
+      {label}
+    </span>
+  );
+}
+
 // Add Property Modal
-function AddPropertyModal({ onClose, onAdd }: { 
+function AddPropertyModal({ onClose, onAdd, clients }: { 
   onClose: () => void; 
-  onAdd: (property: Omit<Property, 'id' | 'createdAt'>) => void 
+  onAdd: (property: Omit<Property, 'id' | 'createdAt'>) => void;
+  clients: Client[];
 }) {
   const [form, setForm] = useState({
     name: '',
@@ -1707,7 +1794,18 @@ function AddPropertyModal({ onClose, onAdd }: {
     location: '',
     description: '',
     image: '',
+    clientPhone: '',
+    clientName: '',
   });
+
+  const handleClientSelect = (clientPhone: string) => {
+    const client = clients.find(c => c.phone === clientPhone);
+    if (client) {
+      setForm({ ...form, clientPhone, clientName: client.name });
+    } else {
+      setForm({ ...form, clientPhone, clientName: '' });
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1812,6 +1910,33 @@ function AddPropertyModal({ onClose, onAdd }: {
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all resize-none h-24"
               placeholder="وصف العقار"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">رقم العميل (اختياري)</label>
+            <input
+              type="tel"
+              list="property-client-phones"
+              value={form.clientPhone}
+              onChange={(e) => handleClientSelect(e.target.value)}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="05xxxxxxxx"
+              dir="ltr"
+            />
+            <datalist id="property-client-phones">
+              {clients.map(c => (
+                <option key={c.id} value={c.phone}>{c.name}</option>
+              ))}
+            </datalist>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">اسم العميل</label>
+            <input
+              type="text"
+              value={form.clientName}
+              onChange={(e) => setForm({ ...form, clientName: e.target.value })}
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50 transition-all"
+              placeholder="اسم العميل (يتعبأ تلقائياً)"
             />
           </div>
           <motion.button
@@ -2057,6 +2182,98 @@ function AddFeedbackModal({ clients, onClose, onAdd }: {
   );
 }
 
+// Pipeline View Component
+function PipelineView({ clients, onUpdateStage }: {
+  clients: Client[];
+  onUpdateStage: (id: string, stage: Client['stage']) => void;
+}) {
+  const stages = [
+    { id: 'new', label: 'جديد', color: 'from-blue-500 to-blue-600', icon: '🆕' },
+    { id: 'contacted', label: 'تم التواصل', color: 'from-purple-500 to-purple-600', icon: '📞' },
+    { id: 'meeting', label: 'موعد معاينة', color: 'from-cyan-500 to-cyan-600', icon: '📅' },
+    { id: 'negotiation', label: 'تفاوض', color: 'from-amber-500 to-amber-600', icon: '💬' },
+    { id: 'closed', label: 'تم البيع', color: 'from-emerald-500 to-emerald-600', icon: '✅' },
+    { id: 'lost', label: 'ضائع', color: 'from-red-500 to-red-600', icon: '❌' },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+          <Target className="w-6 h-6" />
+          مراحل العملاء (Pipeline)
+        </h2>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        {stages.map((stage, i) => {
+          const stageClients = clients.filter(c => c.stage === stage.id);
+          return (
+            <motion.div
+              key={stage.id}
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.1 }}
+              className="glass-card rounded-2xl p-4"
+            >
+              <div className={`bg-gradient-to-r ${stage.color} rounded-xl p-3 mb-3`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl">{stage.icon}</span>
+                    <h3 className="font-bold text-white">{stage.label}</h3>
+                  </div>
+                  <span className="bg-white/20 text-white px-2 py-1 rounded-full text-sm font-bold">
+                    {stageClients.length}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {stageClients.map((client) => (
+                  <motion.div
+                    key={client.id}
+                    whileHover={{ scale: 1.02 }}
+                    className="bg-white/5 rounded-lg p-3 hover:bg-white/10 transition-colors"
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex-1">
+                        <p className="font-medium text-white text-sm">{client.name}</p>
+                        <p className="text-xs text-gray-400" dir="ltr">{client.phone}</p>
+                      </div>
+                    </div>
+                    {client.property && (
+                      <p className="text-xs text-purple-400 mb-2">{client.property}</p>
+                    )}
+                    <div className="flex gap-1">
+                      {stages.map((s) => (
+                        <button
+                          key={s.id}
+                          onClick={() => onUpdateStage(client.id, s.id as Client['stage'])}
+                          className={`flex-1 text-xs py-1 rounded ${
+                            client.stage === s.id 
+                              ? 'bg-purple-500 text-white' 
+                              : 'bg-white/5 text-gray-400 hover:bg-white/10'
+                          }`}
+                          title={s.label}
+                        >
+                          {s.icon}
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                ))}
+                {stageClients.length === 0 && (
+                  <p className="text-center text-gray-500 text-xs py-4">لا يوجد عملاء</p>
+                )}
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // Properties View Component
 function PropertiesView({ properties, onSelect, onDelete, onAdd }: {
   properties: Property[];
@@ -2121,6 +2338,18 @@ function PropertiesView({ properties, onSelect, onDelete, onAdd }: {
                 <Calendar className="w-4 h-4 text-purple-400" />
                 الموقع: {property.location}
               </p>
+              {property.clientName && (
+                <p className="text-gray-300 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-purple-400" />
+                  العميل: {property.clientName}
+                </p>
+              )}
+              {property.clientPhone && (
+                <p className="text-gray-300 flex items-center gap-2">
+                  <Phone className="w-4 h-4 text-purple-400" />
+                  <span dir="ltr">{property.clientPhone}</span>
+                </p>
+              )}
             </div>
           </motion.div>
         ))}

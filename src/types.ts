@@ -7,6 +7,7 @@ export interface Client {
   monthlyInstallment: string;
   deliveryPeriod: string;
   status: 'campaign' | 'facebook' | 'external';
+  stage: 'new' | 'contacted' | 'meeting' | 'negotiation' | 'closed' | 'lost';
   feedback: string;
   createdAt: string;
   updatedAt: string;
@@ -34,6 +35,8 @@ export interface Property {
   location: string;
   description: string;
   image: string;
+  clientPhone?: string;
+  clientName?: string;
   createdAt: string;
 }
 
@@ -47,4 +50,4 @@ export interface DailyFeedback {
   createdAt: string;
 }
 
-export type TabType = 'dashboard' | 'clients' | 'properties' | 'reminders' | 'daily-feedback';
+export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback';
