@@ -1,0 +1,377 @@
+// ===== مزامنة البيانات بين كل الأجهزة =====
+// البيانات تُحفظ محلياً (localStorage) للسرعة، ويتم تبادلها مع سيرفر البيانات المحلي
+// (ملف data/db.json) كل ثانيتين، فتصبح نفس البيانات على الكمبيوتر والموبايل.
+//
+// قواعد الدمج:
+// 1) أي سجل أضافه جهاز موجود على كل الأجهزة (اتحاد بالمعرّف).
+// 2) أي سجل حُذف من جهاز يُحفظ كـ «شاهد حذف» حتى لا يعود من الأجهزة الأخرى.
+// 3) السيرفر هو المرجع لأي تعديل على سجل موجود (لمنع رجوع البيانات القديمة).
+
+export const SYNC_EVENT = 'crm-sync';
+
+const API = '/api/store';
+const POLL_MS = 2500;
+const TOMBSTONE_KEY = 'crm_tombstones';
+// «علامة إعادة الضبط»: سجل واحد يحتوي وقت آخر إعادة ضبط للنظام.
+// أي جهاز يرى علامة أحدث من التي طبّقها يمسح بياناته المحلية ويأخذ نسخة السيرفر كما هي
+// — بدون ذلك، أي جهاز قديم (لابتوب أو هاتف) كان سيرفع بياناته المحذوفة إلى السيرفر مرة أخرى.
+const RESET_KEY = 'crm_reset';
+const RESET_STAMP_KEY = 'crm_reset_stamp'; // يبقى على هذا الجهاز فقط
+
+// المفاتيح المشتركة فقط — جلسة الدخول (current_user) وحالة الإشعارات تبقى لكل جهاز
+const SYNC_KEYS: string[] = [
+  'crm_users',
+  'crm_clients',
+  'crm_properties',
+  'crm_reminders',
+  'crm_daily_feedback',
+  'crm_assigned_leads',
+  'crm_teams',
+  'crm_attendance',
+  'crm_messages',
+  'crm_call_logs',
+];
+const ALL_KEYS = [...SYNC_KEYS, TOMBSTONE_KEY];
+// مفاتيح البيانات التي تُستبدل بالكامل عند إعادة الضبط
+const DATA_KEYS = SYNC_KEYS;
+
+type Tombstone = { key: string; id: string };
+type StoreData = Record<string, unknown>;
+
+let serverVersion = -1;
+let snapshot: Record<string, string> = {};
+let busy = false;
+let online = false;
+
+const safeParse = (raw: string | null): any[] => {
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const parseTombstones = (value: unknown): Tombstone[] => {
+  const raw = typeof value === 'string' ? safeParse(value) : Array.isArray(value) ? value : [];
+  return raw.filter((item: any) => item && typeof item.key === 'string' && typeof item.id === 'string');
+};
+
+const mergeTombstones = (...lists: Tombstone[][]): Tombstone[] => {
+  const seen = new Set<string>();
+  const merged: Tombstone[] = [];
+  for (const list of lists) {
+    for (const item of list) {
+      const tag = `${item.key}::${item.id}`;
+      if (seen.has(tag)) continue;
+      seen.add(tag);
+      merged.push({ key: item.key, id: item.id });
+    }
+  }
+  return merged;
+};
+
+const isDeleted = (tombstones: Tombstone[], key: string, id: string): boolean =>
+  tombstones.some((item) => item.key === key && item.id === id);
+
+// وقت آخر إعادة ضبط مسجَّل في بيانات السيرفر (0 لو لا يوجد)
+const resetAt = (data: StoreData | undefined): number => {
+  const list = Array.isArray(data?.[RESET_KEY]) ? (data![RESET_KEY] as any[]) : [];
+  return list.reduce((max, item) => Math.max(max, Date.parse(item?.at) || 0), 0);
+};
+
+const localResetStamp = (): number => {
+  try {
+    return Number(localStorage.getItem(RESET_STAMP_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+};
+
+// إعادة ضبط هذا الجهاز: يأخذ نسخة السيرفر كما هي بلا دمج ولا شواهد حذف قديمة
+const applyServerReset = (data: StoreData | undefined, at: number): void => {
+  try {
+    for (const key of DATA_KEYS) {
+      const remote = Array.isArray(data?.[key]) ? data![key] : [];
+      localStorage.setItem(key, JSON.stringify(remote));
+    }
+    localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(Array.isArray(data?.[TOMBSTONE_KEY]) ? data![TOMBSTONE_KEY] : []));
+    localStorage.setItem(RESET_STAMP_KEY, String(at));
+  } catch {
+    /* لا شيء */
+  }
+};
+
+const idSet = (raw?: string): Set<string> => new Set(safeParse(raw ?? null).map((item: any) => item?.id).filter(Boolean));
+
+const readAll = (): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const key of ALL_KEYS) {
+    try {
+      out[key] = localStorage.getItem(key) || '[]';
+    } catch {
+      out[key] = '[]';
+    }
+  }
+  return out;
+};
+
+const localData = (): StoreData => {
+  const out: StoreData = {};
+  for (const key of ALL_KEYS) {
+    try {
+      out[key] = safeParse(localStorage.getItem(key));
+    } catch {
+      out[key] = [];
+    }
+  }
+  return out;
+};
+
+// اتحاد السجلين بالمعرّف — النسخة البعيدة تفوز عند الاختلاف (السيرفر هو المرجع)
+const mergeUnion = (remote: any[], local: any[]): any[] => {
+  const byId = new Map<string, any>();
+  for (const item of local) {
+    if (item && item.id) byId.set(item.id, item);
+  }
+  for (const item of remote) {
+    if (item && item.id) byId.set(item.id, item);
+  }
+  return Array.from(byId.values());
+};
+
+const afterTombstones = (records: any[], tombstones: Tombstone[], key: string): any[] =>
+  records.filter((item) => !item?.id || !isDeleted(tombstones, key, item.id));
+
+const pushAll = async (): Promise<void> => {
+  const res = await fetch(API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: localData() }),
+  });
+  if (!res.ok) throw new Error(`bulk failed: ${res.status}`);
+  const payload = await res.json();
+  serverVersion = payload.version;
+};
+
+const pushOne = async (key: string): Promise<void> => {
+  const res = await fetch(API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, value: safeParse(localStorage.getItem(key)) }),
+  });
+  if (!res.ok) throw new Error(`push failed: ${res.status}`);
+  const payload = await res.json();
+  serverVersion = payload.version;
+};
+
+// كل ثانيتين: نرفع تغييرات هذا الجهاز ثم نجلب تغييرات الأجهزة الأخرى
+const tick = async (): Promise<void> => {
+  if (busy) return;
+  busy = true;
+  try {
+    // 0) هل تغيّر شيء على السيرفر؟ (نفحص قبل الرفع حتى نكتشف إعادة الضبط قبل رفع أي بيانات قديمة)
+    let prefetched: any = null;
+    const versionRes = await fetch(`${API}?meta=version`, { cache: 'no-store' });
+    if (!versionRes.ok) throw new Error(`version failed: ${versionRes.status}`);
+    const { version } = await versionRes.json();
+    if (version !== serverVersion) {
+      const fullRes = await fetch(API, { cache: 'no-store' });
+      if (!fullRes.ok) throw new Error(`pull failed: ${fullRes.status}`);
+      const store = await fullRes.json();
+      const serverReset = resetAt(store.data);
+      if (serverReset > localResetStamp()) {
+        // النظام أُعيد ضبطه من جهاز آخر: نمسح بيانات هذا الجهاز ونأخذ نسخة السيرفر كما هي
+        applyServerReset(store.data, serverReset);
+        serverVersion = Number(store.version) || 0;
+        online = true;
+        snapshot = readAll();
+        window.dispatchEvent(new Event(SYNC_EVENT));
+        return;
+      }
+      prefetched = store;
+    }
+
+    const current = readAll();
+    const dirty = ALL_KEYS.filter((key) => current[key] !== snapshot[key]);
+    const tombstones = parseTombstones(current[TOMBSTONE_KEY]);
+
+    // 1) رصد أي سجل حذفه هذا الجهاز وتسجيل شاهد حذف له
+    let added = false;
+    for (const key of SYNC_KEYS) {
+      const before = idSet(snapshot[key]);
+      const now = idSet(current[key]);
+      for (const id of before) {
+        if (!now.has(id) && !isDeleted(tombstones, key, id)) {
+          tombstones.push({ key, id });
+          added = true;
+        }
+      }
+    }
+    if (added) {
+      const raw = JSON.stringify(tombstones);
+      localStorage.setItem(TOMBSTONE_KEY, raw);
+      current[TOMBSTONE_KEY] = raw;
+      if (!dirty.includes(TOMBSTONE_KEY)) dirty.push(TOMBSTONE_KEY);
+    }
+
+    // 2) رفع التغييرات — شواهد الحذف أولاً حتى لا تُحيي الأجهزة الأخرى السجل
+    if (dirty.includes(TOMBSTONE_KEY)) await pushOne(TOMBSTONE_KEY);
+    for (const key of dirty) {
+      if (key !== TOMBSTONE_KEY) await pushOne(key);
+    }
+    snapshot = readAll();
+
+    // 3) تطبيق تحديثات الأجهزة الأخرى (جُلبت في الخطوة صفر إن وُجدت)
+    if (!prefetched) {
+      online = true;
+      return;
+    }
+    const store = prefetched;
+    serverVersion = Math.max(serverVersion, Number(store.version) || 0);
+
+    const latest = readAll();
+    // أي مفتاح تغيّر محلياً أثناء الجلب نتركه لنسخة هذا الجهاز
+    const fresh = ALL_KEYS.filter((key) => latest[key] !== snapshot[key]);
+    const toApply = ALL_KEYS.filter((key) => !fresh.includes(key));
+    const allTombstones = mergeTombstones(tombstones, parseTombstones(store.data?.[TOMBSTONE_KEY]));
+    // «الإحياء يفوز»: أي شاهد حذف لسجل موجود فعلاً في البيانات يُسقط —
+    // بدون ذلك يحذف جهاز قديم سجلاً أُعيد إنشاؤه (كحساب الإدارة) في كل دورة مزامنة.
+    const dropResurrected = (key: string, union: any[]): Tombstone[] => {
+      const alive = new Set<string>(union.filter((r) => r?.id).map((r) => String(r.id)));
+      return allTombstones.filter((t) => !(t?.key === key && t?.id && alive.has(String(t.id))));
+    };
+
+    let changed = false;
+    const repush: string[] = [];
+
+    for (const key of toApply) {
+      if (key === TOMBSTONE_KEY) {
+        const raw = JSON.stringify(allTombstones);
+        if (raw !== latest[TOMBSTONE_KEY]) {
+          localStorage.setItem(TOMBSTONE_KEY, raw);
+          changed = true;
+        }
+        continue;
+      }
+      const remote: any[] = Array.isArray(store.data?.[key]) ? store.data[key] : [];
+      const local = safeParse(latest[key]);
+      const union = mergeUnion(remote, local);
+      const kept = dropResurrected(key, union);
+      if (kept.length !== allTombstones.length) {
+        allTombstones.splice(0, allTombstones.length, ...kept);
+        if (!repush.includes(TOMBSTONE_KEY)) repush.push(TOMBSTONE_KEY);
+      }
+      const merged = afterTombstones(union, allTombstones, key);
+      const mergedRaw = JSON.stringify(merged);
+      if (mergedRaw !== JSON.stringify(local)) {
+        localStorage.setItem(key, mergedRaw);
+        changed = true;
+      }
+      // سجلات موجودة هنا ولم تصل السيرفر بعد (مثل جهاز كان غير متصل)
+      if (mergedRaw !== JSON.stringify(remote)) repush.push(key);
+    }
+
+    // كتابة قائمة الشواهد النهائية (بعد سقوط شواهد الإحياء) ودفعها للسيرفر
+    const finalTombs = JSON.stringify(allTombstones);
+    if (finalTombs !== latest[TOMBSTONE_KEY]) {
+      localStorage.setItem(TOMBSTONE_KEY, finalTombs);
+      changed = true;
+      if (!repush.includes(TOMBSTONE_KEY)) repush.push(TOMBSTONE_KEY);
+    }
+
+    snapshot = readAll();
+    for (const key of repush) await pushOne(key);
+
+    online = true;
+    if (changed) window.dispatchEvent(new Event(SYNC_EVENT));
+  } catch {
+    online = false;
+  } finally {
+    busy = false;
+  }
+};
+
+export const isOnline = (): boolean => online;
+
+// دفع فوري لمفتاح واحد بعد تغيير محلي (مثل إنشاء حساب أو تسجيل حضور)
+// حتى يظهر على كل الأجهزة في نفس اللحظة بدل انتطار دورة التزامن
+// (إن فشل — مثل انعدام الاتصال — يرفعه التزامن الدوري تلقائياً لاحقاً)
+export async function pushKey(key: string): Promise<void> {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return;
+    snapshot[key] = raw;
+    await pushOne(key);
+  } catch {
+    /* لا شيء */
+  }
+}
+
+// تُنادى مرة واحدة قبل تشغيل التطبيق: نجلب بيانات السيرفر أولاً ثم نبدأ المزامنة الدورية
+export async function startSync(): Promise<void> {
+  try {
+    const res = await fetch(API, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`store failed: ${res.status}`);
+    const store = await res.json();
+    serverVersion = Number(store.version) || 0;
+    online = true;
+
+    // إعادة ضبط النظام من جهاز آخر؟ نتجاهل بيانات هذا الجهاز تماماً ونأخذ نسخة السيرفر
+    const serverReset = resetAt(store.data);
+    if (serverReset > localResetStamp()) {
+      applyServerReset(store.data, serverReset);
+      window.dispatchEvent(new Event(SYNC_EVENT));
+      snapshot = readAll();
+      window.setInterval(() => {
+        void tick();
+      }, POLL_MS);
+      return;
+    }
+
+    const tombstones = mergeTombstones(
+      parseTombstones(localStorage.getItem(TOMBSTONE_KEY)),
+      parseTombstones(store.data?.[TOMBSTONE_KEY])
+    );
+
+    if (!store.isEmpty) {
+      let changed = false;
+      let sync = false;
+      for (const key of SYNC_KEYS) {
+        const remote: any[] = Array.isArray(store.data?.[key]) ? store.data[key] : [];
+        const local = safeParse(localStorage.getItem(key));
+        const union = mergeUnion(remote, local);
+        // «الإحياء يفوز»: شاهد لسجل موجود فعلاً يُسقط (يمس حماية حساب الإدارة من الحذف الدوري)
+        const alive = new Set<string>(union.filter((r) => r?.id).map((r) => String(r.id)));
+        const kept = tombstones.filter((t) => !(t?.key === key && t?.id && alive.has(String(t.id))));
+        if (kept.length !== tombstones.length) {
+          tombstones.splice(0, tombstones.length, ...kept);
+          sync = true;
+        }
+        const merged = afterTombstones(union, tombstones, key);
+        const mergedRaw = JSON.stringify(merged);
+        if (mergedRaw !== JSON.stringify(local)) {
+          localStorage.setItem(key, mergedRaw);
+          changed = true;
+        }
+      }
+      const finalTombs = JSON.stringify(tombstones);
+      if (finalTombs !== localStorage.getItem(TOMBSTONE_KEY)) sync = true;
+      localStorage.setItem(TOMBSTONE_KEY, finalTombs);
+      if (sync) await pushAll();
+      if (changed) window.dispatchEvent(new Event(SYNC_EVENT));
+    } else {
+      // أول جهاز يستخدم النظام: نرفع بياناته ليستفيد منها الباقي
+      localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(tombstones));
+      await pushAll();
+    }
+  } catch (error) {
+    online = false;
+    console.warn('[sync] تعذّر الاتصال بسيرفر البيانات — سيعمل التطبيق ببيانات هذا الجهاز فقط', error);
+  }
+
+  snapshot = readAll();
+  window.setInterval(() => {
+    void tick();
+  }, POLL_MS);
+}

@@ -3,3 +3,11 @@ node_modules/
 dist/
 build/
 *.log
+
+# قاعدة بيانات النظام (ملف JSON محلي) — تحتوي بيانات الفريق وكلمات المرور
+/data
+
+# ملفات محلية لا تُرفع إلى الاستضافة
+.vercel
+.freebuff
+vite.test.config.js

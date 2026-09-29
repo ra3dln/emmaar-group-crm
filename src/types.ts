@@ -21,6 +21,16 @@ export interface Team {
   createdBy: string;
 }
 
+// حدث في الخط الزمني للعميل: يُسجَّل داخل سجل العميل نفسه ليسافر مع المزامنة
+// (إضافة، تغيير مرحلة، تذكير، فيدباك، واتساب، وصول من الرابط العام…)
+export interface ClientActivity {
+  id: string;
+  type: string;
+  text: string;
+  at: string;
+  by?: string;
+}
+
 export interface Client {
   id: string;
   userId: string;
@@ -39,6 +49,7 @@ export interface Client {
   source: string;
   createdAt: string;
   updatedAt: string;
+  activities?: ClientActivity[];
 }
 
 export interface AssignedLead {
@@ -77,8 +88,11 @@ export interface Property {
   priceNumeric: number;
   location: string;
   description: string;
-  image: string;
+  images?: string[]; // صور الوحدة (مضغوطة ومحفوظة داخل قاعدة البيانات نفسها)
+  latitude?: number; // موقع الوحدة على الخريطة
+  longitude?: number;
   clientPhone?: string;
+  clientPhone2?: string; // رقم تاني اختياري (مالك العقار أو عميل مهتم)
   clientName?: string;
   project?: string;
   compound?: string;
@@ -103,4 +117,49 @@ export interface DailyFeedback {
   createdAt: string;
 }
 
-export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'new-leads' | 'reports' | 'admin-users' | 'admin-feedback' | 'admin-leads' | 'admin-create-sales' | 'admin-settings';
+export interface Attendance {
+  id: string;
+  userId: string;
+  date: string; // YYYY-MM-DD (يوم الحضور)
+  checkInAt: string; // ISO timestamp كامل وقت تسجيل الحضور
+  latitude: number;
+  longitude: number;
+  accuracy: number; // دقة إشارة الـ GPS بالمتر
+  checkOutAt?: string; // وقت الانصراف
+  checkOutLatitude?: number;
+  checkOutLongitude?: number;
+  checkOutAccuracy?: number;
+  createdAt: string;
+  updatedAt?: string;
+  // مؤشرات اشتباه في الموقع (Fake GPS / VPN) — تُعرض للإدارة كتحذير أحمر
+  flags?: string[];
+}
+
+// سجل مكالمة: يكتبه السيلز بعد كل اتصال (تم الرد / لم يرد + كومنت + موعد الاتصال القادم)
+// ويُزامَن ليظهر للإدارة في مركز الإشعارات وتبويب الفيدباك.
+export interface CallLog {
+  id: string;
+  clientId: string;
+  clientName: string;
+  clientPhone: string;
+  salesId: string;
+  salesName: string;
+  result: 'answered' | 'no-answer';
+  comment: string;
+  nextCallAt?: string;
+  createdAt: string;
+}
+
+// رسالة في الشات الداخلي بين الإدارة وأي حساب سيلز
+export interface ChatMessage {
+  id: string;
+  fromId: string; // مُرسِل الرسالة
+  fromName: string; // اسمه وقت الإرسال (حتى يظهر في المحادثة)
+  toId: string; // المُستقبِل
+  text: string;
+  createdAt: string;
+  readAt?: string; // وقت قراءتها من المستقبل (للمحادثات الفردية)
+  readBy?: string[]; // من قرأها — تُستخدم في غرفة المدراء الجماعية
+}
+
+export type TabType = 'dashboard' | 'clients' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'new-leads' | 'reports' | 'chat' | 'admin-users' | 'admin-feedback' | 'admin-leads' | 'admin-attendance' | 'admin-analytics' | 'admin-chat' | 'admin-settings';
