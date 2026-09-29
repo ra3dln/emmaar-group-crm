@@ -7303,7 +7303,7 @@ function AdminSettingsView(_props: any) {
           </p>
           <p className="text-[11px] text-gray-500 mt-3">
             * تأكد أن جهاز السيرفر يعمل وأن شارة «مشترك» في الأعلى خضراء. لمتابعة حالة الاتصال من أي جهاز افتح
-            <span className="text-cyan-300" dir="ltr"> /api/store</span>.
+            <span className="text-cyan-300" dir="ltr"> /api/store (only if Redis is connected)</span>.
           </p>
         </div>
       </div>

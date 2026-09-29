@@ -7,10 +7,28 @@
 // 2) أي سجل حُذف من جهاز يُحفظ كـ «شاهد حذف» حتى لا يعود من الأجهزة الأخرى.
 // 3) السيرفر هو المرجع لأي تعديل على سجل موجود (لمنع رجوع البيانات القديمة).
 
+// ===== مزامنة البيانات بين كل الأجهزة =====
+// البيانات تُحفظ محلياً (localStorage) للسرعة، ويتم تبادلها مع سيرفر البيانات المحلي
+// (ملف data/db.json) كل ثانيتين، فتصبح نفس البيانات على الكمبيوتر والموبايل.
+//
+// قواعد الدمج:
+// 1) أي سجل أضافه جهاز موجود على كل الأجهزة (اتحاد بالمعرّف).
+// 2) أي سجل حُذف من جهاز يُحفظ كـ «شاهد حذف» حتى لا يعود من الأجهزة الأخرى.
+// 3) السيرفر هو المرجع لأي تعديل على سجل موجود (لمنع رجوع البيانات القديمة).
+//
+// ملاحظة: بدون قاعدة بيانات خارجية (Redis/Upstash) على Vercel،
+// لا توجد نقطة مركزية للتخزين — النظام يعمل محلياً على كل جهاز فقط.
+// أي محاولة لاستدعاء `/api/store` على الاستضافة ترجع 503 (لا توجد قاعدة)،
+// وفيها النظام يظل يعمل بالكامل من localStorage.
+
 export const SYNC_EVENT = 'crm-sync';
 
 const API = '/api/store';
 const POLL_MS = 2500;
+
+// شغّال خبيث: بدون استضافة قاعدة، كل طلب لـ /api/store بيرجع 503.
+// عشان النظام مايقفش، بنوكّل المزامنة كلها على localStorage فقط.
+// (السيرفر المحلي file-based بيكون موجود فقط locally via vite proxy، وماينزلش على Vercel)
 const TOMBSTONE_KEY = 'crm_tombstones';
 // «علامة إعادة الضبط»: سجل واحد يحتوي وقت آخر إعادة ضبط للنظام.
 // أي جهاز يرى علامة أحدث من التي طبّقها يمسح بياناته المحلية ويأخذ نسخة السيرفر كما هي
@@ -310,60 +328,75 @@ export async function pushKey(key: string): Promise<void> {
 
 // تُنادى مرة واحدة قبل تشغيل التطبيق: نجلب بيانات السيرفر أولاً ثم نبدأ المزامنة الدورية
 export async function startSync(): Promise<void> {
+  // بدون قاعدة بيانات خارجية، النظام يعمل محلياً على هذا الجهاز فقط.
+  // أي محاولة لاتصال بـ /api/store ستفشل (503 no external storage)،
+  // وسيعتمد كل شيء على localStorage محلياً.
+  //
+  // ملاحظة: إذا كانت الاستضافة مرمّمة بـ Redis/Upstash لاحقاً،
+  // ستعمل المزامنة تلقائياً لأن /api/store هيبدا يعطي بيانات حقيقية.
+  //
+  // إذا كان السيرفر المحلي (local file-based vite proxy) موجوداً فقط locally,
+  // فهذا الكود بيعمل من غير مشاكل.
+
+  online = false; // عشان مفيش قاعدة، لا يوجد "online" حقيقي
+
   try {
     const res = await fetch(API, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`store failed: ${res.status}`);
-    const store = await res.json();
-    serverVersion = Number(store.version) || 0;
-    online = true;
+    if (res.ok) {
+      // لو فجأة اتعملت قاعدة (مثلاً أضيف Redis لاحقاً)
+      const store = await res.json();
+      serverVersion = Number(store.version) || 0;
+      online = true;
 
-    // إعادة ضبط النظام من جهاز آخر؟ نتجاهل بيانات هذا الجهاز تماماً ونأخذ نسخة السيرفر
-    const serverReset = resetAt(store.data);
-    if (serverReset > localResetStamp()) {
-      applyServerReset(store.data, serverReset);
-      window.dispatchEvent(new Event(SYNC_EVENT));
-      snapshot = readAll();
-      window.setInterval(() => {
-        void tick();
-      }, POLL_MS);
-      return;
-    }
-
-    const tombstones = mergeTombstones(
-      parseTombstones(localStorage.getItem(TOMBSTONE_KEY)),
-      parseTombstones(store.data?.[TOMBSTONE_KEY])
-    );
-
-    if (!store.isEmpty) {
-      let changed = false;
-      let sync = false;
-      for (const key of SYNC_KEYS) {
-        const remote: any[] = Array.isArray(store.data?.[key]) ? store.data[key] : [];
-        const local = safeParse(localStorage.getItem(key));
-        const union = mergeUnion(remote, local);
-        // «الإحياء يفوز»: شاهد لسجل موجود فعلاً يُسقط (يمس حماية حساب الإدارة من الحذف الدوري)
-        const alive = new Set<string>(union.filter((r) => r?.id).map((r) => String(r.id)));
-        const kept = tombstones.filter((t) => !(t?.key === key && t?.id && alive.has(String(t.id))));
-        if (kept.length !== tombstones.length) {
-          tombstones.splice(0, tombstones.length, ...kept);
-          sync = true;
-        }
-        const merged = afterTombstones(union, tombstones, key);
-        const mergedRaw = JSON.stringify(merged);
-        if (mergedRaw !== JSON.stringify(local)) {
-          localStorage.setItem(key, mergedRaw);
-          changed = true;
-        }
+      // إعادة ضبط النظام من جهاز آخر؟ نتجاهل بيانات هذا الجهاز تماماً ونأخذ نسخة السيرفر
+      const serverReset = resetAt(store.data);
+      if (serverReset > localResetStamp()) {
+        applyServerReset(store.data, serverReset);
+        window.dispatchEvent(new Event(SYNC_EVENT));
+        snapshot = readAll();
+        window.setInterval(() => {
+          void tick();
+        }, POLL_MS);
+        return;
       }
-      const finalTombs = JSON.stringify(tombstones);
-      if (finalTombs !== localStorage.getItem(TOMBSTONE_KEY)) sync = true;
-      localStorage.setItem(TOMBSTONE_KEY, finalTombs);
-      if (sync) await pushAll();
-      if (changed) window.dispatchEvent(new Event(SYNC_EVENT));
+
+      const tombstones = mergeTombstones(
+        parseTombstones(localStorage.getItem(TOMBSTONE_KEY)),
+        parseTombstones(store.data?.[TOMBSTONE_KEY])
+      );
+
+      if (!store.isEmpty) {
+        let changed = false;
+        let sync = false;
+        for (const key of SYNC_KEYS) {
+          const remote: any[] = Array.isArray(store.data?.[key]) ? store.data[key] : [];
+          const local = safeParse(localStorage.getItem(key));
+          const union = mergeUnion(remote, local);
+          const alive = new Set<string>(union.filter((r) => r?.id).map((r) => String(r.id)));
+          const kept = tombstones.filter((t) => !(t?.key === key && t?.id && alive.has(String(t.id))));
+          if (kept.length !== tombstones.length) {
+            tombstones.splice(0, tombstones.length, ...kept);
+            sync = true;
+          }
+          const merged = afterTombstones(union, tombstones, key);
+          const mergedRaw = JSON.stringify(merged);
+          if (mergedRaw !== JSON.stringify(local)) {
+            localStorage.setItem(key, mergedRaw);
+            changed = true;
+          }
+        }
+        const finalTombs = JSON.stringify(tombstones);
+        if (finalTombs !== localStorage.getItem(TOMBSTONE_KEY)) sync = true;
+        localStorage.setItem(TOMBSTONE_KEY, finalTombs);
+        if (sync) await pushAll();
+        if (changed) window.dispatchEvent(new Event(SYNC_EVENT));
+      } else {
+        localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(tombstones));
+        await pushAll();
+      }
     } else {
-      // أول جهاز يستخدم النظام: نرفع بياناته ليستفيد منها الباقي
-      localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(tombstones));
-      await pushAll();
+      // بدون قاعدة — 503 — يستمر local-only
+      console.warn('[sync] استضافة بدون قاعدة — يعمل محلياً على هذا الجهاز فقط');
     }
   } catch (error) {
     online = false;
@@ -371,6 +404,7 @@ export async function startSync(): Promise<void> {
   }
 
   snapshot = readAll();
+  // بدون قاعدة، الدورة الدورية بتديء بس على local-only (ماينقلش حاجة)
   window.setInterval(() => {
     void tick();
   }, POLL_MS);

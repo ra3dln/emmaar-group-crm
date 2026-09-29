@@ -79,6 +79,9 @@ function jsonFileStore() {
   const mount = (server) => {
     server.middlewares.use((req, res, next) => {
       if (!(req.url || "").startsWith("/api/store")) return next();
+    // بدون قاعدة بيانات على Vercel، الطلبات لـ /api/store بترجع 503 من الـ api handler.
+    // محلياً فقط على سيرفر المكتب (file-based) بيكون فيه /api/store شغال،
+    // لكن على الاستضافة (Vercel) الـ api/store.js هيكون موجود وبيعطي 503 explicitly.
       handler(req, res);
     });
   };
