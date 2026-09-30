@@ -6309,6 +6309,151 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert }: any) {
 }
 
 // Admin Leads View - For Admin to assign leads to sales
+// ===== حصة كل سيلز: زر واحد يفتح كل السيلز، والضغط على اسم يفتح كم رقم اتوزّع له =====
+function SalesShareModal({ leads, users, onClose }: any) {
+  const [q, setQ] = useState('');
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const team = useMemo(
+    () => users.filter((u: User) => u.isActive && (u.role === 'sales' || u.role === 'supervisor')),
+    [users]
+  );
+
+  const rows = useMemo(() => {
+    const term = normalizeArabicText(q).trim();
+    return team
+      .map((u: User) => {
+        const mine = leads.filter((l: AssignedLead) => l.salesId === u.id);
+        const count = (s: AssignedLead['status']) => mine.filter((l: AssignedLead) => l.status === s).length;
+        return {
+          user: u,
+          total: mine.length,
+          fresh: count('new'),
+          contacted: count('contacted'),
+          closed: count('closed'),
+          leads: [...mine].sort((a: AssignedLead, b: AssignedLead) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))),
+        };
+      })
+      .filter((row: any) => !term || normalizeArabicText(row.user.name).includes(term))
+      .sort((a: any, b: any) => b.total - a.total);
+  }, [team, leads, q]);
+
+  const assignedTotal = rows.reduce((acc: number, row: any) => acc + row.total, 0);
+  const unassigned = leads.length - assignedTotal;
+  const top = Math.max(1, ...rows.map((row: any) => row.total));
+  const current = openId ? rows.find((row: any) => row.user.id === openId) : null;
+
+  const shortDate = (value?: string) => {
+    const d = new Date(value || '');
+    return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' });
+  };
+
+  const statusChip = (status: AssignedLead['status']) => {
+    const meta = LEAD_STATUS_META[status];
+    return meta ? <span className={meta.cls}>{meta.icon} {meta.label}</span> : null;
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80" onClick={onClose}>
+      <motion.div initial={{ scale: 0.96, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96 }} className="glass-card rounded-3xl p-4 sm:p-6 w-full max-w-3xl h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3 pb-4 border-b border-white/10">
+          <div className="flex items-center gap-3 min-w-0">
+            {current ? (
+              <button onClick={() => setOpenId(null)} title="رجوع لكل السيلز" className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-gray-200 shrink-0">
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            ) : (
+              <div className="w-11 h-11 gradient-primary rounded-full flex items-center justify-center shrink-0">
+                <BarChart3 className="w-5 h-5 text-white" />
+              </div>
+            )}
+            <div className="min-w-0">
+              <h2 className="text-lg sm:text-xl font-bold gradient-text truncate">
+                {current ? current.user.name : 'حصة كل سيلز من الأرقام'}
+              </h2>
+              <p className="text-xs text-gray-400 truncate">
+                {current
+                  ? `${rankLabel(current.user.role)} • اتوزّع له ${current.total} ${current.total === 1 ? 'رقم' : 'أرقام'}`
+                  : `الإجمالي ${leads.length} رقم • موزَّعة ${assignedTotal} • غير مخصصة ${unassigned} • ${rows.length} سيلز`}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} title="إغلاق" className="p-2 hover:bg-white/10 rounded-lg shrink-0">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {!current && (
+          <div className="flex-1 overflow-y-auto pt-4 space-y-3">
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ابحث باسم السيلز…"
+              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-2.5 text-white text-sm" />
+
+            {rows.length === 0 && (
+              <div className="text-center py-16 text-gray-400 text-sm">لا يوجد سيلز مطابق</div>
+            )}
+
+            {rows.map((row: any) => (
+              <button key={row.user.id} onClick={() => setOpenId(row.user.id)}
+                className="w-full text-right rounded-2xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] transition-colors p-3.5">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center font-bold text-white shrink-0">
+                    {row.user.name?.[0] || '؟'}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-white text-sm truncate">{row.user.name}</span>
+                      <span className="shrink-0 flex items-baseline gap-1">
+                        <span className="text-xl font-extrabold gradient-text">{row.total}</span>
+                        <span className="text-[11px] text-gray-400">رقم</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 mt-0.5">
+                      <span className="text-[11px] text-gray-500">{rankLabel(row.user.role)}</span>
+                      <span className="text-[11px] text-gray-500">اضغط لعرض أرقامه ›</span>
+                    </div>
+                    <div className="h-1.5 bg-white/5 rounded-full mt-2 overflow-hidden">
+                      <div className="h-full gradient-primary rounded-full" style={{ width: `${Math.round((row.total / top) * 100)}%` }} />
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                      {row.fresh > 0 && <span className="st-chip st-new">{row.fresh} جديد</span>}
+                      {row.contacted > 0 && <span className="st-chip st-contacted">{row.contacted} تم التواصل</span>}
+                      {row.closed > 0 && <span className="st-chip st-closed">{row.closed} مغلق</span>}
+                      {row.total > 0 && row.fresh === 0 && row.contacted === 0 && row.closed === 0 && (
+                        <span className="text-[11px] text-gray-500">كل الأرقام لم تُفتح بعد</span>
+                      )}
+                      {row.total === 0 && <span className="text-[11px] text-amber-300/80">لم يُوزَّع له أي رقم بعد</span>}
+                    </div>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {current && (
+          <div className="flex-1 overflow-y-auto pt-4 space-y-2.5">
+            {current.leads.length === 0 && (
+              <div className="text-center py-16 text-gray-400 text-sm">لم يُوزَّع له أي رقم بعد</div>
+            )}
+            {current.leads.map((l: AssignedLead) => (
+              <div key={l.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-white truncate">{l.name}</p>
+                  <p className="text-xs text-gray-400" dir="ltr">{l.phone || 'بدون رقم'}</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {statusChip(l.status)}
+                  <span className="text-[11px] text-gray-500">{shortDate(l.createdAt)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
 function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onImport, onAssign }: any) {
   const salesUsers = users.filter((u: User) => (u.role === 'sales' || u.role === 'supervisor') && u.isActive);
   const [query, setQuery] = useState('');
@@ -6322,6 +6467,9 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
       !q || normalizeArabicText(`${l.name} ${l.phone} ${nameOf(l.salesId)} ${l.description || ''}`).includes(q)
     );
   const unassignedCount = assignedLeads.filter((l: AssignedLead) => !salesUsers.some((u: User) => u.id === l.salesId)).length;
+
+  // حصة كل سيلز: نافذة تعرض كل السيلز وعدد الأرقام لكل واحد
+  const [showShare, setShowShare] = useState(false);
 
   // توزيع جماعي: كل الأرقام المعروضة تُنقل لمندوب واحد بضغطة واحدة (دفعة واحدة، لا رقم رقم)
   const [flash, setFlash] = useState('');
@@ -6348,7 +6496,10 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
             {' '}• عدد السيلز: {salesUsers.length}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setShowShare(true)} className="bg-purple-500/15 border border-purple-500/30 text-purple-200 px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-purple-500/25 transition-colors">
+            <BarChart3 className="w-4 h-4" /> الأرقام لكل سيلز
+          </button>
           <button onClick={onImport} className="bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-cyan-500/25 transition-colors">
             <Upload className="w-4 h-4" /> استيراد ملف أرقام
           </button>
@@ -6463,6 +6614,9 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
       {assignedLeads.length > 0 && visible.length === 0 && (
         <p className="text-center text-sm text-gray-500 py-8">لا نتائج مطابقة للبحث أو التصفية</p>
       )}
+
+      {/* حصة كل سيلز: كل السيلز وعدد الأرقام لكل واحد، والضغط على الاسم يفتح أرقامه */}
+      {showShare && <SalesShareModal leads={assignedLeads} users={users} onClose={() => setShowShare(false)} />}
     </div>
   );
 }
