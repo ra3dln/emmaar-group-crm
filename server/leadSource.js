@@ -44,7 +44,7 @@ export const normalizeEgyptPhone = (raw) => {
   return digits;
 };
 
-const isValidPhone = (phone) => phone.replace(/\D/g, '').length >= 8;
+export const isValidPhone = (phone) => phone.replace(/\D/g, '').length >= 8;
 
 // --- قراءة CSV (يدعم الفاصلة والمنقوطة ومسافة الجدولة) ---
 export function parseCsv(text) {
@@ -418,6 +418,73 @@ export const publicConfig = (config) => ({
   lastRun: config.lastRun || null,
 });
 
+// --- التنظيف + المناوبة على المندوبين (بلا أي تخزين) ---
+// نفس المنطق يعمل في مكانين: سيرفر الشركة (يحفظ في ملف البيانات) ووظيفة الاستضافة
+// (Vercel بلا قاعدة بيانات — تُعيد الأرقام جاهزة ليحفظها متصفح المدير).
+// وجوده في مكان واحد يمنع اختلاف السلوك بين النسختين.
+export function buildAssignments({ fetched, sales, config = {}, knownPhones = [], at = new Date().toISOString() }) {
+  const limit = Number(config.perSalesLimit) > 0 ? Number(config.perSalesLimit) : Infinity;
+  const team = Array.isArray(sales) ? sales.filter((u) => u && u.id) : [];
+  let assignCursor = Number(config.assignCursor) || 0;
+
+  const seen = new Set((knownPhones || []).map((p) => normalizeEgyptPhone(p)).filter(Boolean));
+  const counts = new Map();
+  const added = [];
+  let duplicates = 0;
+  let invalid = 0;
+
+  for (const row of fetched || []) {
+    if (added.length >= MAX_PER_RUN) break;
+    if (!isValidPhone(row.phone)) {
+      invalid += 1;
+      continue;
+    }
+    if (seen.has(row.phone)) {
+      duplicates += 1;
+      continue;
+    }
+    seen.add(row.phone);
+
+    let owner = null;
+    for (let hop = 0; hop < team.length; hop += 1) {
+      const candidate = team[(assignCursor + hop) % team.length];
+      if ((counts.get(candidate.id) || 0) < limit) {
+        owner = candidate;
+        assignCursor = (assignCursor + hop + 1) % team.length;
+        break;
+      }
+    }
+    // الكل وصل حده الأقصى — نوقف هذه الدفعة والمتبقي يُسحب في المرة القادمة
+    if (!owner) break;
+    counts.set(owner.id, (counts.get(owner.id) || 0) + 1);
+
+    added.push({
+      id: crypto.randomUUID(),
+      adminId: 'auto-import',
+      salesId: owner.id,
+      name: row.name || 'عميل بدون اسم',
+      phone: row.phone,
+      description: [
+        row.test ? '🧪 رقم تجريبي (من أداة اختبار ميتا)' : 'استيراد تلقائي',
+        row.source && `المصدر: ${row.source}`,
+        row.date && `التاريخ: ${row.date}`,
+      ]
+        .filter(Boolean)
+        .join(' • '),
+      status: 'new',
+      createdAt: at,
+    });
+  }
+
+  return {
+    added,
+    duplicates,
+    invalid,
+    assignCursor,
+    perUser: team.filter((u) => counts.has(u.id)).map((u) => ({ name: u.name, count: counts.get(u.id) })),
+  };
+}
+
 // --- التنظيف + التوزيع + الحفظ ---
 export async function runAutoImport({ storeFile, configFile }) {
   const storage = fileStorage(storeFile);
@@ -434,80 +501,31 @@ export async function runAutoImport({ storeFile, configFile }) {
 
     const assigned = Array.isArray(data.crm_assigned_leads) ? data.crm_assigned_leads : [];
     const clients = Array.isArray(data.crm_clients) ? data.crm_clients : [];
-    const seen = new Set([
-      ...assigned.map((l) => normalizeEgyptPhone(l.phone)),
-      ...clients.flatMap((c) => [c.phone, ...(c.phones || [])]).map((p) => normalizeEgyptPhone(p)),
-    ].filter(Boolean));
+    const knownPhones = [
+      ...assigned.map((l) => l.phone),
+      ...clients.flatMap((c) => [c.phone, ...(c.phones || [])]),
+    ];
 
-    const counts = new Map();
-    const added = [];
-    let duplicates = 0;
-    let invalid = 0;
+    const built = buildAssignments({ fetched, sales, config, knownPhones, at });
 
-    for (const row of fetched) {
-      if (added.length >= MAX_PER_RUN) break;
-      if (!isValidPhone(row.phone)) {
-        invalid += 1;
-        continue;
-      }
-      if (seen.has(row.phone)) {
-        duplicates += 1;
-        continue;
-      }
-      seen.add(row.phone);
-
-      // المناوبة على المندوبين — مع احترام الحد الذي يحدده المدير لكل مندوب في الدفعة
-      const limit = Number(config.perSalesLimit) > 0 ? Number(config.perSalesLimit) : Infinity;
-      let owner = null;
-      for (let hop = 0; hop < sales.length; hop += 1) {
-        const candidate = sales[(config.assignCursor + hop) % sales.length];
-        if ((counts.get(candidate.id) || 0) < limit) {
-          owner = candidate;
-          config.assignCursor = (config.assignCursor + hop + 1) % sales.length;
-          break;
-        }
-      }
-      // الكل وصل حده الأقصى — نوقف هذه الدفعة والمتبقي يُسحب في المرة القادمة
-      if (!owner) break;
-      counts.set(owner.id, (counts.get(owner.id) || 0) + 1);
-
-      added.push({
-        id: crypto.randomUUID(),
-        adminId: 'auto-import',
-        salesId: owner.id,
-        name: row.name || 'عميل بدون اسم',
-        phone: row.phone,
-        description: [
-          row.test ? '🧪 رقم تجريبي (من أداة اختبار ميتا)' : 'استيراد تلقائي',
-          row.source && `المصدر: ${row.source}`,
-          row.date && `التاريخ: ${row.date}`,
-        ]
-          .filter(Boolean)
-          .join(' • '),
-        status: 'new',
-        createdAt: at,
-      });
-    }
-
-    if (added.length) {
-      data.crm_assigned_leads = [...added, ...assigned];
+    if (built.added.length) {
+      data.crm_assigned_leads = [...built.added, ...assigned];
       db.data = data;
       db.version = (Number(db.version) || 0) + 1;
       await storage.save(db);
     }
 
-    const sourceLabel = isMetaSource(config) ? 'فيسبوك مباشرة' : 'ملف منشور';
-
     const summary = {
       at,
       ok: true,
-      source: sourceLabel,
+      source: isMetaSource(config) ? 'فيسبوك مباشرة' : 'ملف منشور',
       fetched: fetched.length,
-      added: added.length,
-      duplicates,
-      invalid,
-      perUser: sales.filter((u) => counts.has(u.id)).map((u) => ({ name: u.name, count: counts.get(u.id) })),
+      added: built.added.length,
+      duplicates: built.duplicates,
+      invalid: built.invalid,
+      perUser: built.perUser,
     };
+    config.assignCursor = built.assignCursor;
     config.lastRun = summary;
     saveConfig(configFile, config);
     return summary;

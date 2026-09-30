@@ -11,3 +11,5 @@ build/
 .vercel
 .freebuff
 vite.test.config.js
+
+.env*

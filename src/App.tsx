@@ -6736,9 +6736,89 @@ function AdminAttendanceView({ users }: any) {
 
 // Admin Settings View
 // ===== سحب الأرقام تلقائياً من المصدر (يعمل على سيرفر الشركة) =====
+// ===== إعدادات سحب الأرقام عندما يكون الموقع على استضافة بلا قاعدة بيانات =====
+// على سيرفر الشركة يحفظ السيرفر الإعدادات في ملف ويسحب في الخلفية.
+// على Vercel (بلا قاعدة) نحفظ الإعدادات في متصفح المدير، ووظيفة /api/lead-source
+// تقوم بجزء الشبكة فقط وتُعيد الأرقام لتحفظ هنا — فتظل الميزة تعمل كاملة.
+const LEAD_SOURCE_KEY = 'crm_lead_source';
+const LEAD_SOURCE_DEFAULTS = {
+  enabled: false,
+  type: 'sheet',
+  sheetUrl: '',
+  token: '',
+  pages: [] as any[],
+  forms: [] as any[],
+  intervalMinutes: 5,
+  cursorTime: 0,
+  assignCursor: 0,
+  perSalesLimit: 0,
+  acceptTestLeads: true,
+  lastRun: null as any,
+};
+
+const readLocalSource = () => {
+  try {
+    return { ...LEAD_SOURCE_DEFAULTS, ...(JSON.parse(localStorage.getItem(LEAD_SOURCE_KEY) || '{}') || {}) };
+  } catch {
+    return { ...LEAD_SOURCE_DEFAULTS };
+  }
+};
+
+const writeLocalSource = (patch: any) => {
+  const next = { ...readLocalSource(), ...patch };
+  localStorage.setItem(LEAD_SOURCE_KEY, JSON.stringify(next));
+  return next;
+};
+
+// الإعدادات المحفوظة محلياً تُعرض بنفس شكل الإعدادات القادمة من السيرفر
+const localSourceView = (next: any) => ({ ...next, hasToken: !!next.token });
+
+// إضافة الأرقام المسحوبة إلى بيانات هذا الجهاز ثم إخبار التطبيق ليحدّث الشاشة
+const ingestLocalLeads = (leads: any[]) => {
+  if (!Array.isArray(leads) || !leads.length) return;
+  let existing: any[] = [];
+  try {
+    existing = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
+  } catch {
+    existing = [];
+  }
+  const known = new Set(existing.map((l: any) => l?.phone).filter(Boolean));
+  const fresh = leads.filter((l: any) => l?.phone && !known.has(l.phone));
+  if (!fresh.length) return;
+  localStorage.setItem('crm_assigned_leads', JSON.stringify([...fresh, ...existing]));
+  window.dispatchEvent(new Event(SYNC_EVENT));
+};
+
+// المندوبون المفعّلون على هذا الجهاز (نفس شرط التوزيع في السيرفر)
+const localSalesTeam = () => {
+  try {
+    const users = JSON.parse(localStorage.getItem('crm_users') || '[]');
+    return users
+      .filter((u: any) => u?.isActive && (u.role === 'sales' || u.role === 'supervisor'))
+      .map((u: any) => ({ id: u.id, name: u.name }));
+  } catch {
+    return [];
+  }
+};
+
+// كل الأرقام المعروفة على هذا الجهاز — لتجاهل المكرر قبل إضافته
+const localKnownPhones = () => {
+  try {
+    const leads = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
+    const clients = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+    return [
+      ...leads.map((l: any) => l?.phone),
+      ...clients.flatMap((c: any) => [c?.phone, ...(c?.phones || [])]),
+    ].filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+
 function AutoImportCard() {
   const [config, setConfig] = useState<any>(null);
-  const [unavailable, setUnavailable] = useState(false);
+  // true = سيرفر الشركة (يخزّن في ملف) · false = استضافة بلا قاعدة بيانات (التخزين في المتصفح)
+  const [remote, setRemote] = useState<boolean | null>(null);
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
   const [form, setForm] = useState({ sheetUrl: '', token: '', intervalMinutes: 5, perSalesLimit: 0 });
@@ -6746,6 +6826,9 @@ function AutoImportCard() {
   const [forms, setForms] = useState<any[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [manual, setManual] = useState({ pageId: '', formId: '' });
+  const busyRef = useRef('');
+  const runRef = useRef<null | (() => Promise<void>)>(null);
+  busyRef.current = busy;
 
   const applyConfig = (next: any) => {
     setConfig(next);
@@ -6769,22 +6852,34 @@ function AutoImportCard() {
   useEffect(() => {
     fetch('/api/lead-source', { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
-      .then((json) => applyConfig(json.config))
-      .catch(() => setUnavailable(true));
+      .then((json) => {
+        // على الاستضافة تعلن الوظيفة أنها بلا ذاكرة => الإعدادات تُحفظ في المتصفح
+        setRemote(!json.stateless);
+        applyConfig(json.stateless ? localSourceView(readLocalSource()) : json.config);
+      })
+      .catch(() => {
+        // لا يوجد خادم إعدادات أصلاً: نعمل محلياً في كل الأحوال — الميزة تظل ظاهرة
+        setRemote(false);
+        applyConfig(localSourceView(readLocalSource()));
+      });
   }, []);
 
   const save = async (body: any, message: string) => {
     setBusy('save');
     setNotice('');
     try {
-      const res = await fetch('/api/lead-source', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الحفظ');
-      applyConfig(json.config);
+      if (remote === false) {
+        applyConfig(localSourceView(writeLocalSource(body)));
+      } else {
+        const res = await fetch('/api/lead-source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الحفظ');
+        applyConfig(json.config);
+      }
       setNotice(message);
     } catch (error: any) {
       setNotice(error?.message || 'تعذّر الحفظ');
@@ -6797,6 +6892,24 @@ function AutoImportCard() {
     setBusy('discover');
     setNotice('');
     try {
+      const token = form.token.trim() || String(config?.token || '');
+      if (remote === false) {
+        // بلا قاعدة بيانات: نحفظ التوكن وتوكنات الصفحات في المتصفح لأن الوظيفة لا تحفظ شيئاً
+        const res = await fetch('/api/lead-source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'discover', token }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الاستكشاف');
+        applyConfig(localSourceView(writeLocalSource({ type: 'meta', token, pages: json.pages })));
+        setPages(json.pages.map((p: any) => ({ id: p.id, name: p.name })));
+        setForms([]);
+        setSelected({});
+        setNotice(json.warning || `وجدت ${json.pages.length} صفحة — اضغط صفحة لعرض نماذجها`);
+        return;
+      }
+
       const res = await fetch('/api/lead-source/discover', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -6821,10 +6934,15 @@ function AutoImportCard() {
     setBusy(`forms-${pageId}`);
     setNotice('');
     try {
-      const res = await fetch('/api/lead-source/page-forms', {
+      // بلا قاعدة بيانات نرسل توكن الصفحة المحفوظ في المتصفح (الوظيفة لا تحفظ شيئاً)
+      const pageToken = (config?.pages || []).find((p: any) => p.id === pageId)?.token;
+      const res = await fetch('/api/lead-source', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pageId }),
+        body:
+          remote === false
+            ? JSON.stringify({ action: 'forms', pageId, pageToken })
+            : JSON.stringify({ pageId }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر جلب النماذج');
@@ -6874,23 +6992,63 @@ function AutoImportCard() {
     );
 
   const runNow = async () => {
+    if (busyRef.current) return;
     setBusy('run');
     setNotice('');
     try {
-      const res = await fetch('/api/lead-source/run', { method: 'POST' });
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر السحب');
-      applyConfig(json.config);
-      const summary = json.summary;
-      setNotice(summary.ok ? `تم السحب: ${summary.added} رقم جديد (مكرر ${summary.duplicates} - غير صالح ${summary.invalid})` : `فشل السحب: ${summary.error}`);
+      let summary: any;
+
+      if (remote === false) {
+        // بلا قاعدة بيانات: الوظيفة تسحب وتوزّع، وهنا نحفظ الأرقام في هذا الجهاز
+        const res = await fetch('/api/lead-source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'run',
+            config: readLocalSource(),
+            sales: localSalesTeam(),
+            knownPhones: localKnownPhones(),
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر السحب');
+        summary = json.summary;
+        if (summary?.ok) ingestLocalLeads(json.leads || []);
+        applyConfig(
+          localSourceView(
+            writeLocalSource({
+              lastRun: summary,
+              cursorTime: json.cursorTime ?? readLocalSource().cursorTime,
+              assignCursor: json.assignCursor ?? readLocalSource().assignCursor,
+            })
+          )
+        );
+      } else {
+        const res = await fetch('/api/lead-source/run', { method: 'POST' });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر السحب');
+        applyConfig(json.config);
+        summary = json.summary;
+      }
+
+      setNotice(summary?.ok ? `تم السحب: ${summary.added} رقم جديد (مكرر ${summary.duplicates} - غير صالح ${summary.invalid})` : `فشل السحب: ${summary?.error}`);
     } catch (error: any) {
       setNotice(error?.message || 'تعذّر السحب');
     } finally {
       setBusy('');
     }
   };
+  runRef.current = runNow;
 
-  if (unavailable || !config) return null;
+  // على الاستضافة لا توجد حلقة سحب في الخلفية — نشغّلها في المتصفح ما دام الموقع مفتوحاً
+  useEffect(() => {
+    if (remote !== false || !config?.enabled) return;
+    const minutes = Math.max(1, Number(config.intervalMinutes) || 5);
+    const timer = setInterval(() => void runRef.current?.(), minutes * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [remote, config?.enabled, config?.intervalMinutes]);
+
+  if (!config) return null;
   const last = config.lastRun;
 
   return (
@@ -6912,6 +7070,13 @@ function AutoImportCard() {
       <p className="text-xs text-gray-400 leading-relaxed mb-4">
         يقرأ النظام الأرقام من المصدر من نفسه كل بضع دقائق، ينظّفها ويحذف المكرر ويوزّعها على السيلز — بلا أي ضغطة زر.
       </p>
+
+      {remote === false && (
+        <p className="text-[11px] text-amber-300/90 leading-relaxed mb-4 bg-amber-500/10 border border-amber-400/20 rounded-xl px-3 py-2">
+          على هذه الاستضافة لا توجد قاعدة بيانات مركزية: الإعدادات والأرقام تُحفظ في متصفح هذا الجهاز، والسحب التلقائي يعمل ما دام
+          الموقع مفتوحاً. على سيرفر الشركة يعمل السحب في الخلفية وتظهر الأرقام على كل الأجهزة.
+        </p>
+      )}
 
       <div className="flex flex-col sm:flex-row gap-2 mb-4">
         {[
