@@ -495,6 +495,10 @@ html[data-mode="light"] .side-link.active { color: var(--primary-dark); }
   color: var(--text-strong);
   line-height: 1.25;
 }
+/* الموبايل: العنوان كامل بدون اختصار — الأزرار الأخرى أصغر فتعطيه مساحة */
+@media (max-width: 640px) {
+  .page-heading { font-size: 13.5px; white-space: normal; overflow: visible; text-overflow: clip; }
+}
 
 .page-sub {
   font-size: 11px;
@@ -641,8 +645,13 @@ html[data-mode="light"] .side-link.active { color: var(--primary-dark); }
 }
 .top-user .who { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
 .top-user .who b { font-size: 11.5px; color: var(--text-strong); font-weight: 700; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* الموبايل: الاسم والرتبة يظهران — بأصغر حجم مناسب، والأفاتار أصغر */
 @media (max-width: 640px) {
-  .top-user .who { display: none; }
+  .top-user { padding: 3px 7px 3px 5px; gap: 6px; }
+  .top-avatar { width: 29px; height: 29px; font-size: 12px; }
+  .top-user .who { display: flex; }
+  .top-user .who b { font-size: 10.5px; max-width: 76px; }
+  .top-user .who .rank-chip { font-size: 8.75px; }
 }
 
 /* ===== قائمة العملاء: شريط / كروت مكدسة ===== */
@@ -1417,30 +1426,37 @@ html[data-mode="light"] .status-lost { color: #b91c1c; }
     right: 0;
     height: 100vh;
     height: 100dvh;
-    width: 246px;
-    flex-basis: 246px;
+    width: 238px;
+    flex-basis: 238px;
     box-shadow: var(--shadow-pop);
     transform: translateX(100%);
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .app-sidebar.open { transform: translateX(0); }
-  .app-content { padding: 12px 10px 32px; }
-  .app-topbar { padding: 8px 10px; }
+  .app-content { padding: 10px 9px 30px; }
+  .app-topbar { padding: 7px 9px; }
+  /* قائمة السايدبار: بنود أصغر حتى تدخل الأسماء كاملة بدون قص */
+  .side-link { font-size: 12px; }
+  .sidebar-brand h1 { font-size: 13px; }
+  .sidebar-brand p { font-size: 9.5px; }
+  .brand-mark { width: 32px; height: 32px; }
 }
 
 @media (max-width: 640px) {
   input, textarea, select { font-size: 16px; }
   button { -webkit-tap-highlight-color: transparent; }
-  /* أزرار الشريط العلوي بمساحة مريحة للإصبع */
+  /* أزرار الشريط العلوي بمساحة مريحة للإصبع لكن بلا تضخيم */
   .app-topbar button {
-    min-width: 38px;
-    min-height: 38px;
+    min-width: 34px;
+    min-height: 34px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
   }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   .glass-card { border-radius: 16px; }
-  .page-heading { font-size: 15px; }
   .rank-chip { font-size: 10px; }
+  /* الشريط العلوي: أزرار أنحف حتى يتسع الصف لعنوان الصفحة كاملاً */
+  .app-topbar { gap: 5px; padding: 7px 8px; }
+  .app-topbar .icon-btn { width: 32px; height: 32px; }
 }

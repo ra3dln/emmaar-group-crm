@@ -2112,10 +2112,10 @@ function App() {
             </button>
 
             <div className="min-w-0 flex-1">
-              <h2 className="page-heading truncate">{activeTabMeta?.label || 'الرئيسية'}</h2>
+              <h2 className="page-heading">{activeTabMeta?.label || 'الرئيسية'}</h2>
             </div>
 
-            {/* أيقونة دائرية + الاسم وتحته الرتبة (CEO / Team Leader / Sales Agent) */}
+            {/* أيقونة دائرية + الاسم وتحته الرتبة (CEO / Team Leader / Sales Agent) — يظهران حتى على الهاتف */}
             <div className="top-user" title={`${currentUser.name} — ${rankAr(currentUser.role)}`}>
               <span className="top-avatar">{userInitial}</span>
               <span className="who">
@@ -2132,15 +2132,15 @@ function App() {
               whileHover={{ scale: 1.05 }}
               onClick={() => { alarm.unlock(); setShowNotifyCenter(true); }}
               title="الإشعارات"
-              className={`relative p-1.5 md:p-2 rounded-lg border ${
+              className={`relative p-1.5 rounded-lg border ${
                 unseenNotifCount > 0
                   ? 'bg-purple-500/20 border-purple-500/40 text-purple-200'
                   : 'bg-white/5 border-white/10 text-gray-400'
               }`}
             >
-              <Bell className="w-4 h-4 md:w-5 md:h-5" />
+              <Bell className="w-4 h-4" />
               {unseenNotifCount > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-4 h-4 md:min-w-5 md:h-5 px-1 bg-red-500 rounded-full text-[10px] md:text-xs flex items-center justify-center font-bold animate-pulse">
+                <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold animate-pulse">
                   {unseenNotifCount > 9 ? '9+' : unseenNotifCount}
                 </span>
               )}
@@ -2157,11 +2157,11 @@ function App() {
               whileHover={{ scale: 1.1 }}
               onClick={() => setActiveTab(chatTab)}
               title="المحادثات"
-              className="relative p-1.5 md:p-2 bg-cyan-500/20 rounded-lg"
+              className="relative p-1.5 bg-cyan-500/20 rounded-lg"
             >
-              <MessageCircle className="w-4 h-4 md:w-6 md:h-6 text-cyan-300" />
+              <MessageCircle className="w-4 h-4 text-cyan-300" />
               {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-4 h-4 md:min-w-5 md:h-5 px-1 bg-red-500 rounded-full text-[10px] md:text-xs flex items-center justify-center font-bold animate-pulse">
+                <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold animate-pulse">
                   {unreadCount > 9 ? '9+' : unreadCount}
                 </span>
               )}
@@ -2182,11 +2182,11 @@ function App() {
               whileHover={{ scale: 1.05 }}
               onClick={impersonator ? handleReturnToAdmin : handleLogout}
               title={impersonator ? `الرجوع لحساب: ${impersonator.name}` : 'تسجيل الخروج'}
-              className={`p-1.5 md:p-2 rounded-lg ${
+              className={`p-1.5 rounded-lg ${
                 impersonator ? 'bg-amber-400/20 text-amber-300' : 'bg-red-500/20 text-red-400'
               }`}
             >
-              {impersonator ? <Undo2 className="w-4 h-4 md:w-5 md:h-5" /> : <LogOut className="w-4 h-4 md:w-5 md:h-5" />}
+              {impersonator ? <Undo2 className="w-4 h-4" /> : <LogOut className="w-4 h-4" />}
             </motion.button>
           </div>
         </header>
