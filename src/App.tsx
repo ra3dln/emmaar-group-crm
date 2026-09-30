@@ -2018,13 +2018,13 @@ function App() {
         {/* القائمة الجانبية — على يمين الشاشة */}
         <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''} ${desktopNavHidden ? 'rail' : ''}`}>
           <div className="sidebar-brand">
-            <motion.div
+            <motion.img
               whileHover={{ rotate: 360, scale: 1.05 }}
               transition={{ duration: 0.6 }}
-              className="brand-mark"
-            >
-              <Building2 className="w-6 h-6" />
-            </motion.div>
+              src="/emaar-logo.jpg"
+              alt="Emaar Group"
+              className="brand-mark object-cover"
+            />
             <div className="min-w-0">
               <h1 className="text-base font-extrabold gradient-text leading-tight truncate">Emaar Group CRM</h1>
               <p className="text-[10.5px] text-gray-500 truncate">نظام CRM الخاص بشركة إعمار جروب</p>
@@ -3142,13 +3142,13 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
       <div className="app-root min-h-screen flex items-center justify-center p-4">
         <div className="glass-card rounded-3xl p-8 w-full max-w-md glow-primary">
           <div className="text-center mb-8">
-            <motion.div
-              animate={{ rotate: [0, 360] }}
-              transition={{ duration: 2, repeat: Infinity, repeatType: "reverse" }}
-              className="w-20 h-20 gradient-primary rounded-full flex items-center justify-center mx-auto mb-4 glow-primary"
-            >
-              <Building2 className="w-10 h-10 text-white" />
-            </motion.div>
+            <motion.img
+              src="/emaar-logo.jpg"
+              alt="Emaar Group"
+              animate={{ scale: [1, 1.04, 1] }}
+              transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+              className="w-28 h-28 rounded-2xl object-cover mx-auto mb-4 glow-primary border border-white/10"
+            />
             <h1 className="text-3xl font-bold gradient-text mb-2">Emaar Group CRM</h1>
             <p className="text-gray-400">نظام CRM الخاص بشركة إعمار جروب</p>
           </div>
@@ -3204,9 +3204,9 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
               initial={{ scale: 0, rotate: -120 }}
               animate={{ scale: 1, rotate: 0 }}
               transition={{ type: 'spring', stiffness: 180, damping: 14 }}
-              className="w-20 h-20 gradient-primary rounded-full flex items-center justify-center glow-primary"
+              className="w-20 h-20 rounded-2xl overflow-hidden glow-primary border border-white/10"
             >
-              {loginType === 'admin' ? <Shield className="w-10 h-10 text-white" /> : <UserCheck className="w-10 h-10 text-white" />}
+              <img src="/emaar-logo.jpg" alt="Emaar Group" className="w-full h-full object-cover" />
             </motion.div>
           </div>
           <h1 className="text-2xl font-bold gradient-text mb-2">
