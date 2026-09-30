@@ -13,7 +13,7 @@ import {
   LogIn, Undo2, UserCog, MessageCircle, Send, ArrowRight, Moon, Sun, Menu,
   Rows, LayoutList, List, ShieldAlert, MapPinOff, Navigation,
   ChevronRight, ChevronLeft,
-  Megaphone, Globe, Link2, Facebook
+  Megaphone, Globe, Link2, Facebook, ChevronDown
 } from 'lucide-react';
 import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, TabType } from './types';
 import { isOnline, SYNC_EVENT, pushKey } from './sync';
@@ -209,9 +209,9 @@ const verifyPassword = async (plain: string, stored?: string): Promise<{ ok: boo
 // ===== الرتب الثلاث: CEO / Team Leader / Sales Agent =====
 // الرتبة تُشتق من الدور الداخلي (admin = CEO، supervisor = Team Leader، sales = Sales Agent)
 const RANK_LABEL: Record<string, string> = { admin: 'CEO', supervisor: 'Team Leader', sales: 'Sales Agent' };
-const RANK_AR: Record<string, string> = { admin: 'المدير التنفيذي', supervisor: 'قائد فريق', sales: 'مندوب مبيعات' };
+const RANK_AR: Record<string, string> = { admin: 'المدير التنفيذي', supervisor: 'قائد فريق', sales: 'سيلز' };
 const rankLabel = (role?: string): string => RANK_LABEL[role || 'sales'] || 'Sales Agent';
-const rankAr = (role?: string): string => RANK_AR[role || 'sales'] || 'مندوب مبيعات';
+const rankAr = (role?: string): string => RANK_AR[role || 'sales'] || 'سيلز';
 const rankClass = (role?: string): string =>
   role === 'admin' ? 'rank-chip rank-ceo' : role === 'supervisor' ? 'rank-chip rank-leader' : 'rank-chip rank-sales';
 // المدير التنفيذي (CEO) فقط يملك صلاحيات النظام الكاملة — قائد الفريق يدير فريقه
@@ -1551,7 +1551,7 @@ function App() {
 
     const all: Client[] = JSON.parse(localStorage.getItem('crm_clients') || '[]');
     const movedAt = new Date().toISOString();
-    const ownerName = users.find((u: User) => u.id === salesId)?.name || 'مندوب آخر';
+    const ownerName = users.find((u: User) => u.id === salesId)?.name || 'سيلز آخر';
     let touched = false;
     const next = all.map((c) => {
       const own = [c.phone, ...(c.phones || [])].map((p) => digits(p));
@@ -3210,7 +3210,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
             </motion.div>
           </div>
           <h1 className="text-2xl font-bold gradient-text mb-2">
-            {loginType === 'admin' ? 'دخول الإدارة (CEO / Team Leader)' : 'دخول مندوب المبيعات'}
+            {loginType === 'admin' ? 'دخول الإدارة (CEO / Team Leader)' : 'دخول السيلز'}
           </h1>
         </div>
         
@@ -3783,7 +3783,7 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
               </div>
               {salesRows.length > 0 && (
                 <div className="glass-card rounded-xl p-4">
-                  <h4 className="text-sm font-bold text-white mb-2">عدد التعليقات لكل مندوب</h4>
+                  <h4 className="text-sm font-bold text-white mb-2">عدد التعليقات لكل سيلز</h4>
                   <div className="space-y-1.5">
                     {salesRows.map(([name, count]) => (
                       <div key={name} className="flex items-center justify-between text-xs">
@@ -5235,7 +5235,7 @@ function AttendanceMonthlyReport({ users }: any) {
   );
 
   const exportCsv = () => {
-    const header = ['المندوب', 'أيام الحضور', 'أيام التأخير', 'إجمالي دقائق التأخير', 'أيام بلا انصراف', 'أيام بلا تسجيل', 'إجمالي ساعات العمل', 'متوسط ساعات اليوم', 'أبكر حضور', 'آخر انصراف'];
+    const header = ['السيلز', 'أيام الحضور', 'أيام التأخير', 'إجمالي دقائق التأخير', 'أيام بلا انصراف', 'أيام بلا تسجيل', 'إجمالي ساعات العمل', 'متوسط ساعات اليوم', 'أبكر حضور', 'آخر انصراف'];
     const lines = rows.map((row) => [
       row.user.name, row.days, row.lateDays, row.lateMinutes, row.noCheckout, row.missing,
       row.hours, row.avgHours, row.earliest, row.latest,
@@ -5260,7 +5260,7 @@ function AttendanceMonthlyReport({ users }: any) {
             <BarChart3 className="w-5 h-5 text-purple-300" /> التقرير الشهري للحضور
           </h3>
           <p className="text-xs text-gray-400 mt-1">
-            عدد أيام التأخير والغياب وساعات العمل لكل مندوب في شهر {monthLabel} — جاهز للتسليم للمحاسبة.
+            عدد أيام التأخير والغياب وساعات العمل لكل سيلز في شهر {monthLabel} — جاهز للتسليم للمحاسبة.
           </p>
         </div>
         <button type="button" onClick={() => setOpen(!open)}
@@ -5298,7 +5298,7 @@ function AttendanceMonthlyReport({ users }: any) {
               <table className="w-full text-sm min-w-[720px]">
                 <thead>
                   <tr className="text-gray-400 text-xs">
-                    <th className="text-right py-2 px-2 font-bold">المندوب</th>
+                    <th className="text-right py-2 px-2 font-bold">السيلز</th>
                     <th className="py-2 px-2">أيام الحضور</th>
                     <th className="py-2 px-2">أيام التأخير</th>
                     <th className="py-2 px-2">إجمالي التأخير</th>
@@ -5347,7 +5347,7 @@ function AttendanceMonthlyReport({ users }: any) {
             </div>
 
             {rows.length === 0 && (
-              <p className="text-sm text-gray-400 text-center py-6">لا يوجد مندوبون لعرض تقريرهم</p>
+              <p className="text-sm text-gray-400 text-center py-6">لا يوجد سيلز لعرض تقريره</p>
             )}
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-4">
@@ -6470,6 +6470,8 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
 
   // حصة كل سيلز: نافذة تعرض كل السيلز وعدد الأرقام لكل واحد
   const [showShare, setShowShare] = useState(false);
+  // توزيع دفعة: اختيار سيلز ← كتابة عدد الأرقام ← توزيع
+  const [showBatch, setShowBatch] = useState(false);
 
   // توزيع جماعي: كل الأرقام المعروضة تُنقل لمندوب واحد بضغطة واحدة (دفعة واحدة، لا رقم رقم)
   const [flash, setFlash] = useState('');
@@ -6497,6 +6499,10 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setShowBatch(true)} disabled={!visible.length || !salesUsers.length}
+            className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary disabled:opacity-50 disabled:cursor-not-allowed">
+            <UserPlus className="w-4 h-4" /> توزيع دفعة
+          </button>
           <button onClick={() => setShowShare(true)} className="bg-purple-500/15 border border-purple-500/30 text-purple-200 px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-purple-500/25 transition-colors">
             <BarChart3 className="w-4 h-4" /> الأرقام لكل سيلز
           </button>
@@ -6513,7 +6519,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
       <div className="glass-card rounded-2xl p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث بالاسم أو الرقم أو المندوب..."
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث بالاسم أو الرقم أو السيلز..."
             className="w-full bg-white/5 border border-white/10 rounded-xl pr-9 pl-3 py-2.5 text-white text-sm" />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -6531,8 +6537,8 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
       {/* لا يوجد مندوبون بعد: نوضّح السبب بدل قائمة فارغة صامتة */}
       {salesUsers.length === 0 && (
         <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 leading-relaxed">
-          ⚠️ لا يوجد أي حساب مندوب مبيعات (Sales Agent) بعد، ولهذا لا يمكن توزيع أي رقم على أحد.
-          أنشئ حساب مندوب من تبويب «فريق العمل» ← «إضافة حساب»، واربطه بالفريق إن أردت، ثم عُد إلى هنا.
+          ⚠️ لا يوجد أي حساب سيلز (Sales Agent) بعد، ولهذا لا يمكن توزيع أي رقم على أحد.
+          أنشئ حساب سيلز من تبويب «فريق العمل» ← «إضافة حساب»، واربطه بالفريق إن أردت، ثم عُد إلى هنا.
         </div>
       )}
 
@@ -6546,7 +6552,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
       {visible.length > 0 && salesUsers.length > 0 && (
         <div className="glass-card rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center gap-2.5">
           <p className="text-xs font-bold text-gray-300 whitespace-nowrap">
-            امنح كل الأرقام المعروضة ({visible.length}) لمندوب واحد:
+            امنح كل الأرقام المعروضة ({visible.length}) لسيلز واحد:
           </p>
           <div className="flex flex-wrap gap-2">
             {salesUsers.map((u: User) => (
@@ -6617,6 +6623,9 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
 
       {/* حصة كل سيلز: كل السيلز وعدد الأرقام لكل واحد، والضغط على الاسم يفتح أرقامه */}
       {showShare && <SalesShareModal leads={assignedLeads} users={users} onClose={() => setShowShare(false)} />}
+
+      {/* توزيع دفعة: اختيار سيلز ← عدد الأرقام ← توزيع فوري */}
+      {showBatch && <BatchAssignModal visibleLeads={visible} users={users} onClose={() => setShowBatch(false)} onAssign={onAssign} />}
     </div>
   );
 }
@@ -7381,7 +7390,7 @@ function AutoImportCard() {
         </div>
       )}
 
-      <div className="grid sm:grid-cols-3 gap-3 mt-4">
+      <div className="grid sm:grid-cols-2 gap-3 mt-4">
         <div>
           <label className="block text-xs text-gray-300 mb-1">كل كم دقيقة يسحب؟</label>
           <input
@@ -7392,19 +7401,6 @@ function AutoImportCard() {
             onChange={(e) => setForm({ ...form, intervalMinutes: Number(e.target.value) })}
             className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white text-sm"
           />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-300 mb-1">عدد الأرقام لكل مندوب في الدفعة</label>
-          <input
-            type="number"
-            min={0}
-            max={1000}
-            value={form.perSalesLimit}
-            onChange={(e) => setForm({ ...form, perSalesLimit: Number(e.target.value) })}
-            placeholder="0 = بلا حد"
-            className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white text-sm"
-          />
-          <p className="text-[10.5px] text-gray-500 mt-1">مثال: 10 يعني كل مندوب يأخذ ١٠ أرقام كحد أقصى في كل دفعة، والمتبقي في الدفعة القادمة.</p>
         </div>
         <div className="rounded-xl bg-white/5 border border-white/10 p-3 text-xs">
           <p className="text-gray-400 mb-1">آخر عملية سحب:</p>
@@ -7694,7 +7690,7 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
           {isAdmin && (
             <select value={form.ownerId} onChange={(e) => setForm({ ...form, ownerId: e.target.value })}
               className="w-full bg-white/5 border border-cyan-500/30 rounded-xl px-4 py-3 text-white" required>
-              <option value="" className="bg-gray-900">👤 المندوب المسؤول عن العميل</option>
+              <option value="" className="bg-gray-900">👤 السيلز المسؤول عن العميل</option>
               {reps.map((u: User) => (
                 <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
               ))}
@@ -8133,7 +8129,7 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
             <select value={form.role} disabled={roleLocked}
               onChange={(e) => setForm({ ...form, role: e.target.value as User['role'] })}
               className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white disabled:opacity-50 disabled:cursor-not-allowed">
-              <option value="sales" className="bg-gray-900">Sales Agent — مندوب مبيعات</option>
+              <option value="sales" className="bg-gray-900">Sales Agent — سيلز</option>
               <option value="supervisor" className="bg-gray-900">Team Leader — قائد فريق</option>
               {canAssignCeo && <option value="admin" className="bg-gray-900">CEO — المدير التنفيذي</option>}
             </select>
@@ -8333,7 +8329,7 @@ function AddUserModal({ currentUser, users = [], onClose, onSuccess }: any) {
               {([
                 { id: 'admin', label: 'CEO', sub: 'مدير تنفيذي' },
                 { id: 'supervisor', label: 'Team Leader', sub: 'قائد فريق' },
-                { id: 'sales', label: 'Sales Agent', sub: 'مندوب مبيعات' },
+                { id: 'sales', label: 'Sales Agent', sub: 'سيلز' },
               ] as const).filter((r) => r.id !== 'admin' || canCreateCeo).map((r) => (
                 <button key={r.id} type="button" onClick={() => setForm({ ...form, role: r.id })}
                   className={`rounded-xl px-2 py-3 border text-center transition-colors ${
@@ -8490,7 +8486,7 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
         }
       }
       if (assignment.length === 0) {
-        setError('حدّد عدد الأرقام لكل مندوب (أو أغلق خيار التحديد للتوزيع بالتساوي)');
+        setError('حدّد عدد الأرقام لكل سيلز (أو أغلق خيار التحديد للتوزيع بالتساوي)');
         return;
       }
     } else {
@@ -8716,13 +8712,13 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
                   <label className="flex items-center gap-2 text-xs font-bold text-gray-300 cursor-pointer">
                     <input type="checkbox" checked={useQuota} onChange={(e) => setUseQuota(e.target.checked)}
                       className="accent-blue-500 w-4 h-4" />
-                    تحديد عدد الأرقام لكل مندوب بنفسي (بدل التوزيع بالتساوي)
+                    تحديد عدد الأرقام لكل سيلز بنفسي (بدل التوزيع بالتساوي)
                   </label>
 
                   {useQuota && (
                     <div className="rounded-xl bg-white/5 border border-white/10 p-3 space-y-2">
                       <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <p className="text-[11px] text-gray-400">اكتب عدد الأرقام أمام كل مندوب — المتبقي لا يُوزَّع</p>
+                        <p className="text-[11px] text-gray-400">اكتب عدد الأرقام أمام كل سيلز — المتبقي لا يُوزَّع</p>
                         <div className="flex gap-1.5">
                           <button type="button" onClick={() => setQuotas({})}
                             className="text-[11px] px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10">تصفير</button>
@@ -8825,6 +8821,110 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
             <button onClick={onClose} className="w-full gradient-primary text-white py-3 rounded-xl font-bold">
               تم
             </button>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ===== توزيع دفعة أرقام على سيلز واحد: اختيار السيلز ← كتابة عدد الأرقام ← توزيع =====
+// المستخدم يضغط الزر ← يفتح صندوق اختيار السيلز ← بعد اختياره يظهر حقل عدد الأرقام ← توزيع فوري.
+function BatchAssignModal({ visibleLeads, users, onClose, onAssign }: any) {
+  const salesUsers = users.filter((u: User) => (u.role === 'sales' || u.role === 'supervisor') && u.isActive);
+  const [stage, setStage] = useState<'pick' | 'count'>('pick');
+  const [pickedId, setPickedId] = useState('');
+  const [count, setCount] = useState('');
+  const picked = salesUsers.find((u: User) => u.id === pickedId);
+  const n = Math.max(1, Math.min(Math.floor(Number(count) || 0), visibleLeads.length));
+  const currentCount = visibleLeads.filter((l: AssignedLead) => l.salesId === pickedId).length;
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={onClose}>
+      <motion.div
+        initial={{ scale: 0.94, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0 }}
+        transition={{ type: 'spring', stiffness: 220, damping: 22 }}
+        className="glass-card rounded-3xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-bold gradient-text">توزيع دفعة أرقام</h2>
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg">
+            <X className="w-5 h-5 text-gray-400" />
+          </button>
+        </div>
+
+        {stage === 'pick' && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-400">اختر السيلز الذي ستُوزَّع عليه الأرقام ({visibleLeads.length} رقم معروض):</p>
+            <div className="max-h-72 overflow-y-auto space-y-2">
+              {salesUsers.map((u: User) => {
+                const mine = visibleLeads.filter((l: AssignedLead) => l.salesId === u.id).length;
+                return (
+                  <button key={u.id}
+                    onClick={() => { setPickedId(u.id); setCount(''); setStage('count'); }}
+                    className="w-full text-right rounded-2xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] transition-colors p-3.5 flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center font-bold text-white shrink-0">
+                      {u.name?.[0] || '؟'}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-white text-sm truncate">{u.name}</p>
+                      <p className="text-[11px] text-gray-500">{rankLabel(u.role)} • عنده {mine} رقم من المعروض</p>
+                    </div>
+                    <ChevronLeft className="w-4 h-4 text-gray-500 shrink-0" />
+                  </button>
+                );
+              })}
+              {salesUsers.length === 0 && (
+                <p className="text-center text-sm text-amber-400 py-8">لا يوجد سيلز مفعّل — أنشئ حساب سيلز أولاً من «فريق العمل»</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {stage === 'count' && picked && (
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3.5 flex items-center gap-3">
+              <button onClick={() => setStage('pick')} title="تغيير السيلز" className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-gray-300">
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <div className="w-10 h-10 rounded-full gradient-primary flex items-center justify-center font-bold text-white shrink-0">
+                {picked.name?.[0] || '؟'}
+              </div>
+              <div className="min-w-0">
+                <p className="font-bold text-white text-sm truncate">{picked.name}</p>
+                <p className="text-[11px] text-gray-500">عنده {currentCount} رقم حالياً • متاح للتوزيع {visibleLeads.length}</p>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs text-gray-300 mb-1.5 font-bold">كم رقم يوصل له؟</label>
+              <input type="number" min={1} max={visibleLeads.length} value={count}
+                onChange={(e) => setCount(e.target.value)} autoFocus dir="ltr"
+                placeholder={`مثال: 10 من ${visibleLeads.length}`}
+                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white text-sm text-center font-bold" />
+              <div className="flex flex-wrap gap-2 mt-2">
+                {[5, 10, 20, visibleLeads.length].map((v, i) => (
+                  <button key={i} type="button" onClick={() => setCount(String(v))}
+                    className="text-[11px] font-bold px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10">
+                    {i === 3 ? `الكل (${visibleLeads.length})` : v}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                if (!n || !pickedId) return;
+                const batch = visibleLeads.filter((l: AssignedLead) => l.salesId !== pickedId).slice(0, n);
+                if (!batch.length) return;
+                onAssign?.(batch.map((l: AssignedLead) => l.id), pickedId);
+                onClose();
+              }}
+              disabled={!n}
+              className="w-full gradient-primary text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 disabled:opacity-50">
+              <Check className="w-5 h-5" /> توزيع {n || 0} رقم على {picked.name}
+            </button>
+            <p className="text-[11px] text-gray-500 text-center">الأرقام تُؤخذ من أعلى القائمة المعروضة وتُضاف لحسابه الحالي</p>
           </div>
         )}
       </motion.div>
