@@ -12,13 +12,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const KEY_PATTERN = /^crm_[a-z_]+$/;
-// صور العقارات تُخزَّن داخل نفس قاعدة البيانات (base64)، لذا نرفع السقف حتى لا يفقد التزامن بياناته
-// على الاستضافة (Vercel/Upstash) سقف الطلب الواحد ١٠ ميجا، فننزل تحته قليلاً
-// حتى يفشل الطلب برسالة مفهومة بدل خطأ غامض من Redis.
+// صور العقارات تُخزَّن داخل نفس قاعدة البيانات (base64)، فحجم الطلب الواحد يهم:
+// سقف Vercel الصلب لجسم دالة السيرفر هو ٤.٥ ميجا، وسقف قيمة Upstash ١٠ ميجا.
+// ننزل تحت سقف Vercel بهامش أمان حتى يفشل الطلب برسالة عربية مفهومة
+// بدل خطأ غامض من الاستضافة نفسها.
+const VERCEL_BODY_LIMIT = 4 * 1024 * 1024;
 const MAX_BODY =
   Number(process.env.CRM_MAX_BODY) ||
-  (process.env.VERCEL ? 9 * 1024 * 1024 : 24 * 1024 * 1024);
+  (process.env.VERCEL ? VERCEL_BODY_LIMIT : 24 * 1024 * 1024);
 const REDIS_MAX_VALUE = 10 * 1024 * 1024;
+
+export { VERCEL_BODY_LIMIT, MAX_BODY };
 // حد أقصى لعدد السجلات في أي مصفوفة — يمنع إغراق قاعدة البيانات بطلب واحد ضخم
 const MAX_RECORDS = 50000;
 
@@ -91,12 +95,31 @@ const readBody = (req) =>
     req.on('error', () => resolve(null));
   });
 
-export function createStoreHandler({ load, save }) {
+// مقارنة بزمن ثابت: تمنع استنتاج المفتاح من فرق زمن الرد
+export const safeEqual = (a, b) => {
+  const x = String(a || '');
+  const y = String(b || '');
+  if (!x || x.length !== y.length) return false;
+  let diff = 0;
+  for (let i = 0; i < x.length; i += 1) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return diff === 0;
+};
+
+// createStoreHandler({ load, save, token })
+// token اختياري: لو مضبوطاً يُطلب من كل طلب أن يحمل الترويسة x-store-token
+// (يمنع أي زاحف أو ماسح آلي من سحب بيانات العملاء بالكامل من رابط الموقع).
+export function createStoreHandler({ load, save, token = '' }) {
   return async function handle(req, res) {
     try {
       const [url, query] = (req.url || '').split('?');
       if (url !== '/api/store') return send(res, 404, { error: 'not found' });
       const meta = new URLSearchParams(query || '').get('meta');
+
+      // بوابة اختيارية: تُغلق تماماً لو لم يُضبط STORE_TOKEN على الاستضافة
+      if (token) {
+        const provided = req.headers?.['x-store-token'] || '';
+        if (!safeEqual(provided, token)) return send(res, 401, { error: 'unauthorized' });
+      }
 
       // حماية من الإغراق (Brute force / DoS)
       if (rateLimited(req, req.method === 'POST')) {
@@ -166,16 +189,17 @@ export function fileStorage(dbFile) {
   };
 }
 
-// ===== التخزين في Redis على Vercel (خطة مجانية) =====
-// يعمل مع متغيرات Vercel KV أو Upstash مباشرة، ولا يحتاج أي مكتبة إضافية.
-export function redisStorage(env = {}) {
-  const url = env.KV_REST_API_URL || env.UPSTASH_REDIS_REST_URL || '';
-  const token = env.KV_REST_API_TOKEN || env.UPSTASH_REDIS_REST_TOKEN || '';
-  const dataKey = 'crm:store:data';
-  const versionKey = 'crm:store:version';
+// ===== عميل Redis REST (Upstash / Vercel KV) =====
+// يعمل بمتغيرات Vercel KV أو Upstash مباشرة، ولا يحتاج أي مكتبة خارجية.
+// يُستخدم في مكانين: مخزن المزامنة الكامل، ومفاتيح إعدادات مفردة (إعدادات سحب الأرقام).
+export function redisClient(env = {}) {
+  const url = String(env.KV_REST_API_URL || env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, '');
+  const token = String(env.KV_REST_API_TOKEN || env.UPSTASH_REDIS_REST_TOKEN || '');
+  const configured = Boolean(url && token);
 
   const pipeline = async (commands) => {
-    const res = await fetch(`${url.replace(/\/+$/, '')}/pipeline`, {
+    if (!configured) throw new Error('قاعدة البيانات غير مضبوطة — أضف متغيّرات Upstash ثم أعد النشر');
+    const res = await fetch(`${url}/pipeline`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(commands),
@@ -186,9 +210,32 @@ export function redisStorage(env = {}) {
   };
 
   return {
-    configured: Boolean(url && token),
+    configured,
+    pipeline,
+    async command(...args) {
+      const [result] = await pipeline([args]);
+      return result;
+    },
+    async get(key) {
+      const value = await this.command('GET', key);
+      return typeof value === 'string' ? value : null;
+    },
+    async set(key, value) {
+      await pipeline([['SET', key, String(value)]]);
+    },
+  };
+}
+
+// ===== التخزين في Redis على Vercel (خطة مجانية) =====
+export function redisStorage(env = {}) {
+  const client = redisClient(env);
+  const dataKey = 'crm:store:data';
+  const versionKey = 'crm:store:version';
+
+  return {
+    configured: client.configured,
     async load() {
-      const [raw, version] = await pipeline([
+      const [raw, version] = await client.pipeline([
         ['GET', dataKey],
         ['GET', versionKey],
       ]);
@@ -207,10 +254,39 @@ export function redisStorage(env = {}) {
           'حجم البيانات تجاوز سقف قاعدة البيانات المجانية (١٠ ميجا) — قلّل صور العقارات ثم أعد المحاولة'
         );
       }
-      await pipeline([
+      if (payload.length > VERCEL_BODY_LIMIT) {
+        throw new Error(
+          'حجم البيانات أكبر من سقف الرفع على الاستضافة (٤ ميجا) — قلّل صور العقارات ثم أعد المحاولة'
+        );
+      }
+      await client.pipeline([
         ['SET', dataKey, payload],
         ['SET', versionKey, String(db.version || 0)],
       ]);
+    },
+  };
+}
+
+// ===== تخزين كائن JSON واحد في مفتاح مستقل =====
+// يُستخدم لإعدادات سحب الأرقام (توكن فيسبوك والصفحات والنماذج والمؤشرات)
+// حتى تعيش على السيرفر: يعمل السحب التلقائي في الخلفية بلا أي متصفح مفتوح.
+export function redisJsonStore(env = {}, key = 'crm:lead-source:config') {
+  const client = redisClient(env);
+  return {
+    configured: client.configured,
+    async load() {
+      const raw = await client.get(key);
+      if (!raw) return {};
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      } catch {
+        return {};
+      }
+    },
+    async save(value) {
+      await client.set(key, JSON.stringify(value || {}));
+      return value;
     },
   };
 }

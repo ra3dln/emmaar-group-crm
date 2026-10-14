@@ -26,6 +26,16 @@ export const SYNC_EVENT = 'crm-sync';
 const API = '/api/store';
 const POLL_MS = 2500;
 
+// بوابة البيانات الاختيارية: لو الموقع محمي بمفتاح (STORE_TOKEN على Vercel)
+// نرسل نفس القيمة في كل طلب. لو الحقل فاضي لا نرسل شيئاً (الوضع الافتراضي).
+const STORE_TOKEN: string = String((import.meta as any).env?.VITE_STORE_TOKEN || '');
+const apiHeaders = (json = false): Record<string, string> => {
+  const out: Record<string, string> = {};
+  if (json) out['Content-Type'] = 'application/json';
+  if (STORE_TOKEN) out['x-store-token'] = STORE_TOKEN;
+  return out;
+};
+
 // شغّال خبيث: بدون استضافة قاعدة، كل طلب لـ /api/store بيرجع 503.
 // عشان النظام مايقفش، بنوكّل المزامنة كلها على localStorage فقط.
 // (السيرفر المحلي file-based بيكون موجود فقط locally via vite proxy، وماينزلش على Vercel)
@@ -164,7 +174,7 @@ const afterTombstones = (records: any[], tombstones: Tombstone[], key: string): 
 const pushAll = async (): Promise<void> => {
   const res = await fetch(API, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(true),
     body: JSON.stringify({ data: localData() }),
   });
   if (!res.ok) throw new Error(`bulk failed: ${res.status}`);
@@ -175,7 +185,7 @@ const pushAll = async (): Promise<void> => {
 const pushOne = async (key: string): Promise<void> => {
   const res = await fetch(API, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(true),
     body: JSON.stringify({ key, value: safeParse(localStorage.getItem(key)) }),
   });
   if (!res.ok) throw new Error(`push failed: ${res.status}`);
@@ -190,11 +200,11 @@ const tick = async (): Promise<void> => {
   try {
     // 0) هل تغيّر شيء على السيرفر؟ (نفحص قبل الرفع حتى نكتشف إعادة الضبط قبل رفع أي بيانات قديمة)
     let prefetched: any = null;
-    const versionRes = await fetch(`${API}?meta=version`, { cache: 'no-store' });
+    const versionRes = await fetch(`${API}?meta=version`, { cache: 'no-store', headers: apiHeaders() });
     if (!versionRes.ok) throw new Error(`version failed: ${versionRes.status}`);
     const { version } = await versionRes.json();
     if (version !== serverVersion) {
-      const fullRes = await fetch(API, { cache: 'no-store' });
+      const fullRes = await fetch(API, { cache: 'no-store', headers: apiHeaders() });
       if (!fullRes.ok) throw new Error(`pull failed: ${fullRes.status}`);
       const store = await fullRes.json();
       const serverReset = resetAt(store.data);
@@ -341,7 +351,7 @@ export async function startSync(): Promise<void> {
   online = false; // عشان مفيش قاعدة، لا يوجد "online" حقيقي
 
   try {
-    const res = await fetch(API, { cache: 'no-store' });
+    const res = await fetch(API, { cache: 'no-store', headers: apiHeaders() });
     if (res.ok) {
       // لو فجأة اتعملت قاعدة (مثلاً أضيف Redis لاحقاً)
       const store = await res.json();

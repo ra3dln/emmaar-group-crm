@@ -486,14 +486,18 @@ export function buildAssignments({ fetched, sales, config = {}, knownPhones = []
 }
 
 // --- التنظيف + التوزيع + الحفظ ---
-export async function runAutoImport({ storeFile, configFile }) {
-  const storage = fileStorage(storeFile);
-  const db = await storage.load();
-  const data = db.data || {};
-  const config = loadConfig(configFile);
+// القلب المشترك: يعمل مع أي مخزن (ملف JSON على سيرفر الشركة، أو Redis على الاستضافة).
+// وجوده في مكان واحد يعني أن التوزيع التلقائي في الخلفية يعطي نفس النتيجة تماماً
+// سواء شغّله السيرفر المحلي أو مُشغّل دوري على الاستضافة.
+//   storage    : { load, save }   — مخزن بيانات النظام (crm_users / crm_assigned_leads)
+//   config     : كائن الإعدادات (يُعدَّل في مكانه: assignCursor و cursorTime و lastRun)
+//   saveConfig : دالة تحفظ الإعدادات بعد التعديل (حتى لا يعيد جلب نفس الأرقام)
+export async function runAutoImportCore({ storage, config, saveConfig: persist }) {
   const at = new Date().toISOString();
 
   try {
+    const db = await storage.load();
+    const data = db.data || {};
     const fetched = await fetchLeads(config);
     const users = Array.isArray(data.crm_users) ? data.crm_users : [];
     const sales = users.filter((u) => u.isActive && (u.role === 'sales' || u.role === 'supervisor'));
@@ -510,9 +514,7 @@ export async function runAutoImport({ storeFile, configFile }) {
 
     if (built.added.length) {
       data.crm_assigned_leads = [...built.added, ...assigned];
-      db.data = data;
-      db.version = (Number(db.version) || 0) + 1;
-      await storage.save(db);
+      await storage.save({ version: (Number(db.version) || 0) + 1, data });
     }
 
     const summary = {
@@ -527,14 +529,30 @@ export async function runAutoImport({ storeFile, configFile }) {
     };
     config.assignCursor = built.assignCursor;
     config.lastRun = summary;
-    saveConfig(configFile, config);
+    await persist(config);
     return summary;
   } catch (error) {
-    const summary = { at, ok: false, source: isMetaSource(config) ? 'فيسبوك مباشرة' : 'ملف منشور', error: String(error?.message || error) };
+    const summary = {
+      at,
+      ok: false,
+      source: isMetaSource(config) ? 'فيسبوك مباشرة' : 'ملف منشور',
+      error: String(error?.message || error),
+    };
     config.lastRun = summary;
-    saveConfig(configFile, config);
+    await persist(config);
     return summary;
   }
+}
+
+// غلاف سيرفر الشركة المحلي: الإعدادات في ملف والتخزين في ملف
+export async function runAutoImport({ storeFile, configFile }) {
+  const storage = fileStorage(storeFile);
+  const config = loadConfig(configFile);
+  return runAutoImportCore({
+    storage,
+    config,
+    saveConfig: (next) => Promise.resolve(saveConfig(configFile, next)),
+  });
 }
 
 // --- واجهة الإعدادات (تُستخدم من تبويب الإعدادات في التطبيق) ---
@@ -601,6 +619,11 @@ export function createLeadSourceHandler({ storeFile, configFile }) {
         }
         if (typeof body.token === 'string' && body.token.trim()) patch.token = body.token.trim();
         if (body.clearToken) patch.token = '';
+        // إيقاف السحب التلقائي عن بُعد أو تصفير مؤشر الأرقام بعد تغيير النماذج
+        if (body.resetCursor) {
+          patch.cursorTime = 0;
+          patch.assignCursor = 0;
+        }
 
         const minutes = Number(body.intervalMinutes);
         if (Number.isFinite(minutes)) patch.intervalMinutes = Math.min(Math.max(Math.round(minutes), 1), 1440);

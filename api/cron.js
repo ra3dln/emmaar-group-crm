@@ -1,0 +1,73 @@
+// ===== المُشغّل الدوري: توزيع الأرقام تلقائياً ٢٤/٧ بلا أي متصفح مفتوح =====
+// Vercel المجاني يسمح بمهمة دورية واحدة يومياً فقط، لذلك نعتمد على خدمة جدولة
+// خارجية مجانية (Zeabur cron / cron-job.org / GitHub Actions) تنادي هذا الرابط
+// كل ٥ دقائق. الرابط محميّ بمفتاح سري حتى لا يستطيع أحد إغراق حساب فيسبوك.
+//
+// الإعداد (مرة واحدة):
+//   1) أضف متغيّر بيئة على Vercel باسم CRON_SECRET بقيمة عشوائية طويلة.
+//   2) أعد النشر.
+//   3) في cron-job.org: أنشئ مهمة كل ٥ دقائق على الرابط
+//        https://<موقعك>/api/cron?key=<نفس القيمة>
+//
+// يعمل أيضاً مع Vercel Cron تلقائياً: Vercel يرسل نفس القيمة في ترويسة
+// Authorization: Bearer <CRON_SECRET> — فلا حاجة لأي تعديل إضافي في هذه الحالة.
+
+import { publicConfig, runAutoImportCore } from '../server/leadSource.js';
+import { redisJsonStore, redisStorage, safeEqual } from '../server/store.js';
+
+const CONFIG_KEY = 'crm:lead-source:config';
+
+const reply = (res, status, payload) => {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.end(JSON.stringify(payload));
+};
+
+export default async function handler(req, res) {
+  try {
+    const secret = String(process.env.CRON_SECRET || '');
+    if (!secret) {
+      return reply(res, 503, {
+        ok: false,
+        error: 'لم يُضبط CRON_SECRET',
+        hint: 'أضف متغيّر البيئة CRON_SECRET على Vercel ثم أعد النشر لتشغيل التوزيع التلقائي.',
+      });
+    }
+
+    const [path, query] = (req.url || '').split('?');
+    const params = new URLSearchParams(query || '');
+    const fromQuery = params.get('key') || params.get('secret') || '';
+    const auth = String(req.headers?.authorization || '');
+    const fromHeader = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+
+    if (!safeEqual(fromQuery, secret) && !safeEqual(fromHeader, secret)) {
+      return reply(res, 403, { ok: false, error: 'غير مسموح' });
+    }
+
+    const storage = redisStorage(process.env);
+    const configStore = redisJsonStore(process.env, CONFIG_KEY);
+    if (!storage.configured || !configStore.configured) {
+      return reply(res, 503, {
+        ok: false,
+        error: 'قاعدة البيانات غير مضبوطة',
+        hint: 'أضف Upstash Redis من Storage في لوحة Vercel ثم أعد النشر.',
+      });
+    }
+
+    const config = await configStore.load();
+    if (!config.enabled) {
+      return reply(res, 200, { ok: true, skipped: true, reason: 'السحب التلقائي متوقف' });
+    }
+
+    const summary = await runAutoImportCore({
+      storage,
+      config,
+      saveConfig: (updated) => configStore.save(updated),
+    });
+
+    return reply(res, 200, { ok: true, summary, config: publicConfig(config) });
+  } catch (error) {
+    return reply(res, 500, { ok: false, error: String(error?.message || error) });
+  }
+}
