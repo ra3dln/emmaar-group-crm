@@ -13,7 +13,17 @@ import { fileStorage } from './store.js';
 const GRAPH_VERSION = 'v25.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 const MAX_PER_RUN = 200;
-const DEFAULTS = {
+
+// ===== قنوات السحب: فيسبوك وإنستجرام =====
+// كل قناة إعداد مستقل تماماً (توكن + صفحات + نماذج + مؤشر آخر سحب + مشغّل خاص).
+// ميتا تُنشئ نماذج إنستجرام على الصفحة نفسها وتُسحب بنفس الصلاحيات، لكن الفصل هنا
+// يجعل لكل كامبين تبويبه واسمه في وصف الرقم («إنستجرام - …» مقابل «فيسبوك - …»)
+// ومؤشره الخاص، فلا يوقف أحدهما الآخر ولا يخلط أرقامه بأرقامه.
+export const CHANNELS = ['facebook', 'instagram'];
+export const CHANNEL_LABELS = { facebook: 'فيسبوك', instagram: 'إنستجرام' };
+
+// إعدادات قناة واحدة — فيسبوك تُحفظ في جذر الإعدادات (كما كان)، وإنستجرام في مفتاحها الخاص
+const CHANNEL_DEFAULTS = {
   enabled: false,
   type: 'sheet', // sheet | meta
   sheetUrl: '',
@@ -24,8 +34,13 @@ const DEFAULTS = {
   cursorTime: 0, // آخر وقت سُحبت عنده أرقام من ميتا
   assignCursor: 0, // موضع المناوبة في توزيع الأرقام
   perSalesLimit: 0, // أقصى عدد أرقام لكل مندوب في الدفعة الواحدة (٠ = بلا حد)
-  acceptTestLeads: true, // الليدز التجريبية من أداة اختبار ميتا — لا تُرفض بل تُوسم بوضوح
   lastRun: null,
+};
+
+const DEFAULTS = {
+  ...CHANNEL_DEFAULTS,
+  acceptTestLeads: true, // الليدز التجريبية من أداة اختبار ميتا — لا تُرفض بل تُوسم بوضوح
+  instagram: { ...CHANNEL_DEFAULTS, type: 'meta' },
 };
 
 // --- تنظيف الأرقام المصرية (نفس قواعد الواجهة) ---
@@ -137,6 +152,23 @@ export function mapTable(table) {
     };
   });
 }
+
+// --- إعدادات كل قناة: فيسبوك في الجذر، وإنستجرام في مفتاحها ---
+export const channelConfigOf = (config, channel) =>
+  channel === 'instagram' ? (config?.instagram || null) : (config || null);
+
+export const isChannelOn = (config, channel) => {
+  const cfg = channelConfigOf(config, channel);
+  if (!cfg) return false;
+  return channel === 'instagram' ? !!cfg.enabled : !!config.enabled;
+};
+
+// هل القناة جاهزة فعلاً للسحب؟ (توكن + صفحات + نماذج، أو رابط ملف منشور)
+export const isChannelReady = (config) => {
+  if (!config) return false;
+  if (isMetaSource(config)) return !!(config.token && config.pages?.length && config.forms?.length);
+  return !!String(config.sheetUrl || '').trim();
+};
 
 // --- طلبات Graph API ---
 // أسماء الصلاحيات كما يعرضها فيسبوك، مع شرح عربي مختصر لكل واحدة
@@ -255,7 +287,8 @@ const toUnixSeconds = (value) => {
   return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : 0;
 };
 
-async function fetchFromMeta(config) {
+async function fetchFromMeta(config, channel = 'facebook') {
+  const label = CHANNEL_LABELS[channel] || CHANNEL_LABELS.facebook;
   if (!config.forms?.length) throw new Error('لم تختر نموذجاً (فورم) بعد — اضغط «استكشف صفحاتي» واختر النماذج');
   if (!config.pages?.length) throw new Error('لا توجد صفحات — اضغط «استكشف صفحاتي» أولاً');
 
@@ -290,12 +323,13 @@ async function fetchFromMeta(config) {
       const test = isTestLeadValue(rawPhone) || isTestLeadValue(rawName);
 
       // ليد تجريبي: نولّد رقماً صالحاً من معرّف الليد ليجرّب المستخدم الدورة كاملة
-      if (test && !config.acceptTestLeads) continue;
+      // (لا يُرفض إلا لو أُوقف صراحةً — قبوله هو الأصل حتى لو الإعداد لم يُكتب بعد)
+      if (test && config.acceptTestLeads === false) continue;
 
       leads.push({
         name: isTestLeadValue(rawName) || !String(rawName || '').trim() ? (test ? 'عميل تجريبي' : 'عميل بدون اسم') : rawName,
         phone: test ? demoPhoneFor(lead.id) : normalizeEgyptPhone(rawPhone),
-        source: `فيسبوك - ${form.name || form.id}${test ? ' • تجريبي' : ''}`,
+        source: `${label} - ${form.name || form.id}${test ? ' • تجريبي' : ''}`,
         date: created ? readableDateTime(new Date(created * 1000)) : '',
         test,
       });
@@ -311,7 +345,17 @@ async function fetchFromMeta(config) {
 export const isMetaSource = (config) =>
   config.type === 'meta' || (!String(config.sheetUrl || '').trim() && !!config.token && !!(config.forms || []).length);
 
-export const fetchLeads = (config) => (isMetaSource(config) ? fetchFromMeta(config) : fetchFromSheet(config));
+// السحب من قناة واحدة. أرقام قناة إنستجرام تُوسم بمصدرها حتى لو جاءت من ملف منشور
+// فتعرف من نظرة واحدة أي كامبين جاء منها الرقم.
+export const fetchLeads = async (config, channel = 'facebook') => {
+  const rows = isMetaSource(config) ? await fetchFromMeta(config, channel) : await fetchFromSheet(config);
+  if (channel !== 'instagram') return rows;
+  const label = CHANNEL_LABELS.instagram;
+  return rows.map((row) => ({
+    ...row,
+    source: String(row.source || '').includes(label) ? row.source : `${label} - ${row.source || 'استيراد تلقائي'}`,
+  }));
+};
 
 // --- الاستكشاف: صفحات المستخدم + نماذج كل صفحة ---
 export async function discoverPages(token) {
@@ -390,11 +434,20 @@ export async function fetchFormsForPage(pageId, pageToken) {
 }
 
 // --- الإعدادات ---
+// كل إعداد يُقرأ من أي مكان (ملف على سيرفر الشركة ، قاعدة بيانات على الاستضافة)
+// يمرّ من هنا: القيم الناقصة تُكمَّل من الافتراضي بدل أن تتحول إلى undefined.
+// (هذا ما كان يُسقط الأرقام التجريبية على الاستضافة لأن مفتاح acceptTestLeads غير مكتوب.)
+export const normalizeConfig = (stored = {}) => ({
+  ...DEFAULTS,
+  ...(stored || {}),
+  instagram: { ...DEFAULTS.instagram, ...((stored || {}).instagram || {}) },
+});
+
 export function loadConfig(configFile) {
   try {
-    return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(configFile, 'utf8')) };
+    return normalizeConfig(JSON.parse(fs.readFileSync(configFile, 'utf8')));
   } catch {
-    return { ...DEFAULTS };
+    return normalizeConfig({});
   }
 }
 
@@ -405,10 +458,10 @@ export function saveConfig(configFile, patch) {
   return next;
 }
 
-export const publicConfig = (config) => ({
+// شكل آمن للواجهة: لا يُرسل أي توكن أبداً — فقط هل يوجد توكن محفوظ
+const publicChannel = (config = {}) => ({
   enabled: !!config.enabled,
-  type: config.type,
-  acceptTestLeads: config.acceptTestLeads !== false,
+  type: config.type === 'meta' ? 'meta' : 'sheet',
   sheetUrl: config.sheetUrl || '',
   pages: (config.pages || []).map((p) => ({ id: p.id, name: p.name })),
   forms: (config.forms || []).map((f) => ({ id: f.id, pageId: f.pageId, name: f.name })),
@@ -416,6 +469,12 @@ export const publicConfig = (config) => ({
   perSalesLimit: Number(config.perSalesLimit) || 0,
   hasToken: !!config.token,
   lastRun: config.lastRun || null,
+});
+
+export const publicConfig = (config = {}) => ({
+  ...publicChannel(config),
+  acceptTestLeads: config.acceptTestLeads !== false,
+  instagram: publicChannel(config.instagram || DEFAULTS.instagram),
 });
 
 // --- التنظيف + المناوبة على المندوبين (بلا أي تخزين) ---
@@ -492,13 +551,68 @@ export function buildAssignments({ fetched, sales, config = {}, knownPhones = []
 //   storage    : { load, save }   — مخزن بيانات النظام (crm_users / crm_assigned_leads)
 //   config     : كائن الإعدادات (يُعدَّل في مكانه: assignCursor و cursorTime و lastRun)
 //   saveConfig : دالة تحفظ الإعدادات بعد التعديل (حتى لا يعيد جلب نفس الأرقام)
+// ===== جمع الأرقام من كل قناة مفعّلة =====
+// كل قناة تُسحب على حدة: فشل إحداهما لا يوقف الأخرى (توكن فيسبوك منتهٍ لا يمنع
+// سحب إنستجرام والعكس)، ومؤشر آخر سحب يخص كل قناة وحدها فلا تتكرر أرقامها.
+export async function collectLeads(config) {
+  const rows = [];
+  const channels = {};
+
+  for (const channel of CHANNELS) {
+    const cfg = channelConfigOf(config, channel);
+    const label = CHANNEL_LABELS[channel];
+    if (!cfg || !isChannelOn(config, channel)) {
+      channels[channel] = null;
+      continue;
+    }
+    if (!isChannelReady(cfg)) {
+      channels[channel] = {
+        ok: false,
+        label,
+        source: isMetaSource(cfg) ? `${label} مباشرة` : 'ملف منشور',
+        error: isMetaSource(cfg)
+          ? 'القناة ناقصة: توكن أو صفحات أو نماذج — أعد الاستكشاف واختر النماذج'
+          : 'القناة ناقصة: لم يُضبط رابط الملف المنشور',
+      };
+      continue;
+    }
+
+    try {
+      const fetched = await fetchLeads(cfg, channel);
+      rows.push(...fetched);
+      channels[channel] = {
+        ok: true,
+        label,
+        source: isMetaSource(cfg) ? `${label} مباشرة` : 'ملف منشور',
+        fetched: fetched.length,
+      };
+    } catch (error) {
+      channels[channel] = {
+        ok: false,
+        label,
+        source: isMetaSource(cfg) ? `${label} مباشرة` : 'ملف منشور',
+        error: String(error?.message || error),
+      };
+    }
+  }
+
+  return { rows, channels };
+}
+
 export async function runAutoImportCore({ storage, config, saveConfig: persist }) {
   const at = new Date().toISOString();
 
   try {
     const db = await storage.load();
     const data = db.data || {};
-    const fetched = await fetchLeads(config);
+    const { rows: fetched, channels } = await collectLeads(config);
+    const active = CHANNELS.filter((channel) => channels[channel]);
+    if (!active.length) throw new Error('لا توجد قناة سحب مفعّلة — شغّل «فيسبوك» أو «إنستجرام» من تبويبه');
+    // كل القنوات فشلت: نُظهر أول خطأ كما كان يظهر سابقاً بدل رسالة نجاح كاذبة
+    if (!active.some((channel) => channels[channel].ok)) {
+      throw new Error(channels[active[0]].error || 'تعذّر السحب من كل القنوات المفعّلة');
+    }
+
     const users = Array.isArray(data.crm_users) ? data.crm_users : [];
     const sales = users.filter((u) => u.isActive && (u.role === 'sales' || u.role === 'supervisor'));
     if (!sales.length) throw new Error('لا يوجد حساب سيلز مفعّل لتوزيع الأرقام عليه');
@@ -517,25 +631,29 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist }
       await storage.save({ version: (Number(db.version) || 0) + 1, data });
     }
 
+    const labels = active.map((channel) => CHANNEL_LABELS[channel]).join(' + ');
     const summary = {
       at,
       ok: true,
-      source: isMetaSource(config) ? 'فيسبوك مباشرة' : 'ملف منشور',
+      source: labels,
       fetched: fetched.length,
       added: built.added.length,
       duplicates: built.duplicates,
       invalid: built.invalid,
       perUser: built.perUser,
+      channels,
     };
     config.assignCursor = built.assignCursor;
-    config.lastRun = summary;
+    // مؤشر "آخر سحب" يُحفظ في القناة نفسها حتى تعرض كل تبويب نتيجته بصدق
+    if (channels.facebook) config.lastRun = summary;
+    if (channels.instagram && config.instagram) config.instagram.lastRun = summary;
     await persist(config);
     return summary;
   } catch (error) {
     const summary = {
       at,
       ok: false,
-      source: isMetaSource(config) ? 'فيسبوك مباشرة' : 'ملف منشور',
+      source: 'كل القنوات',
       error: String(error?.message || error),
     };
     config.lastRun = summary;
@@ -555,7 +673,54 @@ export async function runAutoImport({ storeFile, configFile }) {
   });
 }
 
-// --- واجهة الإعدادات (تُستخدم من تبويب الإعدادات في التطبيق) ---
+// ===== تطبيق تعديلات الواجهة على إعدادات قناة بعينها =====
+// مكان واحد يمنع اختلاف سلوك الواجهة المحلية وواجهة الاستضافة: نفس المفاتيح،
+// ونفس الحفاظ على توكن الصفحة القديم لو أرسلت الواجهة الصفحات بلا توكن.
+export function applyChannelPatch(config, body = {}) {
+  const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
+  const current = channelConfigOf(config, channel) || {};
+  const patch = {};
+
+  if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+  if (body.type === 'sheet' || body.type === 'meta') patch.type = body.type;
+  if (typeof body.sheetUrl === 'string') patch.sheetUrl = body.sheetUrl.trim();
+
+  if (Array.isArray(body.pages)) {
+    patch.pages = body.pages
+      .filter((p) => p && typeof p.id === 'string')
+      .map((p) => ({
+        id: String(p.id),
+        name: String(p.name || p.id),
+        token: typeof p.token === 'string' && p.token ? p.token : (current.pages || []).find((old) => old.id === String(p.id))?.token || '',
+      }));
+  }
+  if (Array.isArray(body.forms)) {
+    patch.forms = body.forms
+      .filter((f) => f && typeof f.id === 'string' && typeof f.pageId === 'string')
+      .map((f) => ({ id: String(f.id), pageId: String(f.pageId), name: String(f.name || f.id) }));
+  }
+  if (typeof body.token === 'string' && body.token.trim()) patch.token = body.token.trim();
+  if (body.clearToken) patch.token = '';
+  if (body.resetCursor) patch.cursorTime = 0;
+
+  const minutes = Number(body.intervalMinutes);
+  if (Number.isFinite(minutes)) patch.intervalMinutes = Math.min(Math.max(Math.round(minutes), 1), 1440);
+
+  const next = { ...config };
+  if (channel === 'instagram') next.instagram = { ...(config.instagram || {}), ...patch };
+  else Object.assign(next, patch);
+  // تصفير مؤشر التوزيع يخص النظام كله (مناوبة واحدة على المندوبين)
+  if (body.resetCursor) next.assignCursor = 0;
+
+  // عدد الأرقام لكل مندوب سياسة توزيع مشتركة بين القناتين — لا تُحفظ داخل قناة
+  // واحدة وإلا صارت بلا أثر (التوزيع يجري مرة واحدة على الدفعة المجمّعة).
+  const perSales = Number(body.perSalesLimit);
+  if (Number.isFinite(perSales)) next.perSalesLimit = Math.min(Math.max(Math.round(perSales), 0), 1000);
+
+  return next;
+}
+
+// --- واجهة الإعدادات (تُستخدم من تبويبات فيسبوك/إنستجرام في التطبيق) ---
 const readJsonBody = (req) =>
   new Promise((resolve) => {
     if (req.body !== undefined && req.body !== null) {
@@ -602,46 +767,22 @@ export function createLeadSourceHandler({ storeFile, configFile }) {
         const body = await readJsonBody(req);
         if (!body) return reply(res, 400, { ok: false, error: 'طلب غير صالح' });
 
-        const patch = {};
-        if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
-        if (typeof body.acceptTestLeads === 'boolean') patch.acceptTestLeads = body.acceptTestLeads;
-        if (body.type === 'sheet' || body.type === 'meta') patch.type = body.type;
-        if (typeof body.sheetUrl === 'string') patch.sheetUrl = body.sheetUrl.trim();
-        if (Array.isArray(body.pages)) {
-          patch.pages = body.pages
-            .filter((p) => p && typeof p.id === 'string' && typeof p.token === 'string')
-            .map((p) => ({ id: p.id, name: String(p.name || p.id), token: p.token }));
-        }
-        if (Array.isArray(body.forms)) {
-          patch.forms = body.forms
-            .filter((f) => f && typeof f.id === 'string' && typeof f.pageId === 'string')
-            .map((f) => ({ id: f.id, pageId: f.pageId, name: String(f.name || f.id) }));
-        }
-        if (typeof body.token === 'string' && body.token.trim()) patch.token = body.token.trim();
-        if (body.clearToken) patch.token = '';
-        // إيقاف السحب التلقائي عن بُعد أو تصفير مؤشر الأرقام بعد تغيير النماذج
-        if (body.resetCursor) {
-          patch.cursorTime = 0;
-          patch.assignCursor = 0;
-        }
-
-        const minutes = Number(body.intervalMinutes);
-        if (Number.isFinite(minutes)) patch.intervalMinutes = Math.min(Math.max(Math.round(minutes), 1), 1440);
-
-        // عدد الأرقام لكل مندوب في الدفعة (٠ = بلا حد)
-        const perSales = Number(body.perSalesLimit);
-        if (Number.isFinite(perSales)) patch.perSalesLimit = Math.min(Math.max(Math.round(perSales), 0), 1000);
-
-        const saved = saveConfig(configFile, patch);
+        const current = loadConfig(configFile);
+        // المفاتيح العامة للنظام (لیست لقناة بعينها)
+        const globalPatch = typeof body.acceptTestLeads === 'boolean' ? { acceptTestLeads: body.acceptTestLeads } : {};
+        const saved = saveConfig(configFile, { ...applyChannelPatch(current, body), ...globalPatch });
         return reply(res, 200, { ok: true, config: publicConfig(saved) });
       }
 
       if (req.method === 'POST' && url === '/api/lead-source/discover') {
         const body = await readJsonBody(req);
-        const token = String(body?.token || '').trim() || loadConfig(configFile).token;
+        const current = loadConfig(configFile);
+        const channel = body?.channel === 'instagram' ? 'instagram' : 'facebook';
+        const channelCfg = channelConfigOf(current, channel) || {};
+        const token = String(body?.token || '').trim() || channelCfg.token || '';
         const { pages, warning } = await discoverPages(token);
-        // نحفظ التوكن وبيانات الصفحات كي يعمل السحب لاحقاً بدون إعادة لصق
-        saveConfig(configFile, { token, pages });
+        // نحفظ التوكن وبيانات الصفحات في قناته كي يعمل السحب لاحقاً بدون إعادة لصق
+        saveConfig(configFile, applyChannelPatch(current, { channel, token, pages }));
         return reply(res, 200, {
           ok: true,
           pages: pages.map((p) => ({ id: p.id, name: p.name })),
@@ -651,9 +792,11 @@ export function createLeadSourceHandler({ storeFile, configFile }) {
 
       if (req.method === 'POST' && url === '/api/lead-source/page-forms') {
         const body = await readJsonBody(req);
-        const config = loadConfig(configFile);
-        const page = (config.pages || []).find((p) => p.id === String(body?.pageId || ''));
-        if (!page) return reply(res, 404, { ok: false, error: 'الصفحة غير موجودة في الإعدادات — أعد الاستكشاف' });
+        const current = loadConfig(configFile);
+        const channel = body?.channel === 'instagram' ? 'instagram' : 'facebook';
+        const channelCfg = channelConfigOf(current, channel) || {};
+        const page = (channelCfg.pages || []).find((p) => p.id === String(body?.pageId || ''));
+        if (!page) return reply(res, 404, { ok: false, error: 'الصفحة غير موجودة في إعدادات هذه القناة — أعد الاستكشاف' });
         const forms = await fetchFormsForPage(page.id, page.token);
         return reply(res, 200, { ok: true, forms });
       }
@@ -674,8 +817,7 @@ export function createLeadSourceHandler({ storeFile, configFile }) {
 export function startAutoImport({ storeFile, configFile, log = console.log }) {
   const timer = setInterval(async () => {
     const config = loadConfig(configFile);
-    if (!config.enabled) return;
-    const summary = await runAutoImport({ storeFile, configFile });
+    if (!CHANNELS.some((channel) => isChannelOn(config, channel))) return;      const summary = await runAutoImport({ storeFile, configFile });
     if (summary.ok && summary.added > 0) {
       log(`[auto-import] دخل ${summary.added} رقم جديد (مكرر: ${summary.duplicates}، غير صالح: ${summary.invalid})`);
     } else if (!summary.ok) {

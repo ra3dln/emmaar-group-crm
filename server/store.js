@@ -105,10 +105,13 @@ export const safeEqual = (a, b) => {
   return diff === 0;
 };
 
-// createStoreHandler({ load, save, token })
+// createStoreHandler({ load, save, loadVersion, token })
+// loadVersion اختياري: يقرأ رقم الإصدار وحده. مهم جداً على القاعدة المدفوعة بالأوامر:
+// الفحص الدوري للنسخة هو **أكثر طلب يتكرر** في النظام، فقراءة مفتاح واحد بدل مفتاحين
+// تنصّف فاتورة/سقف قاعدة البيانات فوراً.
 // token اختياري: لو مضبوطاً يُطلب من كل طلب أن يحمل الترويسة x-store-token
 // (يمنع أي زاحف أو ماسح آلي من سحب بيانات العملاء بالكامل من رابط الموقع).
-export function createStoreHandler({ load, save, token = '' }) {
+export function createStoreHandler({ load, save, loadVersion, token = '' }) {
   return async function handle(req, res) {
     try {
       const [url, query] = (req.url || '').split('?');
@@ -128,8 +131,12 @@ export function createStoreHandler({ load, save, token = '' }) {
       }
 
       if (req.method === 'GET') {
+        // فحص الإصدار: مفتاح واحد فقط (أخف طلب ممكن) — لأن كل جهاز يناديه كل بضعة ثوانٍ
+        if (meta === 'version') {
+          const version = loadVersion ? await loadVersion() : (await load()).version;
+          return send(res, 200, { version });
+        }
         const db = await load();
-        if (meta === 'version') return send(res, 200, { version: db.version });
         return send(res, 200, {
           version: db.version,
           isEmpty: Object.keys(db.data || {}).length === 0,
@@ -171,14 +178,22 @@ export function createStoreHandler({ load, save, token = '' }) {
 // ===== التخزين في ملف JSON (سيرفر التطوير المحلي) =====
 export function fileStorage(dbFile) {
   const dir = path.dirname(dbFile);
+  // نعرّفها كمتغيّر مستقل (وليس دالة تعتمد على this) لأن createStoreHandler
+  // يفكّ الكائن إلى دوال منفصلة، فعند استدعاء loadVersion() لن يوجد this أصلاً.
+  const load = async () => {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
+      return { version: Number(parsed.version) || 0, data: parsed.data || {} };
+    } catch {
+      return { version: 0, data: {} };
+    }
+  };
+
   return {
-    async load() {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
-        return { version: Number(parsed.version) || 0, data: parsed.data || {} };
-      } catch {
-        return { version: 0, data: {} };
-      }
+    load,
+    // قراءة ملف محلي مجانية — نُبقي نفس الواجهة حتى يعمل نفس الكود في المكانين
+    async loadVersion() {
+      return (await load()).version;
     },
     async save(db) {
       fs.mkdirSync(dir, { recursive: true });
@@ -234,6 +249,11 @@ export function redisStorage(env = {}) {
 
   return {
     configured: client.configured,
+    // أمر Redis واحد فقط — يُستخدم في الفحص الدوري للإصدار
+    async loadVersion() {
+      const version = await client.command('GET', versionKey);
+      return Number(version) || 0;
+    },
     async load() {
       const [raw, version] = await client.pipeline([
         ['GET', dataKey],

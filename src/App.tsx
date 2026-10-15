@@ -504,7 +504,7 @@ const addClientActivity = (
   type: string,
   text: string,
   by?: string,
-  opts?: { authorId?: string; callStatus?: DailyFeedback['callStatus']; cardId?: string; skipCard?: boolean }
+  opts?: { authorId?: string; callStatus?: DailyFeedback['callStatus']; cardId?: string; skipCard?: boolean; status?: string }
 ): void => {
   if (!clientId) return;
   try {
@@ -513,7 +513,15 @@ const addClientActivity = (
     const entryId = crypto.randomUUID();
     const next = all.map((c) => {
       if (c.id !== clientId) return c;
-      const entry: ClientActivity = { id: entryId, type, text, at: nowIso, by: by || '' };
+      const entry: ClientActivity = {
+        id: entryId,
+        type,
+        text,
+        at: nowIso,
+        by: by || '',
+        // حالة الفيدباك تسافر مع الحدث نفسه فتظهر في الشريط وبجوار الكومنت
+        ...(opts?.status ? { status: opts.status } : {}),
+      };
       return { ...c, activities: [entry, ...(c.activities || [])].slice(0, 60), updatedAt: nowIso };
     });
     localStorage.setItem('crm_clients', JSON.stringify(next));
@@ -533,6 +541,7 @@ const addClientActivity = (
           date: nowIso,
           feedback: text,
           callStatus: opts?.callStatus || 'called',
+          ...(opts?.status ? { status: opts.status } : {}),
           createdAt: nowIso,
         };
         // upsert: لو البطاقة موجودة بنفس المعرّف تُحدَّث بدل أن تتكرر
@@ -1880,6 +1889,8 @@ function App() {
   const handleSaveCall = (payload: { result: 'answered' | 'no-answer'; comment: string; nextCallAt: string }) => {
     const target = callClient;
     if (!target) return;
+    // «لم يرد» تُكتب في الكومنتات تلقائياً — حتى لو لم يكتب المندوب شيئاً
+    const callComment = payload.comment.trim() || (payload.result === 'no-answer' ? NO_ANSWER_COMMENT : '');
     const log: CallLog = {
       id: crypto.randomUUID(),
       clientId: target.id,
@@ -1888,7 +1899,7 @@ function App() {
       salesId: currentUser.id,
       salesName: currentUser.name,
       result: payload.result,
-      comment: payload.comment.trim(),
+      comment: callComment,
       nextCallAt: payload.nextCallAt ? new Date(payload.nextCallAt).toISOString() : undefined,
       createdAt: new Date().toISOString(),
     };
@@ -1901,12 +1912,14 @@ function App() {
       payload.result === 'answered' ? 'اتصال: تم الرد ✅' : 'اتصال: لم يرد ❌',
       currentUser.name
     );
-    if (payload.comment.trim()) {
-      // بطاقة واحدة فقط في «الفيدباك اليومي» منسوبة لمن كتب الكومنت
-      addClientActivity(target.id, 'feedback', `من المكالمة: ${payload.comment.trim()}`, currentUser.name, {
+    if (callComment) {
+      // بطاقة واحدة فقط في «الفيدباك اليومي» منسوبة لمن كتب الكومنت، وبحالة واضحة
+      // على شريط الفيدباك: «no answer» عند عدم الرد، و«follow up» عند الرد.
+      addClientActivity(target.id, 'feedback', `من المكالمة: ${callComment}`, currentUser.name, {
         authorId: currentUser.id,
         callStatus: payload.result === 'answered' ? 'called' : 'no-answer',
         cardId: log.id,
+        status: payload.result === 'answered' ? 'follow-up' : 'no-answer',
       });
     }
 
@@ -2206,10 +2219,10 @@ function App() {
             onAdd={() => setShowAddClient(true)}
             onCall={(c: Client) => setCallClient(c)}
             onConvert={handleConvertLeadToClient}
-            // صندوق الاختيارات في الكارت: new / follow up / closed deal
-            onQuickStage={(c: Client, quick: string) => {
-              if (!c || quickStageOf(c.stage) === quick) return; // نفس الحالة → لا نعيد كتابتها
-              handleUpdateClientStage(c.id, quickStageToStage(quick));
+            // شريط الفيدباك في الكارت: كل حالة تنقل العميل إلى مرحلتها تلقائياً
+            onSetStage={(c: Client, stage: Client['stage']) => {
+              if (!c || !stage || c.stage === stage) return; // نفس المرحلة → لا نعيد كتابتها
+              handleUpdateClientStage(c.id, stage);
             }}
             onLeadViewed={(id: string) => {
               const target = assignedLeads.find((l: AssignedLead) => l.id === id);
@@ -3680,26 +3693,150 @@ const sourceKindOf = (text: string): keyof typeof SOURCE_KINDS => {
   return 'other';
 };
 
-// ===== الحالة السريعة في كارت العميل: new / follow up / closed deal =====
-// ثلاث أزرار مختصرة تختصر مراحل العمل الستة، فتبقى المراحل التفصيلية كما هي في تبويب «المراحل».
-const QUICK_STAGES: Array<{ id: 'new' | 'followup' | 'closed'; label: string; ar: string; cls: string }> = [
-  { id: 'new', label: 'new', ar: 'عميل جديد', cls: 'qs-new' },
-  { id: 'followup', label: 'follow up', ar: 'متابعة (تم التواصل / معاينة / تفاوض)', cls: 'qs-follow' },
-  { id: 'closed', label: 'closed deal', ar: 'تم البيع', cls: 'qs-closed' },
-];
-// المرحلة التفصيلية ← أي زر من الأزرار الثلاثة يعبّر عنها
+// ===== المرحلة التفصيلية ← أي زر من الأزرار الثلاثة (new / follow up / closed deal) يعبّر عنها =====
+// تُستخدم في تبويب «المراحل» عند الإدارة، بعد أن صار شريط الفيدباك هو وسيلة السيلز في كروت العملاء.
 const quickStageOf = (stage?: string): 'new' | 'followup' | 'closed' =>
   stage === 'closed'
     ? 'closed'
     : stage === 'contacted' || stage === 'meeting' || stage === 'negotiation'
     ? 'followup'
     : 'new';
-const quickStageToStage = (q: string): Client['stage'] =>
-  q === 'closed' ? 'closed' : q === 'followup' ? 'contacted' : 'new';
 const sourceLabelOf = (c: any): string =>
   (c.source && String(c.source).trim()) || SOURCE_LABEL[c.status] || 'غير محدد';
 const commentCountOf = (c: any): number =>
   (c.activities || []).filter((a: ClientActivity) => /feedback|call|comment|note|فيدباك|اتصال/i.test(`${a.type}`)).length;
+
+// ===== شريط الفيدباك: ٩ حالات، كل حالة بلون مضيء يظهر في الشريط بعد الاختيار =====
+// كل فيدباك = **حالة + كومنت إلزامي**: لا يُحفظ فيدباك بحالة بلا كومنت ولا كومنت بلا حالة.
+// ويُسجَّل في خط العميل الزمني فيظهر في خانة الكومنتات (الفيدباك) وفي تبويب «الفيدباك اليومي».
+// المرحلة تتحرك تلقائياً مع الحالة (بلا ضغطة إضافية) فيبقى تبويب «المراحل» صادقاً.
+const FEEDBACK_STATUSES: Array<{ id: string; label: string; ar: string; cls: string; stage: Client['stage'] }> = [
+  { id: 'follow-up', label: 'follow up', ar: 'متابعة (تم التواصل / معاينة / تفاوض)', cls: 'fs-follow', stage: 'contacted' },
+  { id: 'meeting', label: 'meeting', ar: 'موعد معاينة أو اجتماع', cls: 'fs-meeting', stage: 'meeting' },
+  { id: 'after-meeting', label: 'following after meeting', ar: 'متابعة بعد الاجتماع', cls: 'fs-after', stage: 'meeting' },
+  { id: 'reschedule', label: 'reschedule meeting', ar: 'إعادة جدولة الاجتماع', cls: 'fs-reschedule', stage: 'meeting' },
+  { id: 'cancellation', label: 'cancellation', ar: 'إلغاء', cls: 'fs-cancel', stage: 'lost' },
+  { id: 'no-answer', label: 'no answer', ar: 'لا يوجد رد (لا يرد على الهاتف)', cls: 'fs-noanswer', stage: 'contacted' },
+  { id: 'done-deal', label: 'done deal', ar: 'تم البيع', cls: 'fs-done', stage: 'closed' },
+  { id: 'reservation', label: 'reservation', ar: 'حجز', cls: 'fs-reservation', stage: 'negotiation' },
+  { id: 'fresh-stage', label: 'fresh stage', ar: 'مرحلة جديدة (لم يُتواصل معه بعد)', cls: 'fs-fresh', stage: 'new' },
+];
+const FEEDBACK_STATUS_BY_ID: Record<string, { id: string; label: string; ar: string; cls: string; stage: Client['stage'] }> =
+  Object.fromEntries(FEEDBACK_STATUSES.map((status) => [status.id, status]));
+// الكومنت المكتوب تلقائياً عند اختيار «no answer» — يظهر في خانة الكومنتات كما هو
+const NO_ANSWER_COMMENT = 'No answer';
+
+// آخر حالة فيدباك على العميل: أحدث حدث في الخط الزمني يحمل حالة (الأحداث مرتّبة بالأحدث أولاً)
+const latestFeedbackStatusOf = (c: any): string =>
+  String((c?.activities || []).find((a: ClientActivity) => a?.status)?.status || '');
+// آخر فيدباك للعميل: نُفضّل آخر حدث يحمل حالة (فيدباك مسجّل من الشريط أو من مكالمة)
+// حتى لا يحل حدث «تغيير مرحلة» التلقائي مكان الكومنت الذي كتبه المندوب.
+const lastCommentOf = (c: any): ClientActivity | null => {
+  const activities: ClientActivity[] = c?.activities || [];
+  return (
+    activities.find((a: ClientActivity) => a?.status && String(a?.text || '').trim()) ||
+    activities.find((a: ClientActivity) => !!String(a?.text || '').trim()) ||
+    null
+  );
+};
+
+// قائمة الحالات المنسدلة: زر يعرض الحالة بلونها المضيء، ويفتح قائمة منسدلة بـ٩ حالات
+// (بدل الشريط المسطّح الملاصق للاسم). القائمة تُرسم عبر Portal لتخرج من حدود الكارت/الجدول.
+function StatusMenu({ value, onPick, label = 'تسجيل فيدباك', className = '', stopPropagation = true }:
+  { value?: string; onPick: (id: string) => void; label?: string; className?: string; stopPropagation?: boolean }) {
+  const meta = value ? FEEDBACK_STATUS_BY_ID[value] : null;
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [up, setUp] = useState(false);
+  const [style, setStyle] = useState<React.CSSProperties>({});
+
+  const place = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - r.bottom;
+    const flip = spaceBelow < 330 && r.top > 330;
+    setUp(flip);
+    const width = Math.max(r.width, 230);
+    let left = r.left;
+    if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+    setStyle({ position: 'fixed', left, width, ...(flip ? { bottom: window.innerHeight - r.top + 6 } : { top: r.bottom + 6 }) });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (wrapRef.current?.contains(t)) return;
+      if (document.getElementById('fs-menu-portal')?.contains(t)) return;
+      setOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onScroll = () => setOpen(false);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onEsc);
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onEsc);
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [open, place]);
+
+  return (
+    <div ref={wrapRef} className={`fs-menu-wrap ${className}`.trim()}
+      onClick={stopPropagation ? (e) => e.stopPropagation() : undefined}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`fs-trigger ${meta ? meta.cls : ''} ${meta ? 'on' : ''}`.trim()}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="fs-trigger-dot" />
+        <span className="fs-trigger-label">{meta ? meta.label : label}</span>
+        <ChevronDown className={`w-3.5 h-3.5 fs-trigger-chev ${open ? 'open' : ''}`} />
+      </button>
+      {open && createPortal(
+        <div id="fs-menu-portal" className={`fs-menu ${up ? 'up' : ''}`} role="menu" style={style}>
+          {FEEDBACK_STATUSES.map((status) => (
+            <button
+              key={status.id}
+              type="button"
+              role="menuitem"
+              title={status.ar}
+              className={`fs-item ${status.cls} ${value === status.id ? 'on' : ''}`}
+              onClick={() => { setOpen(false); onPick(status.id); }}
+            >
+              <span className="fs-item-dot" />
+              <span className="fs-item-en">{status.label}</span>
+              <span className="fs-item-ar">{status.ar}</span>
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+// شريط الفيدباك بجوار اسم العميل: قائمة منسدلة تعرض الحالة المختارة بلونها المضيء
+function FeedbackBar({ client, onPick }: { client: any; onPick?: (statusId: string) => void }) {
+  const active = latestFeedbackStatusOf(client);
+  return <StatusMenu value={active} onPick={(id) => onPick?.(id)} className="fb-bar-menu" />;
+}
+
+// حالة فيدباك صغيرة تُعرض بجوار الكومنت (في الخط الزمني وفي تبويب الفيدباك)
+function FeedbackChip({ status }: { status?: string }) {
+  const meta = status ? FEEDBACK_STATUS_BY_ID[status] : null;
+  if (!meta) return null;
+  return <b className={`fs-chip ${meta.cls}`} title={meta.ar}>{meta.label}</b>;
+}
 
 // ===== لوحة كل التعليقات + الملخص (للـ CEO ولفريق العمل) =====
 function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
@@ -3707,11 +3844,11 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
 
   // نجمع التعليقات من خطوط العملاء الزمنية ومن سجل المكالمات
   const entries = useMemo(() => {
-    const out: Array<{ id: string; client: string; sales: string; text: string; at: string; kind: string }> = [];
+    const out: Array<{ id: string; client: string; sales: string; text: string; at: string; kind: string; status?: string }> = [];
     for (const c of clients) {
       for (const a of c.activities || []) {
         if (/feedback|call|comment|note|فيدباك|اتصال/i.test(`${a.type}`) && a.text) {
-          out.push({ id: a.id, client: c.name, sales: a.by || '', text: a.text, at: a.at, kind: `${a.type}` });
+          out.push({ id: a.id, client: c.name, sales: a.by || '', text: a.text, at: a.at, kind: `${a.type}`, status: a.status });
         }
       }
     }
@@ -3724,6 +3861,7 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
           text: log.comment,
           at: log.createdAt,
           kind: log.result === 'answered' ? 'مكالمة: تم الرد' : 'مكالمة: لم يرد',
+          status: log.result === 'answered' ? 'follow-up' : 'no-answer',
         });
       }
     }
@@ -3804,7 +3942,7 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
                   <span className="font-bold text-gray-200">{e.client}{e.sales ? ` — ${e.sales}` : ''}</span>
                   <span>{formatDateTime(e.at)}</span>
                 </div>
-                <p className="fb-text">{e.text}</p>
+                <p className="fb-text"><FeedbackChip status={e.status} /> {e.text}</p>
               </div>
             ))
           )}
@@ -3818,40 +3956,86 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
 // قائمة العملاء للمندوب: الأرقام الواردة من الإدارة + عملاؤه في **قائمة واحدة** بلا أي تقسيم،
 // وكل كارت يحمل شريطاً لونياً وشارة توضح مصدر العميل (Facebook / Campaign / External…)
 // مع صندوق اختيارات سريع جمب الاسم: new / follow up / closed deal.
-function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTerm, onSearch, onSelect, onAdd, onCall, onConvert, onLeadViewed, onQuickStage, onRefresh }: any) {
+function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTerm, onSearch, onSelect, onAdd, onCall, onConvert, onLeadViewed, onSetStage, onRefresh }: any) {
   const [view, setView] = useState<'cards' | 'table'>(() => (localStorage.getItem('crm_clients_view') === 'table' ? 'table' : 'cards'));
   const [showComments, setShowComments] = useState(false);
-  // إضافة كومنت سريع من الكارت نفسه — في أي وقت
-  const [commentFor, setCommentFor] = useState<string | null>(null);
+  // صندوق الفيدباك: حالة إلزامية + كومنت إلزامي — لا يُحفظ فيدباك ناقص
+  const [composer, setComposer] = useState<{ key: string; clientId: string; status: string } | null>(null);
   const [commentText, setCommentText] = useState('');
 
-  const submitQuickComment = (clientId: string) => {
-    const text = commentText.trim();
-    if (!text || !clientId) return;
-    addClientActivity(clientId, 'feedback', text, currentUser?.name || '', { authorId: currentUser?.id });
+  // فتح الصندوق: بضغطة على حالة في الشريط (تتحدد تلقائياً) أو من زر الكومنت
+  const openComposer = (client: Client, status?: string) => {
+    const picked = status || latestFeedbackStatusOf(client) || '';
+    setComposer({ key: `client-${client.id}`, clientId: client.id, status: picked });
+    // «no answer» تعني حرفياً لا يوجد رد — تُكتب في الكومنتات تلقائياً (ويمكن للشخص تعديلها)
+    setCommentText(picked === 'no-answer' ? NO_ANSWER_COMMENT : '');
+  };
+
+  const closeComposer = () => {
+    setComposer(null);
     setCommentText('');
-    setCommentFor(null);
+  };
+
+  const submitFeedback = () => {
+    const text = commentText.trim();
+    if (!composer || !text) return;
+    const status = FEEDBACK_STATUS_BY_ID[composer.status];
+    if (!status) return;
+    // الفيدباك = كومنت + حالة، وينزل في الخط الزمني فيظهر في خانة الكومنتات (الفيدباك)
+    addClientActivity(composer.clientId, 'feedback', text, currentUser?.name || '', {
+      authorId: currentUser?.id,
+      status: composer.status,
+      // «no answer» تعني مكالمة بلا رد — فتظهر هكذا في الفيدباك اليومي أيضاً
+      callStatus: composer.status === 'no-answer' ? 'no-answer' : 'called',
+    });
+    // المرحلة تتحرك تلقائياً مع الحالة (مثل الشريط القديم) فلا يحتاج أحد لضغطة ثانية
+    const target = (clients || []).find((c: Client) => c.id === composer.clientId);
+    if (target && status.stage && target.stage !== status.stage) onSetStage?.(target, status.stage);
+    closeComposer();
     onRefresh?.();
     void pushKey('crm_clients');
   };
 
-  const CommentComposer = ({ clientId }: { clientId: string }) => (
-    <form
-      className="quick-comment"
-      onClick={(e) => e.stopPropagation()}
-      onSubmit={(e) => { e.preventDefault(); submitQuickComment(clientId); }}
-    >
-      <input
-        autoFocus
-        value={commentText}
-        onChange={(e) => setCommentText(e.target.value)}
-        placeholder="اكتب كومنت... (يُسجَّل في خط العميل الزمني)"
-        className="quick-comment-input"
-      />
-      <button type="submit" disabled={!commentText.trim()} title="حفظ الكومنت">حفظ</button>
-      <button type="button" title="إلغاء" onClick={() => { setCommentFor(null); setCommentText(''); }}>✕</button>
-    </form>
-  );
+  // صندوق الفيدباك: حالة + كومنت، والحفظ يتوقّف حتى يكتمل الاثنان
+  const FeedbackComposer = () => {
+    if (!composer) return null;
+    const status = FEEDBACK_STATUS_BY_ID[composer.status];
+    return (
+      <form
+        className="feedback-composer"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => { e.preventDefault(); submitFeedback(); }}
+      >
+        <StatusMenu
+          value={composer.status}
+          label="اختر حالة الفيدباك"
+          className="fc-status-menu"
+          stopPropagation={false}
+          onPick={(optionId) => {
+            setComposer({ ...composer, status: optionId });
+            if (optionId === 'no-answer' && !commentText.trim()) setCommentText(NO_ANSWER_COMMENT);
+          }}
+        />
+        <div className="fc-row">
+          <input
+            autoFocus
+            value={commentText}
+            onChange={(e) => setCommentText(e.target.value)}
+            placeholder={status ? `اكتب كومنت «${status.label}» — إلزامي ليُحفظ الفيدباك` : 'اختر حالة الفيدباك ثم اكتب الكومنت'}
+            className="quick-comment-input"
+          />
+          <button type="submit" disabled={!commentText.trim() || !status}
+            title={!status ? 'اختر حالة أولاً' : 'حفظ الفيدباك (الحالة + الكومنت)'}>
+            حفظ
+          </button>
+          <button type="button" title="إلغاء" onClick={closeComposer}>✕</button>
+        </div>
+        <p className="fc-hint">
+          {status ? `الحالة: ${status.label} — ${status.ar}` : 'لازم تختار حالة وتكتب كومنت معاً'}
+        </p>
+      </form>
+    );
+  };
 
   const switchView = (v: 'cards' | 'table') => {
     setView(v);
@@ -3928,7 +4112,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
               <span>الهاتف</span>
               <span>المصدر</span>
               <span>الميزانية</span>
-              <span>الحالة</span>
+              <span>الفيدباك</span>
               <span>الكومنتات</span>
               <span></span>
             </div>
@@ -3941,10 +4125,9 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
               const src = SOURCE_KINDS[sourceKindOf(isLead ? lead!.description : `${client!.source} ${client!.status}`)];
               const SrcIcon = src.Icon;
               const sourceText = isLead ? (formatLeadDescription(lead!.description) || 'رقم وارد') : sourceLabelOf(client);
-              const quick = isLead ? null : quickStageOf(client!.stage);
               const comments = isLead ? 0 : commentCountOf(client);
-              const last = isLead ? null : (client!.activities || []).slice(-1)[0];
-              const open = commentFor === (isLead ? `lead-${lead!.id}` : `client-${client!.id}`);
+              const last = isLead ? null : lastCommentOf(client);
+              const open = composer?.key === (isLead ? `lead-${lead!.id}` : `client-${client!.id}`);
               return (
                 <Fragment key={isLead ? `lead-${lead!.id}` : `client-${client!.id}`}>
                   <div
@@ -3965,21 +4148,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                     </span>
                     <span role="cell" className="ct-budget">{(!isLead && client!.budget) ? displayPrice(client!.budget) : '—'}</span>
                     <span role="cell">
-                      {quick ? (
-                        <div className="quick-status" onClick={(e) => e.stopPropagation()}>
-                          {QUICK_STAGES.map((stage) => (
-                            <button
-                              key={stage.id}
-                              type="button"
-                              title={stage.ar}
-                              aria-pressed={quick === stage.id}
-                              className={`qs-btn ${quick === stage.id ? `on ${stage.cls}` : ''}`}
-                              onClick={() => onQuickStage?.(client, stage.id)}
-                            >
-                              {stage.label}
-                            </button>
-                          ))}
-                        </div>
+                      {!isLead ? (
+                        <FeedbackBar client={client} onPick={(statusId: string) => openComposer(client!, statusId)} />
                       ) : (
                         <span className="ct-dim">{lead!.status === 'new' ? 'رقم وارد' : 'تم فتحه'}</span>
                       )}
@@ -4007,8 +4177,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                         </>
                       ) : (
                         <>
-                          <button type="button" onClick={() => { setCommentFor(`client-${client!.id}`); setCommentText(''); }}
-                            title="إضافة كومنت الآن" className="icon-btn !w-8 !h-8 text-amber-300"><MessageSquare className="w-3.5 h-3.5" /></button>
+                          <button type="button" onClick={() => openComposer(client!)}
+                            title="إضافة فيدباك (حالة + كومنت)" className="icon-btn !w-8 !h-8 text-amber-300"><MessageSquare className="w-3.5 h-3.5" /></button>
                           <button type="button" onClick={() => onCall?.(client)} title="الاتصال بالعميل"
                             className="icon-btn !w-8 !h-8 text-emerald-300"><PhoneCall className="w-3.5 h-3.5" /></button>
                           <WhatsAppButton name={client!.name} phones={[client!.phone, ...(client!.phones || [])]} />
@@ -4016,11 +4186,12 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                       )}
                     </span>
                   </div>
-                  {open && !isLead && (
-                    <CommentComposer clientId={client!.id} />
-                  )}
+                  {open && !isLead && <FeedbackComposer />}
                   {!open && !isLead && last?.text && (
-                    <div className="ct-lastnote" onClick={() => onSelect(client)}>آخر ملاحظة: {last.text}</div>
+                    <div className="ct-lastnote" onClick={() => onSelect(client)}>
+                      <FeedbackChip status={last.status} />
+                      {' '}آخر ملاحظة: {last.text}
+                    </div>
                   )}
                 </Fragment>
               );
@@ -4039,9 +4210,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
             const src = SOURCE_KINDS[sourceKindOf(isLead ? lead!.description : `${client!.source} ${client!.status}`)];
             const SrcIcon = src.Icon;
             const sourceText = isLead ? (formatLeadDescription(lead!.description) || 'رقم وارد') : sourceLabelOf(client);
-            const quick = isLead ? null : quickStageOf(client!.stage);
             const comments = isLead ? 0 : commentCountOf(client);
-            const last = isLead ? null : (client!.activities || []).slice(-1)[0];
+            const last = isLead ? null : lastCommentOf(client);
             const facts = isLead
               ? []
               : ([
@@ -4050,8 +4220,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                   client!.monthlyInstallment ? { k: 'القسط', v: displayPrice(client!.monthlyInstallment) } : null,
                   client!.deliveryPeriod ? { k: 'التسليم', v: client!.deliveryPeriod } : null,
                 ].filter(Boolean) as Array<{ k: string; v: string }>);
-            const open = commentFor === (isLead ? `lead-${lead!.id}` : `client-${client!.id}`);
-            void last; void facts; void SrcIcon; void sourceText;
+            const open = composer?.key === (isLead ? `lead-${lead!.id}` : `client-${client!.id}`);
+            void facts; void SrcIcon; void sourceText;
 
             return (
               <Fragment key={isLead ? `lead-${lead!.id}` : `client-${client!.id}`}>
@@ -4072,23 +4242,12 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                         {sourceText}
                       </span>
                       {client?.stage === 'lost' && <span className="st-chip st-lost">ضائع</span>}
-                      {quick && (
-                        <div className="quick-status" onClick={(e) => e.stopPropagation()}>
-                          {QUICK_STAGES.map((stage) => (
-                            <button
-                              key={stage.id}
-                              type="button"
-                              title={stage.ar}
-                              aria-pressed={quick === stage.id}
-                              className={`qs-btn ${quick === stage.id ? `on ${stage.cls}` : ''}`}
-                              onClick={() => onQuickStage?.(client, stage.id)}
-                            >
-                              {stage.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
                     </div>
+
+                    {!isLead && last?.text && (
+                      /* الفيدباك الأخير يظهر بجوار الاسم: الحالة + الكومنت */
+                      <p className="cc-lastfb"><FeedbackChip status={last.status} /> {last.text}</p>
+                    )}
 
                     <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
 
@@ -4100,7 +4259,6 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                       </div>
                     )}
 
-                    {last?.text && <p className="cc-note">آخر ملاحظة: {last.text}</p>}
                     {isLead && (
                       <p className="cc-note">وصل من {sourceText} — {formatDateTime(lead!.createdAt)}</p>
                     )}
@@ -4124,16 +4282,21 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                       </>
                     ) : (
                       <>
-                        <button type="button" onClick={() => { setCommentFor(`client-${client!.id}`); setCommentText(''); }}
-                          title="إضافة كومنت الآن" className="icon-btn !w-8 !h-8 text-amber-300"><MessageSquare className="w-3.5 h-3.5" /></button>
+                        <button type="button" onClick={() => openComposer(client!)}
+                          title="إضافة فيدباك (حالة + كومنت)" className="icon-btn !w-8 !h-8 text-amber-300"><MessageSquare className="w-3.5 h-3.5" /></button>
                         <button type="button" onClick={() => onCall?.(client)} title="الاتصال بالعميل"
                           className="icon-btn !w-8 !h-8 text-emerald-300"><PhoneCall className="w-3.5 h-3.5" /></button>
                         <WhatsAppButton name={client!.name} phones={[client!.phone, ...(client!.phones || [])]} />
                       </>
                     )}
                   </div>
+
+                  {/* شريط الفيدباك: صف كامل بعرض الكارت تحت اسم العميل مباشرةً */}
+                  {!isLead && (
+                    <FeedbackBar client={client} onPick={(statusId: string) => openComposer(client!, statusId)} />
+                  )}
                 </motion.article>
-                {open && !isLead && <CommentComposer clientId={client!.id} />}
+                {open && !isLead && <FeedbackComposer />}
               </Fragment>
             );
           })}
@@ -4377,11 +4540,15 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
     const base = new Date();
     base.setMinutes(base.getMinutes() + (r === 'no-answer' ? 120 : 1440));
     setNextCallAt(toLocalInput(base));
+    // «لم يرد» = لا يوجد رد: تُكتب في الكومنتات تلقائياً حتى لا يحتاج المندوب لكتابتها
+    if (r === 'no-answer' && !comment.trim()) setComment(NO_ANSWER_COMMENT);
   };
 
   const save = () => {
     if (!result) return;
-    onSave({ result, comment, nextCallAt });
+    // ضمانة أخيرة: لو اختار «لم يرد» وكتب كومنتاً فارغاً ينزل الكومنت تلقائياً
+    const text = comment.trim() || (result === 'no-answer' ? NO_ANSWER_COMMENT : '');
+    onSave({ result, comment: text, nextCallAt });
     setDone(true);
   };
 
@@ -5602,7 +5769,10 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd }:
               {group.list.map((feedback: DailyFeedback) => (
                 <div key={feedback.id} className="fb-row">
                   <div className="min-w-0 flex-1">
-                    <p className="fb-text">{String(feedback.feedback || '').replace(/^فيدباك:\s*/, '').replace(/^من المكالمة:\s*/, '')}</p>
+                    <p className="fb-text">
+                      <FeedbackChip status={feedback.status} />
+                      {' '}{String(feedback.feedback || '').replace(/^فيدباك:\s*/, '').replace(/^من المكالمة:\s*/, '')}
+                    </p>
                     <p className="fb-meta">
                       {formatDateTime(feedback.date)}
                       {feedback.callStatus === 'no-answer' ? ' • لم يرد 📵' : feedback.callStatus === 'called' ? ' • تم الرد ✅' : ''}
@@ -6027,6 +6197,18 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, callLogs = [], onSe
 
 // Admin Users View - Simplified
 function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete, onImpersonate }: any) {
+  // التبويبات داخل «فريق العمل»: الحسابات، ثم قناة سحب الأرقام (فيسبوك / إنستجرام).
+  // الإعداد يبقى محفوظاً على هذا الجهاز فقط ليعود المدير لنفس التبويب الذي تركه.
+  const [view, setView] = useState<'accounts' | LeadChannel>(() => {
+    const saved = localStorage.getItem('crm_admin_users_tab');
+    return saved === 'facebook' || saved === 'instagram' ? saved : 'accounts';
+  });
+  const switchView = (next: 'accounts' | LeadChannel) => {
+    setView(next);
+    localStorage.setItem('crm_admin_users_tab', next);
+  };
+  // إعداد الكامبينات للمدير وحده (قائد الفريق يرى حسابات فريقه فقط)
+  const isAdmin = currentUser?.role === 'admin';
   // حماية: لا يُحذف حساب CEO الرئيسي، ولا يستطيع قائد الفريق حذف أو تعديل الـ CEO
   const canDelete = (user: User) =>
     user.role !== 'admin' && user.id !== currentUser.id && !(currentUser.role === 'supervisor' && user.role === 'supervisor');
@@ -6040,11 +6222,34 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold gradient-text">فريق العمل</h2>
-        <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
-          <Plus className="w-4 h-4" /> إضافة حساب
-        </button>
+        {view === 'accounts' && (
+          <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
+            <Plus className="w-4 h-4" /> إضافة حساب
+          </button>
+        )}
       </div>
 
+      {/* التبويبات: الحسابات · كامبين فيسبوك · كامبين إنستجرام — كل قناة معزولة بإعدادها */}
+      {isAdmin && (
+        <div className="flex flex-wrap items-center gap-2">
+          {([['accounts', '👥 الحسابات'], ['facebook', '📘 فيسبوك'], ['instagram', '📸 إنستجرام']] as Array<['accounts' | LeadChannel, string]>).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => switchView(id)}
+              className={`px-4 py-2.5 rounded-xl font-bold text-xs border transition-colors ${
+                view === id ? 'bg-purple-500/20 border-purple-400/40 text-purple-200' : 'bg-white/5 border-white/10 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {view !== 'accounts' ? (
+        <ChannelSourceCard channel={view} />
+      ) : (
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <AnimatePresence>
           {users.map((user: User) => (
@@ -6108,6 +6313,7 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
           ))}
         </AnimatePresence>
       </div>
+      )}
     </div>
   );
 }
@@ -6991,7 +7197,39 @@ const localKnownPhones = () => {
   }
 };
 
-function AutoImportCard() {
+// ===== قنوات سحب الأرقام: فيسبوك وإنستجرام =====
+// كل قناة تبويب مستقل بإعداداته الخاصة: التوكن، الصفحات، النماذج، كل كم دقيقة، ومؤشر
+// آخر سحب. (ميتا تُنشئ نماذج إنستجرام على الصفحة نفسها وتُسحب بنفس الصلاحيات، لكن
+// الفصل هنا يجعل لكل كامبين تبويبه واسمه «إنستجرام - …» أو «فيسبوك - …» في وصف الرقم.)
+type LeadChannel = 'facebook' | 'instagram';
+const CHANNEL_META: Record<LeadChannel, { label: string; ar: string; metaType: string; icon: string; hint: string }> = {
+  facebook: {
+    label: 'Facebook',
+    ar: 'فيسبوك',
+    metaType: 'فيسبوك مباشرة (توكن)',
+    icon: '📘',
+    hint: 'أرقام كامبينات فيسبوك تُوسم «فيسبوك - اسم النموذج».',
+  },
+  instagram: {
+    label: 'Instagram',
+    ar: 'إنستجرام',
+    metaType: 'إنستجرام مباشرة (توكن)',
+    icon: '📸',
+    hint: 'ميتا تُنشئ نماذج إنستجرام على الصفحة نفسها، وتُسحب بنفس التوكن — لكن إعدادها ومؤشرها مستقلان هنا، فتبقى أرقام كامبينات إنستجرام في تبويبها باسم «إنستجرام - اسم النموذج».',
+  },
+};
+// إعدادات قناة بعينها من إعدادات النظام (فيسبوك في الجذر، وإنستجرام في مفتاحها)
+const channelViewOf = (config: any, channel: LeadChannel) =>
+  (channel === 'facebook' ? config : config?.instagram) || {};
+// كتابة تعديل في القناة المطلوبة داخل إعدادات المتصفح (وضع بلا قاعدة بيانات)
+const writeLocalChannel = (channel: LeadChannel, patch: any) => {
+  if (channel === 'facebook') return writeLocalSource(patch);
+  const current = readLocalSource();
+  return writeLocalSource({ instagram: { ...((current as any).instagram || {}), ...patch } });
+};
+
+function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
+  const meta = CHANNEL_META[channel];
   const [config, setConfig] = useState<any>(null);
   // true = سيرفر الشركة (يخزّن في ملف) · false = استضافة بلا قاعدة بيانات (التخزين في المتصفح)
   const [remote, setRemote] = useState<boolean | null>(null);
@@ -7008,20 +7246,22 @@ function AutoImportCard() {
 
   const applyConfig = (next: any) => {
     setConfig(next);
+    // القيم المعروضة تخص هذه القناة وحدها
+    const view = channelViewOf(next, channel);
     setForm({
-      sheetUrl: next.sheetUrl || '',
+      sheetUrl: view.sheetUrl || '',
       token: '',
-      intervalMinutes: next.intervalMinutes || 5,
+      intervalMinutes: view.intervalMinutes || 5,
       perSalesLimit: Number(next.perSalesLimit) || 0,
     });
     // النماذج المحفوظة تظهر محدَّدة حتى لو أعدنا تحميل الصفحة
-    if (Array.isArray(next.forms) && next.forms.length) {
+    if (Array.isArray(view.forms) && view.forms.length) {
       setForms((prev) => {
         const merged = [...prev];
-        for (const f of next.forms) if (!merged.some((m) => m.id === f.id)) merged.push({ ...f });
+        for (const f of view.forms) if (!merged.some((m) => m.id === f.id)) merged.push({ ...f });
         return merged;
       });
-      setSelected((prev) => ({ ...prev, ...Object.fromEntries(next.forms.map((f: any) => [f.id, true])) }));
+      setSelected((prev) => ({ ...prev, ...Object.fromEntries(view.forms.map((f: any) => [f.id, true])) }));
     }
   };
 
@@ -7045,12 +7285,12 @@ function AutoImportCard() {
     setNotice('');
     try {
       if (remote === false) {
-        applyConfig(localSourceView(writeLocalSource(body)));
+        applyConfig(localSourceView(writeLocalChannel(channel, body)));
       } else {
         const res = await fetch('/api/lead-source', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ channel, ...body }),
         });
         const json = await res.json();
         if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الحفظ');
@@ -7068,17 +7308,17 @@ function AutoImportCard() {
     setBusy('discover');
     setNotice('');
     try {
-      const token = form.token.trim() || String(config?.token || '');
+      const token = form.token.trim() || String(channelViewOf(config, channel)?.token || '');
       if (remote === false) {
         // بلا قاعدة بيانات: نحفظ التوكن وتوكنات الصفحات في المتصفح لأن الوظيفة لا تحفظ شيئاً
         const res = await fetch('/api/lead-source', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'discover', token }),
+          body: JSON.stringify({ action: 'discover', channel, token, config: readLocalSource() }),
         });
         const json = await res.json();
         if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الاستكشاف');
-        applyConfig(localSourceView(writeLocalSource({ type: 'meta', token, pages: json.pages })));
+        applyConfig(localSourceView(writeLocalChannel(channel, { type: 'meta', token, pages: json.pages })));
         setPages(json.pages.map((p: any) => ({ id: p.id, name: p.name })));
         setForms([]);
         setSelected({});
@@ -7089,12 +7329,12 @@ function AutoImportCard() {
       const res = await fetch('/api/lead-source/discover', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: form.token.trim() }),
+        body: JSON.stringify({ channel, token: form.token.trim() }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الاستكشاف');
       setPages(json.pages);
-      // استكشاف الصفحات = إعداد فيسبوك، فنبدّل المصدر فوراً بدل انتظار ضغطة «حفظ»
+      // استكشاف الصفحات = إعداد القناة، فنبدّل المصدر فوراً بدل انتظار ضغطة «حفظ»
       await save({ type: 'meta' }, '');
       setForms([]);
       setSelected({});
@@ -7111,14 +7351,14 @@ function AutoImportCard() {
     setNotice('');
     try {
       // بلا قاعدة بيانات نرسل توكن الصفحة المحفوظ في المتصفح (الوظيفة لا تحفظ شيئاً)
-      const pageToken = (config?.pages || []).find((p: any) => p.id === pageId)?.token;
+      const pageToken = (channelViewOf(config, channel).pages || []).find((p: any) => p.id === pageId)?.token;
       const res = await fetch('/api/lead-source', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body:
           remote === false
-            ? JSON.stringify({ action: 'forms', pageId, pageToken })
-            : JSON.stringify({ pageId }),
+            ? JSON.stringify({ action: 'forms', channel, pageId, pageToken })
+            : JSON.stringify({ channel, pageId }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر جلب النماذج');
@@ -7132,7 +7372,7 @@ function AutoImportCard() {
   };
 
   // الصفحات المتاحة للإضافة اليدوية (المكتشفة أو المحفوظة)
-  const pageOptions = (pages.length ? pages : config?.pages || []).map((p: any) => ({ id: p.id, name: p.name }));
+  const pageOptions = (pages.length ? pages : channelViewOf(config, channel).pages || []).map((p: any) => ({ id: p.id, name: p.name }));
 
   const addManualForm = () => {
     const id = manual.formId.trim();
@@ -7151,7 +7391,7 @@ function AutoImportCard() {
   const nextSourceType = () => {
     const hasForms = forms.some((f) => selected[f.id]);
     if (form.token.trim() || (!form.sheetUrl.trim() && hasForms)) return 'meta';
-    return config.type;
+    return channelViewOf(config, channel).type || 'sheet';
   };
 
   const saveSettings = () =>
@@ -7161,7 +7401,8 @@ function AutoImportCard() {
         sheetUrl: form.sheetUrl,
         forms: forms.filter((f) => selected[f.id]).map((f) => ({ id: f.id, pageId: f.pageId, name: f.name })),
         intervalMinutes: Number(form.intervalMinutes) || 5,
-        perSalesLimit: Math.max(0, Number(form.perSalesLimit) || 0),
+        // إعداد التوزيع (عدد الأرقام لكل مندوب) إعداد عام للفريق — لا يخص قناة دون أخرى
+        ...(Number(form.perSalesLimit) >= 0 ? { perSalesLimit: Math.max(0, Number(form.perSalesLimit) || 0) } : {}),
         ...(form.token.trim() ? { token: form.token.trim() } : {}),
       },
       'تم حفظ الإعدادات ✓'
@@ -7190,12 +7431,19 @@ function AutoImportCard() {
         if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر السحب');
         summary = json.summary;
         if (summary?.ok) ingestLocalLeads(json.leads || []);
+        const local = readLocalSource();
         applyConfig(
           localSourceView(
             writeLocalSource({
               lastRun: summary,
-              cursorTime: json.cursorTime ?? readLocalSource().cursorTime,
-              assignCursor: json.assignCursor ?? readLocalSource().assignCursor,
+              cursorTime: json.cursorTime ?? local.cursorTime,
+              assignCursor: json.assignCursor ?? local.assignCursor,
+              // مؤشر إنستجرام منفصل — وإلا أعاد جلب نفس أرقامه في كل مرة
+              instagram: {
+                ...((local as any).instagram || {}),
+                lastRun: summary,
+                cursorTime: json.instagramCursor ?? (local as any).instagram?.cursorTime ?? 0,
+              },
             })
           )
         );
@@ -7217,35 +7465,42 @@ function AutoImportCard() {
   runRef.current = runNow;
 
   // على الاستضافة لا توجد حلقة سحب في الخلفية — نشغّلها في المتصفح ما دام الموقع مفتوحاً
+  // (تكفي قناة واحدة مفعّلة، ونأخذ أقصر مدة بين القناتين المفعّلتين)
+  const enabledViews = (['facebook', 'instagram'] as LeadChannel[])
+    .map((c) => channelViewOf(config, c))
+    .filter((c) => c?.enabled);
+  const anyChannelEnabled = enabledViews.length > 0;
+  const shortestInterval = Math.max(1, Math.min(...enabledViews.map((c) => Number(c.intervalMinutes) || 5), 5));
   useEffect(() => {
-    if (remote !== false || !config?.enabled) return;
-    const minutes = Math.max(1, Number(config.intervalMinutes) || 5);
-    const timer = setInterval(() => void runRef.current?.(), minutes * 60 * 1000);
+    if (remote !== false || !anyChannelEnabled) return;
+    const timer = setInterval(() => void runRef.current?.(), shortestInterval * 60 * 1000);
     return () => clearInterval(timer);
-  }, [remote, config?.enabled, config?.intervalMinutes]);
+  }, [remote, anyChannelEnabled, shortestInterval]);
 
   if (!config) return null;
-  const last = config.lastRun;
+  const view = channelViewOf(config, channel);
+  const last = view.lastRun;
 
   return (
     <div className="glass-card rounded-xl p-6">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
         <h3 className="text-lg font-bold text-white flex items-center gap-2">
-          <Zap className="w-5 h-5 text-amber-400" /> سحب الأرقام تلقائياً
+          <Zap className="w-5 h-5 text-amber-400" /> سحب أرقام كامبين {meta.ar}
         </h3>
         <button
-          onClick={() => save({ enabled: !config.enabled }, config.enabled ? 'تم إيقاف السحب التلقائي' : 'تم تشغيل السحب التلقائي ✓')}
+          onClick={() => save({ enabled: !view.enabled }, view.enabled ? 'تم إيقاف السحب التلقائي لهذه القناة' : 'تم تشغيل السحب التلقائي لهذه القناة ✓')}
           disabled={busy === 'save'}
           className={`px-4 py-2 rounded-xl font-bold text-xs border transition-colors ${
-            config.enabled ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300' : 'bg-white/5 border-white/10 text-gray-400'
+            view.enabled ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300' : 'bg-white/5 border-white/10 text-gray-400'
           }`}
         >
-          {config.enabled ? '● مُشغّل — اضغط للإيقاف' : 'متوقف — اضغط للتشغيل'}
+          {view.enabled ? '● مُشغّل — اضغط للإيقاف' : 'متوقف — اضغط للتشغيل'}
         </button>
       </div>
-      <p className="text-xs text-gray-400 leading-relaxed mb-4">
-        يقرأ النظام الأرقام من المصدر من نفسه كل بضع دقائق، ينظّفها ويحذف المكرر ويوزّعها على السيلز — بلا أي ضغطة زر.
+      <p className="text-xs text-gray-400 leading-relaxed mb-2">
+        يقرأ النظام الأرقام من مصدر هذه القناة من نفسه كل بضع دقائق، ينظّفها ويحذف المكرر ويوزّعها على السيلز — بلا أي ضغطة زر.
       </p>
+      <p className="text-[11px] text-gray-500 leading-relaxed mb-4">{meta.hint}</p>
 
       {remote === false && (
         <p className="text-[11px] text-amber-300/90 leading-relaxed mb-4 bg-amber-500/10 border border-amber-400/20 rounded-xl px-3 py-2">
@@ -7257,13 +7512,13 @@ function AutoImportCard() {
       <div className="flex flex-col sm:flex-row gap-2 mb-4">
         {[
           { id: 'sheet', label: 'رابط ملف منشور (CSV)' },
-          { id: 'meta', label: 'فيسبوك مباشرة (توكن)' },
+          { id: 'meta', label: meta.metaType },
         ].map((option) => (
           <button
             key={option.id}
             onClick={() => save({ type: option.id }, '')}
             className={`flex-1 py-2.5 rounded-xl font-bold text-xs border transition-colors ${
-              config.type === option.id ? 'bg-purple-500/20 border-purple-400/40 text-purple-200' : 'bg-white/5 border-white/10 text-gray-400'
+              view.type === option.id ? 'bg-purple-500/20 border-purple-400/40 text-purple-200' : 'bg-white/5 border-white/10 text-gray-400'
             }`}
           >
             {option.label}
@@ -7271,7 +7526,7 @@ function AutoImportCard() {
         ))}
       </div>
 
-      {config.type === 'sheet' ? (
+      {view.type === 'sheet' ? (
         <div className="space-y-3">
           <div>
             <label className="block text-xs text-gray-300 mb-1">رابط الملف المنشور (CSV)</label>
@@ -7297,12 +7552,12 @@ function AutoImportCard() {
                 type="password"
                 value={form.token}
                 onChange={(e) => setForm({ ...form, token: e.target.value })}
-                placeholder={config.hasToken ? 'توكن محفوظ ✓ — ألصق توكن جديداً لتغييره' : 'EAAG...'}
+                placeholder={view.hasToken ? 'توكن محفوظ ✓ — ألصق توكن جديداً لتغييره' : 'EAAG...'}
                 className="flex-1 bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white text-sm"
               />
               <button
                 onClick={discover}
-                disabled={busy !== '' || (!form.token.trim() && !config.hasToken)}
+                disabled={busy !== '' || (!form.token.trim() && !view.hasToken)}
                 className="gradient-primary text-white px-5 py-3 rounded-xl font-bold text-xs disabled:opacity-50 whitespace-nowrap"
               >
                 {busy === 'discover' ? 'جارٍ الاستكشاف...' : 'استكشف صفحاتي'}
@@ -7601,7 +7856,17 @@ function AdminSettingsView(_props: any) {
     <div className="space-y-6">
       <h2 className="text-xl font-bold gradient-text">الإعدادات</h2>
 
-      <AutoImportCard />
+      {/* سحب الأرقام من كامبينات فيسبوك وإنستجرام انتقل إلى «فريق العمل»:
+          تبويبان مستقلان لكل قناة (توكنها ونماذجها ومؤشرها) بجوار حسابات الفريق. */}
+      <div className="glass-card rounded-2xl p-5">
+        <h3 className="text-sm font-bold text-white mb-1 flex items-center gap-2">
+          <Zap className="w-4 h-4 text-amber-400" /> سحب أرقام الكامبينات
+        </h3>
+        <p className="text-xs text-gray-400 leading-relaxed">
+          إعداد كامبينات فيسبوك وإنستجرام انتقل إلى تبويب «فريق العمل» ← تبويب «فيسبوك» أو «إنستجرام».
+          من هناك تضع التوكن، تختار النماذج، وتشغّل السحب التلقائي لكل قناة على حدة.
+        </p>
+      </div>
 
       {/* المظهر: الوضع الليلي / النهاري */}
       <div className="glass-card rounded-2xl p-6">
@@ -7948,16 +8213,23 @@ function AddPropertyModal({ clients, currentUser, onClose, onSuccess }: any) {
 }
 
 function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
-  const [form, setForm] = useState({ clientId: '', clientPhone: '', clientName: '', date: new Date().toISOString().slice(0, 16), feedback: '', callStatus: 'called', duration: '', nextAction: '' });
+  const [form, setForm] = useState({ clientId: '', clientPhone: '', clientName: '', date: new Date().toISOString().slice(0, 16), feedback: '', status: '', callStatus: 'called', duration: '', nextAction: '' });
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    // الفيدباك لا يُحفظ بلا حالة وبلا كومنت — نفس شرط الشريط في تبويب العملاء
+    if (!form.status || !form.feedback.trim()) return;
     const feedbacks = JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]');
     const newFeedback = { ...form, id: crypto.randomUUID(), userId: currentUser.id, createdAt: new Date().toISOString() };
     localStorage.setItem('crm_daily_feedback', JSON.stringify([newFeedback, ...feedbacks]));
     if (form.clientId) {
       // البطاقة سُجّلت أعلاه بنفس المعرّف، فلا ننشئ بطاقة ثانية مكرّرة
-      addClientActivity(form.clientId, 'feedback', `فيدباك: ${form.feedback || 'بدون تفاصيل'}${form.nextAction ? ` — الخطوة القادمة: ${form.nextAction}` : ''}`, currentUser?.name, { authorId: currentUser?.id, skipCard: true });
+      addClientActivity(form.clientId, 'feedback', `فيدباك: ${form.feedback || 'بدون تفاصيل'}${form.nextAction ? ` — الخطوة القادمة: ${form.nextAction}` : ''}`, currentUser?.name, {
+        authorId: currentUser?.id,
+        skipCard: true,
+        status: form.status,
+        callStatus: form.status === 'no-answer' ? 'no-answer' : 'called',
+      });
     }
     onSuccess();
     onClose();
@@ -8001,8 +8273,26 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
             <option value="busy" className="bg-gray-900">مشغول</option>
             <option value="not-called" className="bg-gray-900">لم يتصل</option>
           </select>
-          <textarea placeholder="الفيدباك" value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white resize-none h-24" />
-          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إضافة</button>
+          {/* حالة الفيدباك — إلزامية مع الكومنت (نفس شرائط شريط الفيدباك) */}
+          <div>
+            <label className="block text-xs font-bold text-gray-300 mb-1.5">حالة الفيدباك *</label>
+            <StatusMenu
+              value={form.status}
+              label="اختر حالة الفيدباك"
+              stopPropagation={false}
+              onPick={(optionId) =>
+                setForm({
+                  ...form,
+                  status: optionId,
+                  // «no answer» تعني مكالمة بلا رد — يُضبط حقل حالة الاتصال معها
+                  callStatus: optionId === 'no-answer' ? 'no-answer' : 'called',
+                  ...(optionId === 'no-answer' && !form.feedback.trim() ? { feedback: NO_ANSWER_COMMENT } : {}),
+                })
+              }
+            />
+          </div>
+          <textarea placeholder="الفيدباك * (لا يُحفظ بلا كومنت)" value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white resize-none h-24" required />
+          <button type="submit" disabled={!form.status || !form.feedback.trim()} className="w-full gradient-primary text-white py-3 rounded-xl font-bold disabled:opacity-50">إضافة</button>
         </form>
       </motion.div>
     </motion.div>
@@ -9165,7 +9455,7 @@ function ClientDetailModal({ client, onClose, onSuccess, onCall }: any) {
                 <div key={a.id} className="flex gap-3 bg-white/5 rounded-xl px-3 py-2">
                   <span className="text-base shrink-0">{ACTIVITY_ICONS[a.type] || '•'}</span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-gray-200">{a.text}</p>
+                    <p className="text-sm text-gray-200"><FeedbackChip status={a.status} /> {a.text}</p>
                     <p className="text-[11px] text-gray-500 mt-0.5">
                       {formatDateTime(a.at)}{a.by ? ` • ${a.by}` : ''}
                     </p>

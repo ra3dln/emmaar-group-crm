@@ -14,11 +14,15 @@
 // حتى تكون النتيجة متطابقة تماماً في المكانين.
 
 import {
+  applyChannelPatch,
   buildAssignments,
+  CHANNEL_LABELS,
+  CHANNELS,
+  channelConfigOf,
+  collectLeads,
   discoverPages,
   fetchFormsForPage,
-  fetchLeads,
-  isMetaSource,
+  normalizeConfig,
   publicConfig,
   runAutoImportCore,
 } from '../server/leadSource.js';
@@ -75,10 +79,9 @@ const readBody = (req) =>
   });
 
 // نفس شكل publicConfig في السيرفر المحلي حتى تعمل الواجهة ذاتها في الحالتين
-const statelessView = (config = {}) => ({
+const statelessChannel = (config = {}) => ({
   enabled: !!config.enabled,
   type: config.type === 'meta' ? 'meta' : 'sheet',
-  acceptTestLeads: config.acceptTestLeads !== false,
   sheetUrl: config.sheetUrl || '',
   intervalMinutes: Number(config.intervalMinutes) || 5,
   perSalesLimit: Number(config.perSalesLimit) || 0,
@@ -92,44 +95,11 @@ const statelessView = (config = {}) => ({
   lastRun: config.lastRun || null,
 });
 
-// ===== تطبيق التعديلات القادمة من الواجهة على الإعدادات المحفوظة =====
-const applyPatch = (config, body = {}) => {
-  const patch = {};
-  if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
-  if (typeof body.acceptTestLeads === 'boolean') patch.acceptTestLeads = body.acceptTestLeads;
-  if (body.type === 'sheet' || body.type === 'meta') patch.type = body.type;
-  if (typeof body.sheetUrl === 'string') patch.sheetUrl = body.sheetUrl.trim();
-
-  if (Array.isArray(body.pages)) {
-    patch.pages = body.pages
-      .filter((p) => p && typeof p.id === 'string')
-      .map((p) => ({
-        id: String(p.id),
-        name: String(p.name || p.id),
-        // نُبقي توكن الصفحة القديم لو الواجهة أرسلت الصفحات بلا توكن (وضع القاعدة)
-        token: typeof p.token === 'string' && p.token ? p.token : (config.pages || []).find((old) => old.id === String(p.id))?.token || '',
-      }));
-  }
-  if (Array.isArray(body.forms)) {
-    patch.forms = body.forms
-      .filter((f) => f && typeof f.id === 'string' && typeof f.pageId === 'string')
-      .map((f) => ({ id: String(f.id), pageId: String(f.pageId), name: String(f.name || f.id) }));
-  }
-  if (typeof body.token === 'string' && body.token.trim()) patch.token = body.token.trim();
-  if (body.clearToken) patch.token = '';
-  if (body.resetCursor) {
-    patch.cursorTime = 0;
-    patch.assignCursor = 0;
-  }
-
-  const minutes = Number(body.intervalMinutes);
-  if (Number.isFinite(minutes)) patch.intervalMinutes = Math.min(Math.max(Math.round(minutes), 1), 1440);
-
-  const perSales = Number(body.perSalesLimit);
-  if (Number.isFinite(perSales)) patch.perSalesLimit = Math.min(Math.max(Math.round(perSales), 0), 1000);
-
-  return { ...config, ...patch };
-};
+const statelessView = (config = {}) => ({
+  ...statelessChannel(config),
+  acceptTestLeads: config.acceptTestLeads !== false,
+  instagram: statelessChannel(config.instagram || {}),
+});
 
 export default async function handler(req, res) {
   try {
@@ -139,7 +109,7 @@ export default async function handler(req, res) {
     if (!hasDatabase) return statelessHandler(req, res, url);
 
     if (req.method === 'GET') {
-      const config = await configStore.load();
+      const config = normalizeConfig(await configStore.load());
       return reply(res, 200, { ok: true, stateless: false, config: publicConfig(config) });
     }
 
@@ -149,13 +119,16 @@ export default async function handler(req, res) {
     if (!body) return reply(res, 400, { ok: false, error: 'طلب غير صالح' });
 
     const action = String(body.action || 'save');
-    const config = await configStore.load();
+    // نفس القيم الافتراضية المستخدمة على سيرفر الشركة — فرق الإعدادات بين المكانين صفر
+    const config = normalizeConfig(await configStore.load());
 
-    // استكشاف الصفحات: نحفظ التوكن وتوكنات الصفحات على السيرفر
+    // استكشاف الصفحات: نحفظ التوكن وتوكنات الصفحات في القناة نفسها على السيرفر
     if (action === 'discover') {
-      const token = String(body.token || config.token || '').trim();
+      const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
+      const channelCfg = channelConfigOf(config, channel) || {};
+      const token = String(body.token || channelCfg.token || '').trim();
       const { pages, warning } = await discoverPages(token);
-      const next = { ...config, token, pages };
+      const next = applyChannelPatch(config, { channel, token, pages });
       await configStore.save(next);
       return reply(res, 200, {
         ok: true,
@@ -167,16 +140,18 @@ export default async function handler(req, res) {
 
     // نماذج صفحة معيّنة: التوكن محفوظ على السيرفر فلا نطلب من المتصفح إرساله
     if (action === 'forms') {
+      const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
+      const channelCfg = channelConfigOf(config, channel) || {};
       const pageId = String(body.pageId || '');
-      const page = (config.pages || []).find((p) => p.id === pageId);
-      if (!page) return reply(res, 404, { ok: false, error: 'الصفحة غير موجودة في الإعدادات — أعد الاستكشاف' });
+      const page = (channelCfg.pages || []).find((p) => p.id === pageId);
+      if (!page) return reply(res, 404, { ok: false, error: 'الصفحة غير موجودة في إعدادات هذه القناة — أعد الاستكشاف' });
       const forms = await fetchFormsForPage(page.id, page.token);
       return reply(res, 200, { ok: true, forms });
     }
 
     // السحب الفعلي: يُنظَّف ويُوزَّع ويُحفظ في قاعدة البيانات مباشرة
     if (action === 'run') {
-      const next = { ...config };
+      const next = normalizeConfig(config);
       const summary = await runAutoImportCore({
         storage: dataStore,
         config: next,
@@ -186,7 +161,8 @@ export default async function handler(req, res) {
     }
 
     // «حفظ» وأي طلب آخر
-    const next = applyPatch(config, body);
+    const next = normalizeConfig(applyChannelPatch(config, body));
+    if (typeof body.acceptTestLeads === 'boolean') next.acceptTestLeads = body.acceptTestLeads;
     await configStore.save(next);
     return reply(res, 200, { ok: true, stateless: false, config: publicConfig(next) });
   } catch (error) {
@@ -206,7 +182,9 @@ async function statelessHandler(req, res, url) {
     const action = String(body.action || 'save');
 
     if (action === 'discover') {
-      const token = String(body.token || body.config?.token || '').trim();
+      const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
+      const channelCfg = channelConfigOf(body.config || {}, channel) || {};
+      const token = String(body.token || channelCfg.token || '').trim();
       const { pages, warning } = await discoverPages(token);
       return reply(res, 200, { ok: true, pages, warning });
     }
@@ -220,7 +198,7 @@ async function statelessHandler(req, res, url) {
     }
 
     if (action === 'run') {
-      const config = { ...(body.config || {}) };
+      const config = { ...(body.config || {}), instagram: { ...((body.config || {}).instagram || {}) } };
       const sales = Array.isArray(body.sales) ? body.sales.filter((u) => u && u.id) : [];
       if (!sales.length) {
         return reply(res, 200, {
@@ -234,7 +212,24 @@ async function statelessHandler(req, res, url) {
         });
       }
 
-      const fetched = await fetchLeads(config);
+      // نفس محرك السيرفر: كل قناة مفعّلة تُسحب على حدة، وفشل إحداهما لا يوقف الأخرى
+      const { rows: fetched, channels } = await collectLeads(config);
+      const active = CHANNELS.filter((channel) => channels[channel]);
+      const anyOk = active.some((channel) => channels[channel].ok);
+      if (!active.length || !anyOk) {
+        return reply(res, 200, {
+          ok: true,
+          leads: [],
+          summary: {
+            at: new Date().toISOString(),
+            ok: false,
+            source: active.map((channel) => CHANNEL_LABELS[channel]).join(' + ') || 'كل القنوات',
+            error: active.length ? channels[active[0]].error || 'تعذّر السحب' : 'لا توجد قناة سحب مفعّلة',
+            channels,
+          },
+        });
+      }
+
       const built = buildAssignments({ fetched, sales, config, knownPhones: body.knownPhones || [] });
 
       return reply(res, 200, {
@@ -243,14 +238,17 @@ async function statelessHandler(req, res, url) {
         summary: {
           at: new Date().toISOString(),
           ok: true,
-          source: isMetaSource(config) ? 'فيسبوك مباشرة' : 'ملف منشور',
+          source: active.map((channel) => CHANNEL_LABELS[channel]).join(' + '),
           fetched: fetched.length,
           added: built.added.length,
           duplicates: built.duplicates,
           invalid: built.invalid,
           perUser: built.perUser,
+          channels,
         },
+        // مؤشرات كل قناة ليعيد المتصفح كتابتها في إعداداته المحلية فلا تتكرر الأرقام
         cursorTime: Number(config.cursorTime) || 0,
+        instagramCursor: Number(config.instagram?.cursorTime) || 0,
         assignCursor: built.assignCursor,
       });
     }

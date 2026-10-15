@@ -29,6 +29,9 @@ export interface ClientActivity {
   text: string;
   at: string;
   by?: string;
+  // حالة الفيدباك المختارة من الشريط (follow up / meeting / done deal …) — اختيارية
+  // حتى تبقى الأحداث القديمة التي لا حالة لها صالحة كما هي.
+  status?: string;
 }
 
 export interface Client {
@@ -112,6 +115,8 @@ export interface DailyFeedback {
   date: string;
   feedback: string;
   callStatus: 'called' | 'no-answer' | 'busy' | 'not-called';
+  // حالة الفيدباك (نفس الشريط) — تظهر في تبويب «الفيدباك»
+  status?: string;
   duration?: string;
   nextAction?: string;
   createdAt: string;

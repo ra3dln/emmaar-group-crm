@@ -693,7 +693,7 @@ html[data-mode="light"] .side-link.active { color: var(--primary-dark); }
 .ct-head,
 .ct-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1.4fr) 130px minmax(120px, 1fr) 100px minmax(190px, auto) 64px minmax(110px, auto);
+  grid-template-columns: minmax(140px, 1.4fr) 130px minmax(120px, 1fr) 100px minmax(240px, auto) 64px minmax(110px, auto);
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
@@ -792,6 +792,184 @@ html[data-mode="light"] .side-link.active { color: var(--primary-dark); }
   border-radius: 10px; padding: 7px 10px; font-weight: 800;
 }
 
+/* ===== شريط الفيدباك: ٩ حالات بجوار اسم العميل، والمختارة تضيء بلونها =====
+   كل حالة لها لونها الخاص (--fs): متابعة/معاينة/بعد الاجتماع/إعادة جدولة/إلغاء/
+   لا يوجد رد/تم البيع/حجز/مرحلة جديدة. المختارة تُبرز بإطار + إشعاع بلونها، */
+.feedback-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--tint-1);
+  border: 1px solid var(--border-soft);
+  width: 100%;
+}
+/* الشريط في كارت العميل: صف كامل بعرض الكارت مهما ضاقت المساحة */
+.client-card > .feedback-bar { flex: 1 0 100%; }
+/* في الجدول: أزرار أصغر حتى لا يطول الصف */
+.ct-row .feedback-bar { padding: 3px; }
+.ct-row .feedback-bar .fs-btn { padding: 3px 7px; font-size: 9.5px; }
+.fs-btn {
+  --fs: var(--text-dim);
+  border: 1px solid transparent;
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 4px 9px;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+  background: transparent;
+  color: var(--text-dim);
+  transition: all 0.16s ease;
+}
+.fs-btn:hover { background: color-mix(in srgb, var(--fs) 16%, transparent); color: var(--fs); }
+.fs-btn.on {
+  background: color-mix(in srgb, var(--fs) 24%, transparent);
+  color: var(--fs);
+  border-color: color-mix(in srgb, var(--fs) 55%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--fs) 30%, transparent),
+    0 0 16px -2px color-mix(in srgb, var(--fs) 70%, transparent);
+}
+.fs-follow { --fs: #f59e0b; }
+.fs-meeting { --fs: #06b6d4; }
+.fs-after { --fs: #8b5cf6; }
+.fs-reschedule { --fs: #6366f1; }
+.fs-cancel { --fs: #ef4444; }
+.fs-noanswer { --fs: #f97316; }
+.fs-done { --fs: #10b981; }
+.fs-reservation { --fs: #14b8a6; }
+.fs-fresh { --fs: #38bdf8; }
+html[data-mode="light"] .fs-btn.on,
+html[data-mode="light"] .fs-chip { color: color-mix(in srgb, var(--fs) 70%, #000); }
+
+/* حبة الحالة: تظهر بجوار الكومنت في الفيدباك والخط الزمني */
+.fs-chip {
+  --fs: var(--text-dim);
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 800;
+  color: var(--fs);
+  background: color-mix(in srgb, var(--fs) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fs) 40%, transparent);
+}
+
+/* ===== القائمة المنسدلة لحالات الفيدباك ===== */
+.fs-menu-wrap { position: relative; display: inline-flex; max-width: 100%; }
+/* زر القائمة: يعرض الحالة المختارة بلونها المضيء (أو نص ثابت لو لم تُختَر) */
+.fs-trigger {
+  --fs: var(--text-dim);
+  display: inline-flex; align-items: center; gap: 7px;
+  width: 100%; min-width: 0;
+  padding: 8px 12px;
+  border-radius: 11px;
+  border: 1px solid var(--border-soft);
+  background: var(--tint-1);
+  color: var(--text-muted);
+  font-size: 11.5px; font-weight: 800;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+  text-align: start;
+}
+.fs-trigger:hover { border-color: var(--border-strong); background: var(--tint-2); }
+.fs-trigger-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-trigger-chev { flex: 0 0 auto; color: var(--text-dim); transition: transform .18s ease; }
+.fs-trigger-chev.open { transform: rotate(180deg); }
+.fs-trigger-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--fs); box-shadow: 0 0 8px -1px var(--fs); }
+/* الحالة المختارة: الزر يضيء بلونها */
+.fs-trigger.on {
+  color: var(--fs);
+  border-color: color-mix(in srgb, var(--fs) 55%, transparent);
+  background: color-mix(in srgb, var(--fs) 14%, transparent);
+  box-shadow: 0 0 16px -6px var(--fs), inset 0 0 0 1px color-mix(in srgb, var(--fs) 22%, transparent);
+}
+html[data-mode="light"] .fs-trigger.on { color: color-mix(in srgb, var(--fs) 78%, #000); }
+/* القائمة المنزلقة (تُرسم عبر Portal على body) */
+.fs-menu {
+  z-index: 200;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+  backdrop-filter: blur(18px) saturate(140%);
+  display: flex; flex-direction: column; gap: 3px;
+  max-height: min(60vh, 460px);
+  overflow-y: auto;
+  transform-origin: top center;
+  animation: fs-menu-in .16s cubic-bezier(.22,1,.36,1);
+}
+.fs-menu.up { transform-origin: bottom center; }
+@keyframes fs-menu-in {
+  from { opacity: 0; transform: translateY(-8px) scaleY(.94); }
+  to { opacity: 1; transform: translateY(0) scaleY(1); }
+}
+.fs-item {
+  --fs: var(--text-dim);
+  display: flex; align-items: center; gap: 9px;
+  width: 100%;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: start;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+.fs-item:hover { background: color-mix(in srgb, var(--fs) 14%, transparent); border-color: color-mix(in srgb, var(--fs) 35%, transparent); }
+.fs-item-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; background: var(--fs); box-shadow: 0 0 8px -2px var(--fs); }
+.fs-item-en { flex: 0 0 auto; font-size: 12px; font-weight: 800; color: var(--fs); min-width: 150px; }
+.fs-item-ar { flex: 1 1 auto; min-width: 0; font-size: 10.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-item.on { background: color-mix(in srgb, var(--fs) 18%, transparent); border-color: color-mix(in srgb, var(--fs) 50%, transparent); }
+html[data-mode="light"] .fs-item-en { color: color-mix(in srgb, var(--fs) 78%, #000); }
+/* في كارت العميل: القائمة بعرض الكارت كاملاً */
+.client-card > .fs-menu-wrap.fb-bar-menu { flex: 1 0 100%; }
+/* في صف الجدول: زر أصغر قليلاً */
+.ct-row .fs-trigger { padding: 6px 10px; font-size: 11px; }
+
+/* صندوق الفيدباك: حالة + كومنت — لا يُحفظ فيدباك ناقص */
+.feedback-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+.feedback-composer .feedback-bar { background: var(--tint-2, var(--tint-1)); }
+.feedback-composer .fc-row { display: flex; align-items: center; gap: 6px; }
+.feedback-composer .quick-comment-input { flex: 1; }
+.feedback-composer button[type="submit"] {
+  border: none; cursor: pointer;
+  background: var(--brand-gradient); color: #fff;
+  border-radius: 10px; padding: 7px 14px;
+  font-size: 11.5px; font-weight: 800;
+}
+.feedback-composer button[type="submit"]:disabled { opacity: 0.45; cursor: default; }
+.feedback-composer button[type="button"] {
+  border: none; cursor: pointer;
+  background: var(--tint-1); color: var(--text-muted);
+  border-radius: 10px; padding: 7px 10px; font-weight: 800;
+}
+.feedback-composer .fc-hint { font-size: 10.5px; color: var(--text-dim); }
+
+/* آخر فيدباك في كارت العميل: الحالة + الكومنت بجوار الشريط */
+.cc-lastfb {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 /* شبكة المربعات: كارتين جنب بعض على الكمبيوتر — عمود واحد على الهاتف */
 .clients-grid {
   display: grid;
@@ -806,6 +984,7 @@ html[data-mode="light"] .side-link.active { color: var(--primary-dark); }
 .client-card {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 11px 14px 11px 12px;
@@ -945,6 +1124,8 @@ html[data-mode="light"] .qs-btn.on.qs-closed { color: #047857; }
   .cc-line { width: 100%; }
   .client-card .quick-status { width: 100%; margin-inline-start: 0; order: 5; }
   .client-card .quick-status .qs-btn { flex: 1; text-align: center; padding: 7px 4px; }
+  .client-card > .feedback-bar { order: 6; }
+  .feedback-bar .fs-btn { flex: 1 1 auto; text-align: center; }
   .client-card .cc-actions { margin-inline-start: auto; }
   .quick-comment { flex-wrap: wrap; }
   .quick-comment-input { flex: 1 1 100%; }

@@ -12,7 +12,7 @@
 // يعمل أيضاً مع Vercel Cron تلقائياً: Vercel يرسل نفس القيمة في ترويسة
 // Authorization: Bearer <CRON_SECRET> — فلا حاجة لأي تعديل إضافي في هذه الحالة.
 
-import { publicConfig, runAutoImportCore } from '../server/leadSource.js';
+import { CHANNELS, isChannelOn, normalizeConfig, publicConfig, runAutoImportCore } from '../server/leadSource.js';
 import { redisJsonStore, redisStorage, safeEqual } from '../server/store.js';
 
 const CONFIG_KEY = 'crm:lead-source:config';
@@ -55,9 +55,10 @@ export default async function handler(req, res) {
       });
     }
 
-    const config = await configStore.load();
-    if (!config.enabled) {
-      return reply(res, 200, { ok: true, skipped: true, reason: 'السحب التلقائي متوقف' });
+    const config = normalizeConfig(await configStore.load());
+    // كل قناة لها مشغّلها: يكفي أن تكون قناة واحدة مفعّلة (فيسبوك أو إنستجرام)
+    if (!CHANNELS.some((channel) => isChannelOn(config, channel))) {
+      return reply(res, 200, { ok: true, skipped: true, reason: 'السحب التلقائي متوقف (فيسبوك وإنستجرام)' });
     }
 
     const summary = await runAutoImportCore({
