@@ -1,17 +1,22 @@
 // ===== نقطة البيانات على الاستضافة (Vercel) =====
-// البيانات تُخزَّن في Upstash Redis (خطة مجانية) فتصبح **مشتركة بين كل الأجهزة**
+// البيانات تُخزَّن في قاعدة بيانات مشتركة فتصبح **مشتركة بين كل الأجهزة**
 // ومحفوظة للأبد — لا تعتمد على متصفح أي جهاز ولا تختفي مع الوقت.
 //
-// متغيّرات البيئة المتوافقة (أي واحد منها يعمل):
-//   KV_REST_API_URL / KV_REST_API_TOKEN              (Vercel KV)
-//   UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN (Upstash مباشرة)
+// يُدعم مخزنان، ويُفضَّل Supabase إن كان مضبوطاً:
+//   ١) Supabase (Postgres): SUPABASE_URL + SUPABASE_SECRET_KEY
+//   ٢) Upstash Redis / Vercel KV: KV_REST_API_URL + KV_REST_API_TOKEN
+//      (أو UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN)
 //
 // بدون أي منهما ترجع الوظيفة 503 ويعمل النظام محلياً على كل جهاز كما كان
 // — لا يتعطّل الموقع، يفقد فقط المزامنة المشتركة.
 
 import { createStoreHandler, redisStorage } from '../server/store.js';
+import { supabaseStorage } from '../server/supabase.js';
 
-const storage = redisStorage(process.env);
+// نفضّل Supabase لو مضبوط، وإلا نرجع لـ Redis — نفس الواجهة تماماً
+const supa = supabaseStorage(process.env);
+const redis = redisStorage(process.env);
+const storage = supa.configured ? supa : redis;
 // STORE_TOKEN اختياري: لو أضفته على Vercel يقفل نقطة البيانات، ولازم تضيف نفس
 // القيمة في VITE_STORE_TOKEN وقت البناء حتى يتصل التطبيق. راجع .env.example
 const handler = createStoreHandler({ ...storage, token: process.env.STORE_TOKEN || '' });
@@ -24,7 +29,7 @@ export default async function (req, res) {
     res.end(
       JSON.stringify({
         error: 'no database',
-        hint: 'قاعدة البيانات غير مضبوطة — أضف Upstash Redis من Storage في لوحة Vercel ثم أعد النشر لتعمل المزامنة المشتركة.',
+        hint: 'قاعدة البيانات غير مضبوطة — أضف Supabase (SUPABASE_URL + SUPABASE_SECRET_KEY) أو Upstash Redis من Storage في لوحة Vercel ثم أعد النشر لتعمل المزامنة المشتركة.',
       })
     );
     return;
