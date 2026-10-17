@@ -9,8 +9,8 @@
 //   ٣) كوكي مُزوَّر أو موقّع بمفتاح آخر => 401
 //   ٤) كلمة المرور الافتراضية (admin123): الدخول ينجح لكن البيانات تبقى مغلقة (403)
 //      حتى تُغيَّر إلى كلمة قوية — فلا يفيد معرفة الرابط بالكلمة المعروفة
-//   ٥) كلمات المرور لا تُرسل للمتصفح أبداً، ولا تُقبل نصاً صريحاً عند الكتابة،
-//      ولا تُمسح لسجل موجود (فلا يقفل أحد حسابه بالخطأ)
+//   ٥) كلمات المرور تُرى وتُغيَّر من الإدارة (رتبة admin) وحدها، ولا تُمسح
+//      لسجل موجود (فلا يقفل أحد حسابه بالخطأ)
 //   ٦) تغيير كلمة المرور يعمل، والجلسة الجديدة تفتح البيانات
 //   ٧) الخروج يُبطل الكوكي فوراً
 //   ٨) بلا AUTH_SECRET يفشل كل شيء بوضوح (503) بدل أن ينفتح بالخطأ
@@ -173,7 +173,7 @@ try {
   const defaultStore = await call('/api/store', { cookie: defaultCookie });
   check('والبيانات تُفتح فوراً بهذه الجلسة', defaultStore.status === 200 && defaultStore.json.data.crm_clients[0].id === 'c1');
 
-  // ===== ٥) تغيير كلمة المرور على السيرفر (لا وجود له في المتصفح إطلاقاً) =====
+  // ===== ٥) تغيير كلمة المرور الخاصة بالحساب =====
   const wrongCurrent = await call('/api/auth?action=change-password', {
     method: 'POST',
     cookie: defaultCookie,
@@ -205,42 +205,55 @@ try {
   check('الكلمة القديمة لم تعد تعمل', (await login({ username: 'admin', password: 'admin123', loginType: 'admin' })).status === 401);
   check('الكلمة الجديدة تعمل', (await login({ username: 'admin', password: 'EmaarGroup2026', loginType: 'admin' })).status === 200);
   check(
-    'الكلمة الجديدة محفوظة بصمة مشفّرة في القاعدة',
-    String(db.data.crm_users.find((u) => u.id === 'admin-001').password).startsWith('sha256:')
+    'الكلمة الجديدة محفوظة نصاً في القاعدة (يراها الإدارة)',
+    db.data.crm_users.find((u) => u.id === 'admin-001').password === 'EmaarGroup2026'
   );
 
-  // ===== ٦) المتصفح لا يستطيع تغيير كلمة مرور أي حساب موجود =====
-  // (هذه أهم ثغرة كانت موجودة: أي شخص داخل النظام كان يقدر يكتب بصمة كلمة مرور
-  //  جديدة لحساب الإدارة ويسيطر عليه — الآن تُهمل تماماً.)
+  // ===== ٦) كلمات المرور: الإدارة تراها وتغيّرها، وغير الإدارة لا سلطة لهم =====
   const pulled = await call('/api/store', { cookie: changedCookie });
-  check('لا كلمة مرور واحدة في الرد الكامل للبيانات', !JSON.stringify(pulled.json).includes('password'));
+  check('الإدارة ترى كلمات المرور في رد البيانات', JSON.stringify(pulled.json.data.crm_users).includes('password'));
 
-  const pushPlain = await call('/api/store', {
-    method: 'POST',
-    cookie: changedCookie,
-    body: {
-      key: 'crm_users',
-      value: db.data.crm_users.map((u) => (u.id === 'sales-1' ? { ...u, password: 'plaintext-should-never-save' } : u)),
-    },
-  });
-  check('كتابة كلمة مرور نصية تُقبل الطلب لكن لا تُحفظ', pushPlain.status === 200);
-  const afterPlain = db.data.crm_users;
-  const salesRow = afterPlain.find((u) => u.id === 'sales-1');
-  check('ولم تُحفظ النصية وبقيت البصمة القديمة', !JSON.stringify(afterPlain).includes('plaintext-should-never-save') && salesRow.password.startsWith('sha256:'));
+  const salesEarlyLogin = await login({ username: 'ahmed', password: 'AhmedPass123', loginType: 'sales' });
+  const salesEarly = await call('/api/store', { cookie: cookieOf(salesEarlyLogin) });
+  check('والسيلز لا يرى أي كلمة مرور في رد البيانات', !JSON.stringify(salesEarly.json).includes('password'));
 
-  const takeover = hashPassword('AttackerPass1');
+  // إنشاء حساب **جديد** بكلمة مرور نصية (كما في شاشة إضافة حساب الآن)
+  const newUser = { id: 'sales-2', username: 'mona', name: 'منى', role: 'sales', isActive: true, password: 'MonaPass1234' };
   await call('/api/store', {
     method: 'POST',
     cookie: changedCookie,
-    body: { key: 'crm_users', value: db.data.crm_users.map((u) => ({ ...u, password: takeover })) },
+    body: { key: 'crm_users', value: [...db.data.crm_users, newUser] },
   });
+  check('إنشاء حساب جديد بكلمة مرور يعمل', (await login({ username: 'mona', password: 'MonaPass1234', loginType: 'sales' })).status === 200);
+  check('وكلمة مروره محفوظة كما أُرسلت (يراها الإدارة)', db.data.crm_users.find((u) => u.id === 'sales-2')?.password === 'MonaPass1234');
+
+  // الإدارة تغيّر كلمة مرور سيلز من النظام => الجديدة تعمل فوراً
+  await call('/api/store', {
+    method: 'POST',
+    cookie: changedCookie,
+    body: { key: 'crm_users', value: db.data.crm_users.map((u) => (u.id === 'sales-2' ? { ...u, password: 'MonaChanged456' } : u)) },
+  });
+  check('تغيير كلمة مرور سيلز من الإدارة يُحفظ', db.data.crm_users.find((u) => u.id === 'sales-2')?.password === 'MonaChanged456');
   check(
-    'محاولة تغيير كلمات مرور كل الحسابات من المتصفح تفشل تماماً',
-    (await login({ username: 'admin', password: 'AttackerPass1', loginType: 'admin' })).status === 401 &&
-      (await login({ username: 'admin', password: 'EmaarGroup2026', loginType: 'admin' })).status === 200 &&
-      (await login({ username: 'ahmed', password: 'AhmedPass123', loginType: 'sales' })).status === 200
+    'والكلمة الجديدة تعمل والقديمة لا',
+    (await login({ username: 'mona', password: 'MonaChanged456', loginType: 'sales' })).status === 200 &&
+      (await login({ username: 'mona', password: 'MonaPass1234', loginType: 'sales' })).status === 401
   );
 
+  // محاولة تغيير كلمة مرور من حساب سيلز => تُهمل تماماً على السيرفر
+  await call('/api/store', {
+    method: 'POST',
+    cookie: cookieOf(salesEarlyLogin),
+    body: { key: 'crm_users', value: db.data.crm_users.map((u) => ({ ...u, password: 'AttackerPass1' })) },
+  });
+  check(
+    'كتابة كلمات مرور من حساب سيلز تُهمل تماماً',
+    (await login({ username: 'mona', password: 'MonaChanged456', loginType: 'sales' })).status === 200 &&
+      (await login({ username: 'admin', password: 'AttackerPass1', loginType: 'admin' })).status === 401 &&
+      (await login({ username: 'admin', password: 'EmaarGroup2026', loginType: 'admin' })).status === 200
+  );
+
+  // الكتابة بلا كلمة مرور لا تقفل الحساب (حتى من الإدارة)
   const pushWithoutPassword = await call('/api/store', {
     method: 'POST',
     cookie: changedCookie,
@@ -250,19 +263,6 @@ try {
   const salesRow2 = db.data.crm_users.find((u) => u.id === 'sales-1');
   check('كلمة المرور القديمة محفوظة والاسم تغيّر', salesRow2.password.startsWith('sha256:') && salesRow2.name === 'أحمد محمد');
   check('ودخول السيلز ما زال يعمل بكلمته', (await login({ username: 'ahmed', password: 'AhmedPass123', loginType: 'sales' })).status === 200);
-
-  // إنشاء حساب **جديد** بكلمة مرور يعمل من المتصفح (كما هو معتاد في شاشة إضافة حساب)
-  const newUser = { id: 'sales-2', username: 'mona', name: 'منى', role: 'sales', isActive: true, password: hashPassword('MonaPass1234') };
-  await call('/api/store', {
-    method: 'POST',
-    cookie: changedCookie,
-    body: { key: 'crm_users', value: [...db.data.crm_users, newUser] },
-  });
-  check('إنشاء حساب جديد بكلمة مرور يعمل', (await login({ username: 'mona', password: 'MonaPass1234', loginType: 'sales' })).status === 200);
-  check(
-    'وكلمة مروره محفوظة مشفّرة',
-    String(db.data.crm_users.find((u) => u.id === 'sales-2')?.password).startsWith('sha256:')
-  );
 
   const salesLogin = await login({ username: 'ahmed', password: 'AhmedPass123', loginType: 'sales' });
   check('دخول السيلز يعمل', salesLogin.status === 200);

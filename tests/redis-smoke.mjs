@@ -226,7 +226,7 @@ try {
   });
   check('بلا جلسة: الكتابة في البيانات مرفوضة (401)', anonymousWrite.status === 401);
 
-  // حساب إدارة بكلمة مرور قوية (نصاً صريحاً هنا ليُختبر الترقية التلقائية إلى بصمة مشفّرة)
+  // حساب إدارة بكلمة مرور قوية نصاً صريحاً (كما هي اليوم في قاعدة الإنتاج — تبقى نصاً كي تراها الإدارة)
   redisData.set('crm:store:data', JSON.stringify({ crm_users: [{ ...adminRow, password: 'StrongPass123' }] }));
   redisData.set('crm:store:version', '0');
 
@@ -252,8 +252,8 @@ try {
 
   const storedAfterLogin = JSON.parse(redisData.get('crm:store:data'));
   check(
-    'كلمة المرور النصية تُرقّى تلقائياً إلى بصمة مشفّرة في القاعدة',
-    String(storedAfterLogin.crm_users[0].password).startsWith('sha256:')
+    'كلمة المرور النصية تبقى كما هي بعد الدخول (يراها الإدارة)',
+    storedAfterLogin.crm_users[0].password === 'StrongPass123'
   );
 
   // ===== ١) المزامنة: كتابة ثم قراءة من قاعدة البيانات =====
@@ -261,8 +261,8 @@ try {
     method: 'POST',
     body: { data: { crm_users: sales, crm_clients: [], crm_assigned_leads: [] } },
   });
-  // الإصدار ١ جاء من ترقية كلمة المرور النصية عند الدخول، فالكتابة ترفعه إلى ٢
-  check('حفظ البيانات في القاعدة ينجح', write.status === 200 && write.json.version === 2, JSON.stringify(write.json));
+  // الإصدار ما زال صفر (لا ترقية تلقائية تعدّل القاعدة عند الدخول)، فالكتابة ترفعه إلى ١
+  check('حفظ البيانات في القاعدة ينجح', write.status === 200 && write.json.version === 1, JSON.stringify(write.json));
 
   const read = await call(storeApi);
   check(
@@ -270,14 +270,15 @@ try {
     read.status === 200 && read.json.data.crm_users.length === 4,
     JSON.stringify(read.json).slice(0, 120)
   );
-  check('كلمات المرور لا تظهر في أي رد للمتصفح', !JSON.stringify(read.json).includes('password'));
+  // الجلسة هنا لإدارة (admin) — وهي وحدها التي ترى كلمات المرور في رد البيانات
+  check('الإدارة ترى كلمات المرور في رد البيانات', JSON.stringify(read.json).includes('password'));
 
   // ===== ٢) حفظ مفتاح واحد (تحديث سجل واحد من جهاز) =====
   const one = await call(storeApi, {
     method: 'POST',
     body: { key: 'crm_clients', value: [{ id: 'c1', name: 'عميل', phone: '01000000001' }] },
   });
-  check('تحديث مفتاح واحد يرفع الإصدار', one.status === 200 && one.json.version === 3);
+  check('تحديث مفتاح واحد يرفع الإصدار', one.status === 200 && one.json.version === 2);
 
   // ===== ٣) بوابة الحماية الاختيارية =====
   const gated = createStoreHandler({

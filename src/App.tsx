@@ -177,25 +177,11 @@ const getPosition = (): Promise<GeolocationPosition> =>
 const mapsLink = (lat: number, lng: number): string =>
   `https://www.google.com/maps?q=${lat},${lng}`;
 
-// ===== حماية كلمات المرور: تشفير SHA-256 مع ملح خاص لكل حساب =====
-// لا تُحفظ كلمة المرور نصاً صريحاً في قاعدة البيانات المشتركة، والتحقق يتم بالمقارنة مع البصمة.
-// (في سياق غير آمن — كفتح الموقع بعنوان IP بدون HTTPS داخل الشبكة — نعود للحفظ نصاً حتى لا يتعطل الدخول.)
-const HASH_PREFIX = 'sha256:';
-const canHashPassword = typeof crypto !== 'undefined' && !!crypto.subtle;
-const toHex = (buffer: ArrayBuffer): string =>
-  Array.from(new Uint8Array(buffer))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-const hashPassword = async (plain: string, salt?: string): Promise<string> => {
-  if (!canHashPassword) return plain;
-  const s = salt || (crypto.randomUUID?.() || String(Date.now())).replace(/-/g, '').slice(0, 16);
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${s}::${plain}`));
-  return `${HASH_PREFIX}${s}:${toHex(digest)}`;
-};
-// ملاحظة أمنية: لا يوجد في المتصفح أي **تحقق** من كلمة المرور ولا مقارنة للبصمات.
-// التحقق كله يحدث على السيرفر (server/auth.js + server/authApi.js)، فحتى لو عدّل أحدهم
-// كود الصفحة من Inspect لن يستطيع تسجيل دخول أو استخراج أي بيانات. والبصمة المستخدمة هنا
-// هي فقط لتشفير كلمة مرور **حساب جديد** قبل إرساله (ولا تُقبل أبداً لحساب موجود).
+// ===== كلمات المرور: النص يُحفظ كما هو وتُدار من النظام =====
+// لا يوجد أي تشفير ولا مقارنة في المتصفح إطلاقاً — التحقق كله على السيرفر
+// (server/auth.js + server/authApi.js). الإدارة (CEO) ترى كلمات مرور السيلز
+// في نموذج «تعديل الحساب» وتستطيع تعيين كلمة جديدة من هناك؛ وأي محاولة تغيير
+// من حساب آخر تُهمل على السيرفر تماماً (server/auth.js: preserveUserPasswords).
 
 // ===== الرتب الثلاث: CEO / Team Leader / Sales Agent =====
 // الرتبة تُشتق من الدور الداخلي (admin = CEO، supervisor = Team Leader، sales = Sales Agent)
@@ -1825,6 +1811,19 @@ function App() {
       .map((t: Team) => ({ ...t, memberIds: t.memberIds.filter((id: string) => id !== userId) }))
       .filter((t: Team) => t.supervisorId !== userId);
     localStorage.setItem('crm_teams', JSON.stringify(teams));
+
+    // رفع الحذف فوراً مع شواهد الحذف — بدونها يعود الحساب المحذوف بعد تحديث الصفحة
+    // (pushKey ترصد المعرّفات المزيلة بنفسها وتسجّل لها شاهد حذف قبل رفع القائمة)
+    void pushKey('crm_users');
+    void pushKey('crm_teams');
+    if (deleteRelatedData) {
+      void pushKey('crm_clients');
+      void pushKey('crm_reminders');
+      void pushKey('crm_daily_feedback');
+      void pushKey('crm_assigned_leads');
+      void pushKey('crm_attendance');
+    }
+
     setTeams(teams);
     setUsers(updatedUsers);
     loadData();
@@ -2327,10 +2326,12 @@ function App() {
           }} onDelete={(id: string) => {
             setReminders(reminders.filter(r => r.id !== id));
             localStorage.setItem('crm_reminders', JSON.stringify(JSON.parse(localStorage.getItem('crm_reminders') || '[]').filter((r: Reminder) => r.id !== id)));
+            void pushKey('crm_reminders');
           }} onAdd={() => setShowAddReminder(true)} />}
           {activeTab === 'daily-feedback' && currentUser.role === 'sales' && <DailyFeedbackView feedbacks={dailyFeedbacks} clients={clients} currentUser={currentUser} onDelete={(id: string) => {
             setDailyFeedbacks(dailyFeedbacks.filter(f => f.id !== id));
             localStorage.setItem('crm_daily_feedback', JSON.stringify(JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]').filter((f: DailyFeedback) => f.id !== id)));
+            void pushKey('crm_daily_feedback');
             // حذف الكومنت من الخط الزمني أيضاً حتى لا يعود للظهور من مصدر آخر
             const all: Client[] = JSON.parse(localStorage.getItem('crm_clients') || '[]');
             let touched = false;
@@ -2353,6 +2354,7 @@ function App() {
             const updated = assignedLeads.filter(l => l.id !== id);
             setAssignedLeads(updated);
             localStorage.setItem('crm_assigned_leads', JSON.stringify(updated));
+            void pushKey('crm_assigned_leads');
           }} onAssign={handleAssignLeads} />}
           {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={scopedUsers} />}
           {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
@@ -3168,8 +3170,8 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
 // هذا هو الفرق الجوهري: من يعرف رابط الموقع يحصل على شاشة دخول فقط،
 // وبلا كلمة مرور صحيحة لا تُقدَّم له أي بيانات (٤٠١ من السيرفر).
 function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) => void; initialNotice?: string }) {
-  // ملاحظة: لا يوجد أي كود لتغيير كلمات المرور في المتصفح إطلاقاً —
-  // تغيير كلمة المرور يتم على السيرفر فقط (node scripts/set-password.mjs).
+  // ملاحظة: لا يوجد في المتصفح أي تحقق من كلمة المرور — كل دخول يمرّ بالسيرفر
+  // (/api/auth)، فلا يُفيد تعديل كود الصفحة من Inspect في تسجيل دخول أو استخراج بيانات.
   const [loginType, setLoginType] = useState<'admin' | 'sales' | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -8481,10 +8483,9 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
 }
 
 // Edit User Modal - تعديل بيانات حساب (سيلز / مشرف)
-// ملاحظة أمنية: **لا يوجد أي حقل لكلمة المرور هنا ولا في أي شاشة**،
-// ولا يرسل المتصفح أي كلمة مرور لحساب موجود. تغيير كلمات المرور يتم على السيرفر فقط
-// (node scripts/set-password.mjs) فلا يمكن لأي أحد — ولا حتى عبر Inspect — أن يغيّر
-// كلمة مرور حساب ويسيطر عليه.
+// كلمة المرور: صلاحية الإدارة (CEO) وحدها — تراها في هذا النموذج وتستطيع تعيين واحدة جديدة.
+// ومن غير الإدارة لا يظهر الحقل أصلاً، ولو كتب أحدهم كلمة مرور بطلب مُصنَّع من DevTools
+// فسيُهمل على السيرفر تماماً (server/auth.js: preserveUserPasswords — canManage للإدارة فقط).
 function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
   const [form, setForm] = useState({
     name: user.name,
@@ -8494,6 +8495,10 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
     team: user.team || '',
     isActive: user.isActive,
   });
+  // الإدارة فقط ترى وتغيّر كلمات المرور
+  const canSeePasswords = currentUser.role === 'admin';
+  const [newPassword, setNewPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
 
@@ -8521,8 +8526,13 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
       setError('اسم المستخدم موجود بالفعل، اختر اسماً آخر');
       return;
     }
+    if (newPassword && newPassword.length < 6) {
+      setError('كلمة المرور ٦ أحرف على الأقل');
+      return;
+    }
 
-    // لا تُرسل أي كلمة مرور لحساب موجود: البيانات فقط (الاسم/الرقم/الرتبة/الفريق)
+    // البيانات (الاسم/الرقم/الرتبة/الفريق) + كلمة مرور جديدة إن عيّنها الإدارة
+    // (فارغة = الإبقاء على الحالية؛ والسيرفر يقبل تغيير الكلمة من الإدارة فقط)
     const updated = allUsers.map((u: User) =>
       u.id === user.id
         ? {
@@ -8530,6 +8540,7 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
             ...form,
             name: form.name.trim(),
             username: form.username.trim(),
+            ...(canSeePasswords && newPassword ? { password: newPassword } : {}),
           }
         : u
     );
@@ -8579,15 +8590,43 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
               className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
           </div>
 
-          <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] px-4 py-3">
-            <p className="text-[12px] text-[var(--text)] leading-6">
-               <span className="font-bold">كلمات المرور لا تُعدَّل من المتصفح إطلاقاً.</span>
-              <br />
-              لتغيير كلمة مرور أي حساب شغّل على جهاز المكتب:
-              <code className="block mt-1 text-[11px] text-[var(--text)]" dir="ltr">node scripts/set-password.mjs --user {user.username}</code>
-              كلمات المرور محفوظة مشفّرة (SHA-256 + ملح) ولا يمكن عرضها.
-            </p>
-          </div>
+          {canSeePasswords && (
+            <div>
+              <label className="block text-sm text-[var(--text)] mb-1">كلمة المرور</label>
+              {String(user.password || '').startsWith('sha256:') ? (
+                <p className="text-[12px] text-[var(--text-dim)] mb-2">
+                  محفوظة مشفّرة (قيمة قديمة) — لا تُعرض، وتعيين كلمة جديدة من الحقل أدناه يستبدلها.
+                </p>
+              ) : (
+                <p className="mb-2 flex items-center gap-2">
+                  <span
+                    className="px-3 py-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] border border-[var(--border)] text-sm text-[var(--text-strong)] select-all"
+                    dir="ltr"
+                  >
+                    {user.password || 'بلا كلمة مرور — لا يستطيع الدخول'}
+                  </span>
+                  <span className="text-[11px] text-[var(--text-dim)]">مرئية للإدارة فقط</span>
+                </p>
+              )}
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="اتركها فارغة للإبقاء على كلمة المرور الحالية"
+                  className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 pl-12 text-[var(--text-strong)]"
+                  dir="ltr"
+                />
+                <button type="button" onClick={() => setShowPassword(!showPassword)}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 p-1 hover:bg-[var(--tint-2)] rounded-[var(--r-sm)]">
+                  {showPassword ? <EyeOff className="w-4 h-4 text-[var(--text-muted)]" /> : <Eye className="w-4 h-4 text-[var(--text-muted)]" />}
+                </button>
+              </div>
+              <p className="text-[11px] text-[var(--text-dim)] mt-1">
+                كلمة مرور جديدة (٦ أحرف على الأقل) — تعمل فور الحفظ على كل الأجهزة.
+              </p>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm text-[var(--text)] mb-1">رقم الهاتف</label>
@@ -8767,7 +8806,8 @@ function AddUserModal({ currentUser, users = [], onClose, onSuccess }: any) {
     }
     const newUser: User = {
       username: clean.username,
-      password: await hashPassword(form.password),
+      // تُحفظ كما أُرسلت: نصاً تراها الإدارة في حسابات السيلز
+      password: form.password,
       name: clean.name,
       phone: clean.phone,
       role: form.role as User['role'],

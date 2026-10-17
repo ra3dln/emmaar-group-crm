@@ -175,8 +175,9 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
         return send(res, 200, {
           version: db.version,
           isEmpty: Object.keys(db.data || {}).length === 0,
-          // كلمات المرور وإصدار الجلسات لا تغادر السيرفر إطلاقاً — حتى للجهاز المسجَّل دخوله
-          data: stripUserSecrets(db.data || {}),
+          // إصدار الجلسات لا يغادر السيرفر أبداً، وكلمات المرور لا تُرى إلا للإدارة
+          // (رتبة admin — صلاحية عرض كلمات مرور السيلز المطلوبة صراحةً)
+          data: stripUserSecrets(db.data || {}, { keepPasswords: session?.r === 'admin' }),
         });
       }
 
@@ -188,9 +189,11 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
         if (isStaleSession(db)) return endStaleSession();
         const data = db.data || {};
 
-        // كلمات المرور: لا تُقبل نصاً صريحاً أبداً، ولا تُمسح لسجل موجود
+        // كلمات المرور: الإدارة (رتبة admin) وحدها تستطيع تغييرها، ولا تُمسح لسجل موجود
         const accept = (key, value) =>
-          key === 'crm_users' ? preserveUserPasswords(value, data.crm_users) : value;
+          key === 'crm_users'
+            ? preserveUserPasswords(value, data.crm_users, { canManage: session?.r === 'admin' })
+            : value;
 
         if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
           const entries = Object.entries(body.data);

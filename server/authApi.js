@@ -9,21 +9,18 @@
 //   POST ?action=change-password  { currentPassword, newPassword }
 //
 // ملاحظات مهمة:
-//  - كلمة المرور تُتحقق **على السيرفر** بنفس بصمة المتصفح (SHA-256 + ملح)،
-//    فكل الحسابات الحالية تعمل بلا إعادة ضبط.
-//  - كلمة المرور القديمة المكتوبة نصاً صريحاً تُرقّى تلقائياً إلى بصمة مشفّرة
-//    عند أول دخول ناجح — فلا تبقى كلمة مرور مكشوفة في قاعدة البيانات.
+//  - كلمة المرور تُتحقق **على السيرفر**؛ الكلمات المحفوظة نصاً صريحاً أو مشفّرة بالبصمة
+//    كلاهما يعمل — فالحسابات الحالية تعمل بلا إعادة ضبط.
+//  - **الإدارة تدير كلمات المرور من النظام**: تعديل حساب من الشاشة يعرض كلمة المرور
+//    للـ CEO ويسمح بتعيين واحدة جديدة، وأي تغيير من حساب آخر يُهمل على السيرفر.
 //  - **لا يوجد أي إلزام لتغيير كلمة المرور**: من دخل بكلمة صحيحة يعمل مباشرة،
 //    ولو كانت كلمة المرور الافتراضية admin123 فهي تعمل كما هي.
-//    (وتغيير كلمات المرور لا يحدث من المتصفح إطلاقاً — انظر preserveUserPasswords
-//     وإعداد سطر الأوامر: node scripts/set-password.mjs)
 //  - محاولات الدخول محدودة لكل IP حتى لا يمكن تخمين كلمة المرور بالتجربة المتكررة.
 
 import {
   authConfigured,
   bumpSessionVersion,
   clearSessionCookie,
-  hashPassword,
   isManagerRole,
   isSecureRequest,
   passwordProblem,
@@ -198,11 +195,12 @@ export function createAuthHandler({ storage, env = process.env }) {
         const check = verifyPassword(current, user.password);
         if (!check.ok) return reply(res, 401, { ok: false, error: 'كلمة المرور الحالية غير صحيحة' });
 
-        // كلمة مرور جديدة + إسقاط كل الجلسات القديمة (فمن كان يعرف الكلمة القديمة يفقد الوصول).
+        // كلمة مرور جديدة تُحفظ كما أُرسلت (نصاً تراها الإدارة في حسابات السيلز)
+        // + إسقاط كل الجلسات القديمة (فمن كان يعرف الكلمة القديمة يفقد الوصول).
         // ملاحظة: هذا كود سيرفر موثوق، فلا يمرّ على preserveUserPasswords
-        // (التي تمنع المتصفح من تغيير كلمات المرور).
+        // (التي تمنع غير الإدارة من تغيير كلمات المرور).
         const nextUsers = bumpSessionVersion(
-          users.map((u) => (u && String(u.id) === String(user.id) ? { ...u, password: hashPassword(next) } : u)),
+          users.map((u) => (u && String(u.id) === String(user.id) ? { ...u, password: next } : u)),
           user.id
         );
         await storage.save({
@@ -247,21 +245,6 @@ export function createAuthHandler({ storage, env = process.env }) {
         }
 
         clearAttempts(req, username);
-
-        // ترقية كلمة المرور النصية القديمة إلى بصمة مشفّرة (مرة واحدة)
-        if (check.upgraded) {
-          try {
-          const nextUsers = users.map((u) =>
-            u && String(u.id) === String(candidate.id) ? { ...u, password: check.upgraded } : u
-          );
-          await storage.save({
-            version: (Number(db.version) || 0) + 1,
-            data: { ...(db.data || {}), crm_users: nextUsers },
-          });
-          } catch {
-            // فشل الترقية لا يمنع الدخول — تُرقّى في المرة القادمة
-          }
-        }
 
         return grantSession(res, req, candidate);
       }

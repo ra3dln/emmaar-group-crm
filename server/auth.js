@@ -120,12 +120,12 @@ export function hashPassword(plain, salt) {
   return `${HASH_PREFIX}${s}:${digest}`;
 }
 
-// يتحقق من كلمة المرور، ويرجّع بصمة مشفّرة لو كانت المحفوظة نصاً صريحاً قديماً (للترقية)
+// يتحقق من كلمة المرور: بصمة مشفّرة (مع ملح) أو كلمة محفوظة نصاً صريحاً
+// (الكلمات النصية هي ما تضبطه الإدارة من النظام وتراه في حسابات السيلز)
 export function verifyPassword(plain, stored) {
   if (typeof stored !== 'string' || !stored) return { ok: false };
   if (!isHashedPassword(stored)) {
-    const ok = safeEqualStr(stored, plain);
-    return ok ? { ok, upgraded: hashPassword(plain) } : { ok: false };
+    return { ok: safeEqualStr(stored, plain) };
   }
   const rest = stored.slice(HASH_PREFIX.length);
   const sep = rest.indexOf(':');
@@ -149,12 +149,17 @@ export function publicUser(user) {
   return rest;
 }
 
-// يحذف أسرار السيرفر من قائمة المستخدمين داخل كتلة البيانات المرسلة للمتصفح
-// (كلمات المرور + رقم إصدار الجلسات)
-export function stripUserSecrets(data) {
+// يحذف أسرار السيرفر من قائمة المستخدمين داخل كتلة البيانات المرسلة للمتصفح:
+// رقم إصدار الجلسة لا يخرج أبداً، وكلمات المرور لا تُرى إلا من حساب الإدارة
+// (صلاحية «تشوف باسورد حسابات السيلز» طُلبت صراحةً ومقيدة برتبة admin وحدها)
+export function stripUserSecrets(data, { keepPasswords = false } = {}) {
   const out = { ...(data || {}) };
   if (Array.isArray(out.crm_users)) {
-    out.crm_users = out.crm_users.map((u) => (u && typeof u === 'object' ? publicUser(u) : u));
+    out.crm_users = out.crm_users.map((u) => {
+      if (!u || typeof u !== 'object') return u;
+      const { password, sessionVersion, ...rest } = u;
+      return keepPasswords && typeof password === 'string' ? { ...rest, password } : rest;
+    });
   }
   return out;
 }
@@ -171,22 +176,21 @@ export function sessionMatchesUsers(session, data) {
   return sessionVersionOf(user) === (Number(session.sv) || 0);
 }
 
-// عند الكتابة: **المتصفح لا يستطيع تغيير كلمة مرور أي حساب موجود** — وهذا مقصود.
-// لولا ذلك لأمكن لأي شخص داخل النظام (أو أي ثغرة XSS، أو طلب مُصنَّع من DevTools)
-// أن يكتب بصمة كلمة مرور جديدة لحساب الإدارة ويسيطر على كل البيانات.
-// ولذلك أيضاً لا توجد كلمة مرور واحدة في كود المتصفح: لا تشفير ولا مقارنة ولا إرسال.
+// عند الكتابة: **الإدارة (رتبة admin) وحدها تستطيع تغيير كلمة مرور أي حساب** من النظام،
+// وتُحفظ الكلمة كما أُرسلت (نصاً صريحاً تراها الإدارة، أو بصمة إن كانت الأصلية مشفّرة).
+// أي كتابة من حساب آخر تُهمل تماماً لكلمة المرور: تبقى المحفوظة على السيرفر كما هي —
+// فلا يستطيع مندوب (أو طلب مُصنَّع من DevTools) إعادة تعيين أي كلمة مرور.
 //
 // الحالات (مهمة جداً كي لا يُقفل النظام ولا يبقى فيه باب خلفي):
-//  ١) حساب موجود على السيرفر            => كلمة المرور المحفوظة تُبقى كما هي مهما ورد من المتصفح
-//  ٢) حساب **جديد** يصل بكلمة مرور نصية   => تُشفَّر فوراً وتُحفظ (إنشاء مستخدم جديد)
-//  ٣) حساب جديد بلا كلمة مرور            => يُحفظ بلا كلمة مرور (لا يستطيع الدخول حتى تُضبط)
-//  ٤) إصدار الجلسة                         => من السيرفر فقط أبداً (فلا تُحيى جلسة أسقطها الخروج)
+//  ١) حساب موجود + الإدارة ترسل كلمة جديدة  => تُحفظ كما أُرسلت (تغيير مقصود)
+//  ٢) حساب موجود + بلا كلمة في الطلب        => تبقى المحفوظة (لا يقفل أحد حسابه بالخطأ)
+//  ٣) حساب جديد بكلمة مرور                  => تُقبل مرة واحدة كما أُرسلت
+//  ٤) إصدار الجلسة                           => من السيرفر فقط أبداً (فلا تُحيى جلسة أسقطها الخروج)
 //
-// تغيير كلمة مرور أي حساب يتم من السيرفر وحده: أمر Terminal
+// تغيير كلمة المرور بالإدارة من نموذج «تعديل الحساب» في الواجهة؛ ولمن يحب سطر الأوامر:
 //   node scripts/set-password.mjs --user admin
-// أو من داخل النظام بمفتاح السيرفر (server/authApi.js: action=change-password)
-// ولا يُنشر أي منهما في المتصفح.
-export function preserveUserPasswords(incoming, existing) {
+// أو تغيير كلمة المرور الخاصة بنفس الحساب (server/authApi.js: action=change-password).
+export function preserveUserPasswords(incoming, existing, { canManage = false } = {}) {
   if (!Array.isArray(incoming)) return incoming;
   const byId = new Map();
   for (const user of Array.isArray(existing) ? existing : []) {
@@ -196,16 +200,16 @@ export function preserveUserPasswords(incoming, existing) {
     if (!user || typeof user !== 'object') return user;
     const previous = byId.get(String(user.id));
     const { password, sessionVersion, ...rest } = user;
-    // حساب موجود: لا تُمسّ كلمة مروره أبداً من المتصفح، وإصداق الجلسة يبقى من السيرفر
+    const incomingPassword = typeof password === 'string' && password.trim() ? password : '';
+    // حساب موجود: الإدارة تغيّر عند الإرسال كلمة، وغيرها تبقى المحفوظة — وإصداق الجلسة من السيرفر
     if (previous) {
       const kept = previous.sessionVersion !== undefined ? { sessionVersion: Number(previous.sessionVersion) || 0 } : {};
       const previousPassword = typeof previous.password === 'string' ? previous.password : '';
+      if (canManage && incomingPassword) return { ...rest, ...kept, password: incomingPassword };
       return previousPassword ? { ...rest, ...kept, password: previousPassword } : { ...rest, ...kept };
     }
-    // حساب جديد: تُقبل كلمة مروره مرة واحدة (مشفّرة كانت أم نصية) وتُحفظ مشفّرة
-    if (isHashedPassword(password)) return { ...rest, ...(password ? { password } : {}) };
-    if (typeof password === 'string' && password.trim()) return { ...rest, password: hashPassword(password) };
-    return rest;
+    // حساب جديد: تُقبل كلمة مروره مرة واحدة كما أُرسلت
+    return incomingPassword ? { ...rest, password: incomingPassword } : rest;
   });
 }
 

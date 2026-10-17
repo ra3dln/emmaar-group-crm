@@ -94,7 +94,7 @@ const ALL_KEYS = [...SYNC_KEYS, TOMBSTONE_KEY];
 // مفاتيح البيانات التي تُستبدل بالكامل عند إعادة الضبط
 const DATA_KEYS = SYNC_KEYS;
 
-type Tombstone = { key: string; id: string };
+type Tombstone = { key: string; id: string; at?: number };
 type StoreData = Record<string, unknown>;
 
 let serverVersion = -1;
@@ -116,18 +116,42 @@ const parseTombstones = (value: unknown): Tombstone[] => {
   return raw.filter((item: any) => item && typeof item.key === 'string' && typeof item.id === 'string');
 };
 
+// وقت شاهد الحذف (0 للشواهد القديمة بلا وقت — تُعامَل كأقدم شاهد)
+const tombAt = (t: Tombstone): number => Number(t?.at) || 0;
+
+// آخر تعديل معروف للسجل (أي حقل زمني فيه) — يُقارَن بوقت شاهد الحذف
+const recordStamp = (record: any): number => {
+  const times = [Date.parse(record?.updatedAt || ''), Date.parse(record?.createdAt || '')].filter((n) =>
+    Number.isFinite(n)
+  );
+  return times.length ? Math.max(...times) : 0;
+};
+
+// «الإحياء يفوز» بقيد الزمن: شاهد الحذف يسقط فقط إذا كان السجل الموجود أحدث منه فعلاً
+// (يعيد إنشاء حقيقي بعد الحذف، مثل حساب الإدارة المُعاد إنشاؤه). بدون قيد الزمن كان
+// أي جهاز قديم ما زال يحمل السجل يُلغي شاهد الحذف ويعيد السجل المحذوف للحياة في كل دورة.
+const dropResurrected = (key: string, union: any[], tombstones: Tombstone[]): Tombstone[] =>
+  tombstones.filter((t) => {
+    if (t?.key !== key || !t?.id) return true;
+    const record = union.find((r: any) => String(r?.id) === String(t.id));
+    if (!record) return true; // غير موجود في أي نسخة => الشاهد باقٍ
+    return recordStamp(record) <= tombAt(t); // أقدم من الحذف => حذفه سليم؛ أحدث => إعادة إنشاء
+  });
+
 const mergeTombstones = (...lists: Tombstone[][]): Tombstone[] => {
-  const seen = new Set<string>();
-  const merged: Tombstone[] = [];
+  const byTag = new Map<string, Tombstone>();
   for (const list of lists) {
     for (const item of list) {
       const tag = `${item.key}::${item.id}`;
-      if (seen.has(tag)) continue;
-      seen.add(tag);
-      merged.push({ key: item.key, id: item.id });
+      const prev = byTag.get(tag);
+      const prevAt = prev ? tombAt(prev) : 0;
+      // عند التكرار نحتفظ بأحدث وقت حذف حتى لا يضيع قيد الزمن بمزامنة أقدم
+      if (!prev || tombAt(item) > prevAt) {
+        byTag.set(tag, { key: item.key, id: item.id, at: tombAt(item) || prevAt });
+      }
     }
   }
-  return merged;
+  return Array.from(byTag.values());
 };
 
 const isDeleted = (tombstones: Tombstone[], key: string, id: string): boolean =>
@@ -295,12 +319,6 @@ const tick = async (): Promise<void> => {
     const fresh = ALL_KEYS.filter((key) => latest[key] !== snapshot[key]);
     const toApply = ALL_KEYS.filter((key) => !fresh.includes(key));
     const allTombstones = mergeTombstones(tombstones, parseTombstones(store.data?.[TOMBSTONE_KEY]));
-    // «الإحياء يفوز»: أي شاهد حذف لسجل موجود فعلاً في البيانات يُسقط —
-    // بدون ذلك يحذف جهاز قديم سجلاً أُعيد إنشاؤه (كحساب الإدارة) في كل دورة مزامنة.
-    const dropResurrected = (key: string, union: any[]): Tombstone[] => {
-      const alive = new Set<string>(union.filter((r) => r?.id).map((r) => String(r.id)));
-      return allTombstones.filter((t) => !(t?.key === key && t?.id && alive.has(String(t.id))));
-    };
 
     let changed = false;
     const repush: string[] = [];
@@ -317,7 +335,7 @@ const tick = async (): Promise<void> => {
       const remote: any[] = Array.isArray(store.data?.[key]) ? store.data[key] : [];
       const local = safeParse(latest[key]);
       const union = mergeUnion(remote, local);
-      const kept = dropResurrected(key, union);
+      const kept = dropResurrected(key, union, allTombstones);
       if (kept.length !== allTombstones.length) {
         allTombstones.splice(0, allTombstones.length, ...kept);
         if (!repush.includes(TOMBSTONE_KEY)) repush.push(TOMBSTONE_KEY);
@@ -357,10 +375,34 @@ export const isOnline = (): boolean => online;
 // دفع فوري لمفتاح واحد بعد تغيير محلي (مثل إنشاء حساب أو تسجيل حضور)
 // حتى يظهر على كل الأجهزة في نفس اللحظة بدل انتطار دورة التزامن
 // (إن فشل — مثل انعدام الاتصال — يرفعه التزامن الدوري تلقائياً لاحقاً)
+// تسجيل شواهد حذف للسجلات التي اختفت من قائمة محلية ورفعها قبل رفع القائمة الجديدة —
+// بدونها تُحيي المزامنة السجل المحذوف من أي جهاز قديم (أو من نفس الجهاز بعد تحديث الصفحة)
+const recordDeletions = async (key: string, removedIds: string[]): Promise<void> => {
+  if (!removedIds.length) return;
+  const tombs = parseTombstones(localStorage.getItem(TOMBSTONE_KEY));
+  const at = Date.now();
+  let added = false;
+  for (const id of removedIds) {
+    if (!tombs.some((t) => t.key === key && t.id === id)) {
+      tombs.push({ key, id, at });
+      added = true;
+    }
+  }
+  if (!added) return;
+  const raw = JSON.stringify(tombs);
+  localStorage.setItem(TOMBSTONE_KEY, raw);
+  snapshot[TOMBSTONE_KEY] = raw;
+  await pushOne(TOMBSTONE_KEY); // الشواهد أولاً حتى لا تُحيي القائمة الجديدة السجل المحذوف
+};
+
 export async function pushKey(key: string): Promise<void> {
   try {
     const raw = localStorage.getItem(key);
     if (raw === null) return;
+    // أي معرّف اختفى عن القائمة منذ آخر مزامنة = حذف حقيقي، وله شاهد حذف يسبق الرفع
+    const before = idSet(snapshot[key]);
+    const removed = [...before].filter((id) => !idSet(raw).has(id));
+    await recordDeletions(key, removed);
     snapshot[key] = raw;
     await pushOne(key);
   } catch {
@@ -414,8 +456,7 @@ export async function startSync(): Promise<void> {
           const remote: any[] = Array.isArray(store.data?.[key]) ? store.data[key] : [];
           const local = safeParse(localStorage.getItem(key));
           const union = mergeUnion(remote, local);
-          const alive = new Set<string>(union.filter((r) => r?.id).map((r) => String(r.id)));
-          const kept = tombstones.filter((t) => !(t?.key === key && t?.id && alive.has(String(t.id))));
+          const kept = dropResurrected(key, union, tombstones);
           if (kept.length !== tombstones.length) {
             tombstones.splice(0, tombstones.length, ...kept);
             sync = true;
@@ -426,7 +467,15 @@ export async function startSync(): Promise<void> {
             localStorage.setItem(key, mergedRaw);
             changed = true;
           }
+          // ما اختلف عن نسخة السيرفر (حذف محلي مثلًا) يجب رفعه الآن لا لاحقًا
+          if (mergedRaw !== JSON.stringify(remote)) sync = true;
         }
+        // حذف محلي لم يبلغ السيرفر بعد (مثل تحديث الصفحة في منتصف رفع الحذف):
+        // شاهده على الجهاز فقط، وبدون رفعه الآن تعيد أي دورة لاحقة السجل المحذوف للحياة
+        const serverTombs = new Set(
+          parseTombstones(store.data?.[TOMBSTONE_KEY]).map((t) => `${t.key}::${t.id}`)
+        );
+        if (tombstones.some((t) => !serverTombs.has(`${t.key}::${t.id}`))) sync = true;
         const finalTombs = JSON.stringify(tombstones);
         if (finalTombs !== localStorage.getItem(TOMBSTONE_KEY)) sync = true;
         localStorage.setItem(TOMBSTONE_KEY, finalTombs);
