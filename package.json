@@ -5,7 +5,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node tests/auth-smoke.mjs && node tests/push-smoke.mjs && node tests/redis-smoke.mjs",
+    "test:auth": "node tests/auth-smoke.mjs",
+    "test:push": "node tests/push-smoke.mjs",
+    "test:supabase": "node tests/supabase-smoke.mjs && node tests/supabase-api-smoke.mjs",
+    "seed:e2e": "node tests/seed-e2e-db.mjs",
+    "test:ui": "node tests/e2e-ui-server.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.1.0",

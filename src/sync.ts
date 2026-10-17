@@ -22,18 +22,49 @@
 // وفيها النظام يظل يعمل بالكامل من localStorage.
 
 export const SYNC_EVENT = 'crm-sync';
+// يُطلَق عندما يرفض السيرفر الطلب (401/403): لا جلسة أو كلمة مرور ضعيفة
+// => التطبيق يعرض شاشة الدخول ويتوقف عن أي محاولة حتى يسجّل المستخدم دخوله.
+export const AUTH_EVENT = 'crm-auth-required';
 
-const API = '/api/store';
+export const API = '/api/store';
+export const AUTH_API = '/api/auth';
 const POLL_MS = 2500;
 
-// بوابة البيانات الاختيارية: لو الموقع محمي بمفتاح (STORE_TOKEN على Vercel)
-// نرسل نفس القيمة في كل طلب. لو الحقل فاضي لا نرسل شيئاً (الوضع الافتراضي).
-const STORE_TOKEN: string = String((import.meta as any).env?.VITE_STORE_TOKEN || '');
-const apiHeaders = (json = false): Record<string, string> => {
-  const out: Record<string, string> = {};
-  if (json) out['Content-Type'] = 'application/json';
-  if (STORE_TOKEN) out['x-store-token'] = STORE_TOKEN;
-  return out;
+// ===== حالة التفويض =====
+// لا يوجد أي مفتاح في كود المتصفح: التفويض كله بكوكي جلسة HttpOnly موقع من السيرفر.
+// أي شخص يعرف رابط الموقع ويحاول قراءة البيانات يحصل على 401 ولا يرى شيئاً.
+let authRequired = false;
+
+export const isAuthRequired = (): boolean => authRequired;
+
+export const markUnauthorized = (): void => {
+  if (authRequired) return;
+  authRequired = true;
+  online = false;
+  try {
+    window.dispatchEvent(new Event(AUTH_EVENT));
+  } catch {
+    /* لا شيء */
+  }
+};
+
+// بعد دخول ناجح: نفتح المزامنة من جديد ونجلب البيانات فوراً بلا انتظار دورة كاملة
+export const markAuthorized = (): void => {
+  authRequired = false;
+  void tick();
+};
+
+const apiHeaders = (json = false): Record<string, string> =>
+  json ? { 'Content-Type': 'application/json' } : {};
+
+// كل طلبات البيانات تمر من هنا: الكوكي يُرسل تلقائياً (نفس الأصل)، وأي رفض
+// من السيرفر (٤٠١ بلا جلسة / ٤٠٣ كلمة مرور ضعيفة) يُوقف المزامنة فوراً.
+// ٤٠١ = لا جلسة (نوقف ونعرض شاشة الدخول).
+// ٤٠٣ = ممنوع لهذا الحساب بعينه (صلاحية) ولا يعني انتهاء الجلسة.
+const apiFetch = async (path: string, init: RequestInit = {}): Promise<Response> => {
+  const res = await fetch(path, { credentials: 'same-origin', ...init });
+  if (res.status === 401) markUnauthorized();
+  return res;
 };
 
 // شغّال خبيث: بدون استضافة قاعدة، كل طلب لـ /api/store بيرجع 503.
@@ -172,7 +203,7 @@ const afterTombstones = (records: any[], tombstones: Tombstone[], key: string): 
   records.filter((item) => !item?.id || !isDeleted(tombstones, key, item.id));
 
 const pushAll = async (): Promise<void> => {
-  const res = await fetch(API, {
+  const res = await apiFetch(API, {
     method: 'POST',
     headers: apiHeaders(true),
     body: JSON.stringify({ data: localData() }),
@@ -183,7 +214,7 @@ const pushAll = async (): Promise<void> => {
 };
 
 const pushOne = async (key: string): Promise<void> => {
-  const res = await fetch(API, {
+  const res = await apiFetch(API, {
     method: 'POST',
     headers: apiHeaders(true),
     body: JSON.stringify({ key, value: safeParse(localStorage.getItem(key)) }),
@@ -195,16 +226,17 @@ const pushOne = async (key: string): Promise<void> => {
 
 // كل ثانيتين: نرفع تغييرات هذا الجهاز ثم نجلب تغييرات الأجهزة الأخرى
 const tick = async (): Promise<void> => {
-  if (busy) return;
+  // بلا جلسة صحيحة لا نفعل شيئاً: لا قراءة ولا كتابة — البيانات تبقى مغلقة
+  if (busy || authRequired) return;
   busy = true;
   try {
     // 0) هل تغيّر شيء على السيرفر؟ (نفحص قبل الرفع حتى نكتشف إعادة الضبط قبل رفع أي بيانات قديمة)
     let prefetched: any = null;
-    const versionRes = await fetch(`${API}?meta=version`, { cache: 'no-store', headers: apiHeaders() });
+    const versionRes = await apiFetch(`${API}?meta=version`, { cache: 'no-store', headers: apiHeaders() });
     if (!versionRes.ok) throw new Error(`version failed: ${versionRes.status}`);
     const { version } = await versionRes.json();
     if (version !== serverVersion) {
-      const fullRes = await fetch(API, { cache: 'no-store', headers: apiHeaders() });
+      const fullRes = await apiFetch(API, { cache: 'no-store', headers: apiHeaders() });
       if (!fullRes.ok) throw new Error(`pull failed: ${fullRes.status}`);
       const store = await fullRes.json();
       const serverReset = resetAt(store.data);
@@ -351,7 +383,7 @@ export async function startSync(): Promise<void> {
   online = false; // عشان مفيش قاعدة، لا يوجد "online" حقيقي
 
   try {
-    const res = await fetch(API, { cache: 'no-store', headers: apiHeaders() });
+    const res = await apiFetch(API, { cache: 'no-store', headers: apiHeaders() });
     if (res.ok) {
       // لو فجأة اتعملت قاعدة (مثلاً أضيف Redis لاحقاً)
       const store = await res.json();
@@ -404,6 +436,9 @@ export async function startSync(): Promise<void> {
         localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(tombstones));
         await pushAll();
       }
+    } else if (authRequired) {
+      // لا جلسة: البيانات مغلقة — شاشة الدخول تظهر من التطبيق
+      console.warn('[sync] لا توجد جلسة — بيانات العملاء مغلقة حتى تسجيل الدخول');
     } else {
       // بدون قاعدة — 503 — يستمر local-only
       console.warn('[sync] استضافة بدون قاعدة — يعمل محلياً على هذا الجهاز فقط');

@@ -1,4 +1,4 @@
-// Service Worker: إشعارات حقيقية + سلوك المنبه (يرنّ ويتكرر حتى المستخدم يفتح الموقع أو يسكته)
+// Service Worker: إشعارات حقيقية صامتة — تظهر مرة واحدة في وقتها بلا رنة ولا تكرار
 self.addEventListener('install', () => self.skipWaiting());
 
 self.addEventListener('activate', (event) => event.waitUntil(clients.claim()));
@@ -19,29 +19,23 @@ self.addEventListener('push', (event) => {
     body: data.body || 'حان وقت الاتصال بالعميل',
     icon: data.icon || ICON,
     badge: ICON,
-    vibrate: [400, 200, 400, 200, 400],
+    // نوتفكيشن فقط: بلا رنة وبلا اهتزاز متكرر. (أندرويد يحترم silent،
+    // وآيفون يعرض الإشعار بنغمة النظام مرة واحدة — لا نكرر ولا نطيل.)
+    silent: true,
     tag: data.tag || `crm-${Date.now()}`,
     renotify: true,
     dir: 'rtl',
     lang: 'ar',
+    timestamp: Date.now(),
     data: { url: data.url || '/', id: data.id || '', phone: data.phone || '', kind: data.kind || '' },
     actions: [
-      { action: 'open', title: '🔔 فتح ومتابعة' },
-      { action: 'snooze', title: '⏰ تأجيل ٥ د' },
+      { action: 'open', title: 'فتح ومتابعة' },
+      { action: 'snooze', title: 'تأجيل ٥ د' },
     ],
   };
 
-  event.waitUntil(
-    (async () => {
-      await self.registration.showNotification(title, options);
-      // للرسائل: نُعيد الإشعار كل ٢٠ ثانية حتى يفتح المستخدم الموقع (بحد أقصى ٥ مرات)
-      const repeats = data.kind === 'message' ? 4 : 0;
-      for (let i = 0; i < repeats; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 20000));
-        await self.registration.showNotification(title, { ...options });
-      }
-    })()
-  );
+  // إشعار واحد لكل حدث في وقته — ممنوع أي حلقة إعادة عرض (كانت بتعمل رنة متكررة).
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 
 // ===== ضغط المستخدم على الإشعار =====
@@ -96,15 +90,16 @@ self.addEventListener('message', (event) => {
         body: msg.body || '',
         icon: ICON,
         badge: ICON,
+        silent: true,
         dir: 'rtl',
         lang: 'ar',
-        vibrate: [400, 200, 400, 200, 400],
+        timestamp: Date.now(),
         tag: msg.tag || `local-${Date.now()}`,
         renotify: true,
-        data: { url: msg.url || '/', id: msg.id || '' },
+        data: { url: msg.url || '/', id: msg.id || '', kind: msg.kind || '' },
         actions: [
-          { action: 'open', title: '🔔 فتح' },
-          { action: 'snooze', title: '⏰ تأجيل ٥ د' },
+          { action: 'open', title: 'فتح' },
+          { action: 'snooze', title: 'تأجيل ٥ د' },
         ],
       })
     );

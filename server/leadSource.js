@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileStorage } from './store.js';
+import { authConfigured, isManagerRole, sessionFromRequest } from './auth.js';
 
 const GRAPH_VERSION = 'v25.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -753,10 +754,21 @@ const reply = (res, status, payload) => {
   res.end(JSON.stringify(payload));
 };
 
-export function createLeadSourceHandler({ storeFile, configFile }) {
+// auth اختياري: متغيّرات البيئة التي فيها AUTH_SECRET.
+// عند تمريره لا يعمل أي شيء بلا جلسة صحيحة — لأن هنا توكن فيسبوك وبيانات العملاء.
+export function createLeadSourceHandler({ storeFile, configFile, auth = null }) {
   return async function handle(req, res) {
     try {
       const [url] = (req.url || '').split('?');
+
+      if (auth) {
+        if (!authConfigured(auth)) {
+          return reply(res, 503, { ok: false, error: 'auth not configured', hint: 'أضف AUTH_SECRET ثم أعد التشغيل.' });
+        }
+        const session = sessionFromRequest(auth, req);
+        if (!session) return reply(res, 401, { ok: false, error: 'unauthorized' });
+        if (!isManagerRole(session.r)) return reply(res, 403, { ok: false, error: 'forbidden' });
+      }
 
       if (req.method === 'GET' && url === '/api/lead-source') {
         const config = loadConfig(configFile);

@@ -10,8 +10,17 @@ node_modules
 # ملفات محلية للتطوير والاختبار
 .env
 .env.local
+.env*
 *.log
 .vercel
 .freebuff
 vite.test.config.js
 tmp-*.mjs
+
+# ملفات ضخمة/محلية لا داعي لرفعها
+*.exe
+*.tar
+tests
+
+# النسخ الاحتياطية المحلية
+backups

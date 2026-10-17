@@ -1,9 +1,11 @@
 // ===== اختبار حقيقي لنقطة البيانات (/api/store) فوق قاعدة Supabase =====
 // يشغّل نفس ملف الاستضافة (api/store.js) داخل سيرفر HTTP محلي بنفس متغيّرات بيئة
-// الإنتاج، ويمرّ بنفس الطلبات التي يرسلها المتصفح (فحص الإصدار + حفظ + قراءة)،
-// ثم يعيد البيانات كما كانت. هكذا نتأكد أن المسار الكامل يعمل — لا الوحدة وحدها.
+// الإنتاج، ويمرّ بنفس الطلبات التي يرسلها المتصفح (فحص الإصدار + حفظ + قراءة)
+// مع كوكي جلسة حقيقي، ثم يعيد البيانات كما كانت.
+// ويتأكد أيضاً أن البوابة مغلقة: بلا جلسة لا تُقرأ ولا تُكتب أي بيانات،
+// وأن كلمات المرور لا تظهر في أي رد.
 //
-// التشغيل:  node tests/supabase-api-smoke.mjs
+// التشغيل:  node tests/supabase-api-smoke.mjs   (يحتاج AUTH_SECRET في البيئة أو .env)
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -28,14 +30,20 @@ function loadEnvFile(path = '.env') {
 const fileEnv = loadEnvFile();
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || fileEnv.SUPABASE_URL || '';
 process.env.SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || fileEnv.SUPABASE_SECRET_KEY || '';
-delete process.env.STORE_TOKEN; // بوابة الحماية مطفأة في الاختبار
+process.env.AUTH_SECRET = process.env.AUTH_SECRET || fileEnv.AUTH_SECRET || '';
+delete process.env.STORE_TOKEN;
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SECRET_KEY) {
   console.log('متخطّى: Supabase غير مضبوط — لا يوجد ما يُختبر.');
   process.exit(0);
 }
+if (!process.env.AUTH_SECRET) {
+  console.log('متخطّى: AUTH_SECRET غير مضبوط — لا يمكن اختبار الجلسة.');
+  process.exit(0);
+}
 
 const { supabaseStorage } = await import('../server/supabase.js');
+const { signSession } = await import('../server/auth.js');
 const storeHandler = (await import('../api/store.js')).default;
 
 const server = http.createServer((req, res) => storeHandler(req, res));
@@ -43,7 +51,7 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
 const call = async (path, options = {}) => {
-  const res = await fetch(base + path, options);
+  const res = await fetch(base + path, { ...options, headers: { cookie: COOKIE, ...(options.headers || {}) } });
   const text = await res.text();
   let body = null;
   try {
@@ -51,15 +59,33 @@ const call = async (path, options = {}) => {
   } catch {
     body = text;
   }
-  return { status: res.status, body };
+  return { status: res.status, body, text };
 };
 
 const original = await supabaseStorage(process.env).load();
+// جلسة الاختبار تُوقّع بمفتاح السيرفر الحقيقي، وأي طلب بلا كوكي يجب أن يُرفض
+const admin = (original.data?.crm_users || []).find((u) => u && u.role === 'admin');
+if (!admin) {
+  console.log('متخطّى: لا يوجد حساب إدارة في القاعدة.');
+  process.exit(0);
+}
+const COOKIE = `crm_session=${signSession(process.env, {
+  u: admin.id,
+  r: admin.role,
+  n: admin.username,
+  sv: Number(admin.sessionVersion) || 0,
+})}`;
 // ملاحظة: مفتاح النظام يقبل حروفاً صغيرة وشرطات سفلية فقط (^crm_[a-z_]+$)
 const SMOKE_KEY = 'crm_smoke_test';
 const SMOKE_ID = 'e2e-' + Date.now();
 
 try {
+  // ٠) البوابة: بلا جلسة لا شيء (وهذا هو الغرض الأصلي من الحماية)
+  const anon = await call('/api/store', { headers: { cookie: '' } });
+  assert.equal(anon.status, 401, 'بلا جلسة لازم 401');
+  assert.ok(!/crm_users/.test(anon.text), 'رد الرفض لا يحتوي أي بيانات');
+  console.log('✓ بلا جلسة: قراءة البيانات مرفوضة (401)');
+
   // ١) فحص الإصدار — أكثر طلب يتكرر في النظام (كل جهاز كل ثوانٍ)
   const version = await call('/api/store?meta=version');
   assert.equal(version.status, 200, 'فحص الإصدار لازم يرجّع 200');
@@ -86,7 +112,9 @@ try {
   assert.equal(full.status, 200, 'القراءة الكاملة لازم تنجح');
   assert.ok(Array.isArray(full.body.data?.[SMOKE_KEY]), 'المفتاح المحفوظ لازم يرجع');
   assert.equal(full.body.data[SMOKE_KEY][0].id, SMOKE_ID, 'القيمة المحفوظة لازم تكون نفسها');
-  console.log('✓ GET /api/store أرجع السجل المحفوظ من القاعدة');
+  assert.ok(!full.text.includes('password'), 'كلمات المرور لا تُرسل للمتصفح أبداً');
+  assert.ok(!full.text.includes('sessionVersion'), 'إصدار الجلسات سرّي ولا يُرسل للمتصفح');
+  console.log('✓ GET /api/store أرجع السجل المحفوظ من القاعدة (بلا كلمات مرور)');
 
   // ٥) تنظيف: إعادة القاعدة كما كانت بالضبط
   await supabaseStorage(process.env).save(original);

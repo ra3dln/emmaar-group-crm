@@ -1,13 +1,16 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
+import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createStoreHandler, fileStorage } from "./server/store.js";
 import { createLeadSourceHandler, startAutoImport } from "./server/leadSource.js";
 import { createPushHandler, startPushLoop } from "./server/push.js";
 import { createPublicHandler } from "./server/publicPage.js";
+import { createAuthHandler } from "./server/authApi.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "data");
@@ -18,10 +21,58 @@ const SOURCE_FILE = pickFile("CRM_SOURCE_FILE", "lead-source.json");
 const VAPID_FILE = pickFile("CRM_VAPID_FILE", "vapid.json");
 const PUSH_STATE = pickFile("CRM_PUSH_STATE", "push-state.json");
 
+// ===== مفتاح توقيع الجلسات على سيرفر المكتب =====
+// نفس الحماية المفروضة على الاستضافة تُفرض هنا أيضاً: أي شخص على نفس الشبكة
+// يعرف عنوان السيرفر لا يرى بيانات العملاء بلا تسجيل دخول.
+// المفتاح: AUTH_SECRET من البيئة أو من .env، وإلا يُولَّد مرة واحدة ويُحفظ في
+// ملف محلي مستقل خارج git (فتبقى الجلسات صالحة بعد إعادة التشغيل).
+const ENV_FILE = loadEnv(process.env.NODE_ENV || "development", __dirname, "");
+const LOCAL_SECRET_FILE = pickFile("CRM_AUTH_SECRET_FILE", ".auth-secret");
+const authSecret = (() => {
+  const fromEnv = String(process.env.AUTH_SECRET || ENV_FILE.AUTH_SECRET || "").trim();
+  if (fromEnv.length >= 16) return fromEnv;
+  try {
+    const saved = fs.readFileSync(LOCAL_SECRET_FILE, "utf8").trim();
+    if (saved.length >= 16) return saved;
+  } catch {
+    /* يُولَّد جديد */
+  }
+  const generated = crypto.randomBytes(32).toString("hex");
+  try {
+    fs.mkdirSync(path.dirname(LOCAL_SECRET_FILE), { recursive: true });
+    fs.writeFileSync(LOCAL_SECRET_FILE, generated, "utf8");
+  } catch {
+    /* التشغيل بلا حفظ — تكفي جلسته الحالية */
+  }
+  return generated;
+})();
+const AUTH_ENV = { ...process.env, ...ENV_FILE, AUTH_SECRET: authSecret };
+
+// ===== تسجيل الدخول على سيرفر المكتب (نفس منطق api/auth.js بالحرف) =====
+function localAuth() {
+  const handler = createAuthHandler({ storage: fileStorage(DB_FILE), env: AUTH_ENV });
+  const mount = (server) => {
+    server.middlewares.use((req, res, next) => {
+      if (!(req.url || "").startsWith("/api/auth")) return next();
+      handler(req, res);
+    });
+  };
+  return {
+    name: "local-auth",
+    configureServer: mount,
+    configurePreviewServer: mount,
+  };
+}
+
 // ===== إشعارات حقيقية تصل والموقع مقفول (Web Push) + حلقة إرسال تلقائية =====
 let pushLoopStarted = false;
 function pushNotifications() {
-  const { handler } = createPushHandler({ storeFile: DB_FILE, vapidFile: VAPID_FILE, stateFile: PUSH_STATE });
+  const { handler } = createPushHandler({
+    storeFile: DB_FILE,
+    vapidFile: VAPID_FILE,
+    stateFile: PUSH_STATE,
+    auth: AUTH_ENV,
+  });
   const mount = (server) => {
     server.middlewares.use((req, res, next) => {
       if (!(req.url || "").startsWith("/api/push")) return next();
@@ -47,7 +98,7 @@ function autoImport() {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         if (!(req.url || "").startsWith("/api/lead-source")) return next();
-        createLeadSourceHandler({ storeFile: DB_FILE, configFile: SOURCE_FILE })(req, res);
+        createLeadSourceHandler({ storeFile: DB_FILE, configFile: SOURCE_FILE, auth: AUTH_ENV })(req, res);
       });
 
       startLoop();
@@ -55,7 +106,7 @@ function autoImport() {
     configurePreviewServer(server) {
       server.middlewares.use((req, res, next) => {
         if (!(req.url || "").startsWith("/api/lead-source")) return next();
-        createLeadSourceHandler({ storeFile: DB_FILE, configFile: SOURCE_FILE })(req, res);
+        createLeadSourceHandler({ storeFile: DB_FILE, configFile: SOURCE_FILE, auth: AUTH_ENV })(req, res);
       });
       startLoop();
     },
@@ -72,8 +123,10 @@ function startLoop() {
 // كل الأجهزة على نفس الشبكة تقرأ وتكتب نفس الملف => نفس البيانات على الكمبيوتر والموبايل.
 // على الاستضافة (Vercel) يعمل نفس المنطق لكن بالتخزين السحابي — انظر api/store.js
 function jsonFileStore() {
+  // auth: بوابة الجلسة — لا قراءة ولا كتابة بلا تسجيل دخول صحيح
   const handler = createStoreHandler({
     ...fileStorage(DB_FILE),
+    auth: AUTH_ENV,
   });
 
   const mount = (server) => {
@@ -123,7 +176,7 @@ export default defineConfig(({ command }) => ({
     react(),
     tailwindcss(),
     ...(command === 'serve'
-      ? [basicSsl(), jsonFileStore(), autoImport(), pushNotifications(), publicSharePages()]
+      ? [basicSsl(), localAuth(), jsonFileStore(), autoImport(), pushNotifications(), publicSharePages()]
       : []),
   ],
   server: {

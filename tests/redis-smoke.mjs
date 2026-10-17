@@ -74,16 +74,33 @@ const csvPort = await listen(csvServer);
 process.env.UPSTASH_REDIS_REST_URL = `http://127.0.0.1:${redisPort}`;
 process.env.UPSTASH_REDIS_REST_TOKEN = 'test-token';
 process.env.CRON_SECRET = 'secret-123';
+// مفتاح توقيع الجلسات: أصبح إلزامياً لأن نقطة البيانات مغلقة بلا جلسة صحيحة
+process.env.AUTH_SECRET = 'test-secret-0123456789-0123456789';
 delete process.env.STORE_TOKEN;
 
 const storeApi = (await import('../api/store.js')).default;
 const leadSourceApi = (await import('../api/lead-source.js')).default;
 const cronApi = (await import('../api/cron.js')).default;
+const authApi = (await import('../api/auth.js')).default;
 const { createStoreHandler } = await import('../server/store.js');
+const { hashPassword } = await import('../server/auth.js');
 
 // ---------- استدعاء دالة استضافة كما يفعل Vercel ----------
+// كوكي الجلسة بعد تسجيل الدخول — يُرسل مع كل طلب بيانات كما يفعل المتصفح
+let AUTH_COOKIE = '';
+
 const call = async (handler, { method = 'GET', url = '/api/store', body, headers = {} } = {}) => {
-  const req = { method, url, headers: { 'x-forwarded-for': '10.0.0.1', ...headers }, body, socket: {} };
+  const req = {
+    method,
+    url,
+    headers: {
+      'x-forwarded-for': '10.0.0.1',
+      ...(AUTH_COOKIE ? { cookie: AUTH_COOKIE } : {}),
+      ...headers,
+    },
+    body,
+    socket: {},
+  };
   let payload = '';
   const res = {
     statusCode: 0,
@@ -102,7 +119,7 @@ const call = async (handler, { method = 'GET', url = '/api/store', body, headers
   } catch {
     json = null;
   }
-  return { status: res.statusCode, json };
+  return { status: res.statusCode, json, headers: res.headers };
 };
 
 // ---------- محاكي Graph API لميتا (مسار الكامبين بالتوكن) ----------
@@ -177,7 +194,11 @@ function installGraphMock() {
   };
 }
 
+// نفس ما يرسله أي جهاز حقيقي: قائمة المستخدمين كما في المتصفح (بلا أي كلمة مرور)
+// حساب الإدارة أولها كي تبقى جلسة الاختبار صالحة طوال التشغيل — تماماً كما في الواقع.
+const adminRow = { id: 'admin-1', username: 'admin', name: 'مدير النظام', role: 'admin', isActive: true };
 const sales = [
+  adminRow,
   { id: 'u1', name: 'أحمد', role: 'sales', isActive: true },
   { id: 'u2', name: 'منى', role: 'sales', isActive: true },
   { id: 'u3', name: 'مدير', role: 'admin', isActive: true },
@@ -195,26 +216,68 @@ const check = (label, condition, extra = '') => {
 };
 
 try {
+  // ===== ٠) الأمان: بلا جلسة لا تُقدَّم أي بيانات، والدخول يجري على السيرفر =====
+  const anonymous = await call(storeApi, { headers: { cookie: '' } });
+  check('بلا جلسة: قراءة البيانات مرفوضة (401)', anonymous.status === 401, JSON.stringify(anonymous.json));
+  const anonymousWrite = await call(storeApi, {
+    method: 'POST',
+    headers: { cookie: '' },
+    body: { key: 'crm_clients', value: [{ id: 'hack' }] },
+  });
+  check('بلا جلسة: الكتابة في البيانات مرفوضة (401)', anonymousWrite.status === 401);
+
+  // حساب إدارة بكلمة مرور قوية (نصاً صريحاً هنا ليُختبر الترقية التلقائية إلى بصمة مشفّرة)
+  redisData.set('crm:store:data', JSON.stringify({ crm_users: [{ ...adminRow, password: 'StrongPass123' }] }));
+  redisData.set('crm:store:version', '0');
+
+  const badLogin = await call(authApi, {
+    method: 'POST',
+    url: '/api/auth?action=login',
+    body: { username: 'admin', password: 'wrong-password', loginType: 'admin' },
+  });
+  check('دخول بكلمة مرور خطأ يرفض (401)', badLogin.status === 401, JSON.stringify(badLogin.json));
+
+  const login = await call(authApi, {
+    method: 'POST',
+    url: '/api/auth?action=login',
+    body: { username: 'admin', password: 'StrongPass123', loginType: 'admin' },
+  });
+  AUTH_COOKIE = String(login.headers['set-cookie'] || '').split(';')[0];
+  check(
+    'دخول صحيح عبر السيرفر يُصدر كوكي جلسة HttpOnly',
+    login.status === 200 && AUTH_COOKIE.startsWith('crm_session=') && /HttpOnly/i.test(String(login.headers['set-cookie'])),
+    JSON.stringify(login.json)
+  );
+  check('كلمة المرور لا تُرسل للمتصفح في رد الدخول', !JSON.stringify(login.json).includes('password'), JSON.stringify(login.json));
+
+  const storedAfterLogin = JSON.parse(redisData.get('crm:store:data'));
+  check(
+    'كلمة المرور النصية تُرقّى تلقائياً إلى بصمة مشفّرة في القاعدة',
+    String(storedAfterLogin.crm_users[0].password).startsWith('sha256:')
+  );
+
   // ===== ١) المزامنة: كتابة ثم قراءة من قاعدة البيانات =====
   const write = await call(storeApi, {
     method: 'POST',
     body: { data: { crm_users: sales, crm_clients: [], crm_assigned_leads: [] } },
   });
-  check('حفظ البيانات في القاعدة ينجح', write.status === 200 && write.json.version === 1, JSON.stringify(write.json));
+  // الإصدار ١ جاء من ترقية كلمة المرور النصية عند الدخول، فالكتابة ترفعه إلى ٢
+  check('حفظ البيانات في القاعدة ينجح', write.status === 200 && write.json.version === 2, JSON.stringify(write.json));
 
   const read = await call(storeApi);
   check(
     'قراءة البيانات ترجع نفس المستخدمين المحفوظين',
-    read.status === 200 && read.json.data.crm_users.length === 3,
+    read.status === 200 && read.json.data.crm_users.length === 4,
     JSON.stringify(read.json).slice(0, 120)
   );
+  check('كلمات المرور لا تظهر في أي رد للمتصفح', !JSON.stringify(read.json).includes('password'));
 
   // ===== ٢) حفظ مفتاح واحد (تحديث سجل واحد من جهاز) =====
   const one = await call(storeApi, {
     method: 'POST',
     body: { key: 'crm_clients', value: [{ id: 'c1', name: 'عميل', phone: '01000000001' }] },
   });
-  check('تحديث مفتاح واحد يرفع الإصدار', one.status === 200 && one.json.version === 2);
+  check('تحديث مفتاح واحد يرفع الإصدار', one.status === 200 && one.json.version === 3);
 
   // ===== ٣) بوابة الحماية الاختيارية =====
   const gated = createStoreHandler({

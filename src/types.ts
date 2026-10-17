@@ -104,6 +104,8 @@ export interface Property {
   bathrooms?: string;
   finishing: 'fully-finished' | 'semi-finished' | 'core-and-shell';
   delivery: 'immediate' | 'delayed';
+  // نطاق الظهور: 'team' = لكل الفريق (الافتراضي)، 'private' = خاصة بصاحبها والإدارة
+  scope?: 'team' | 'private';
   createdAt: string;
 }
 

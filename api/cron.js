@@ -1,7 +1,8 @@
 // ===== المُشغّل الدوري: توزيع الأرقام تلقائياً ٢٤/٧ بلا أي متصفح مفتوح =====
 // Vercel المجاني يسمح بمهمة دورية واحدة يومياً فقط، لذلك نعتمد على خدمة جدولة
 // خارجية مجانية (Zeabur cron / cron-job.org / GitHub Actions) تنادي هذا الرابط
-// كل ٥ دقائق. الرابط محميّ بمفتاح سري حتى لا يستطيع أحد إغراق حساب فيسبوك.
+// كل دقيقة — الإشعارات توصل في وقتها، وسحب الأرقام يظل ٢٤/٧.
+// الرابط محميّ بمفتاح سري حتى لا يستطيع أحد إغراق حساب فيسبوك.
 //
 // الإعداد (مرة واحدة):
 //   1) أضف متغيّر بيئة على Vercel باسم CRON_SECRET بقيمة عشوائية طويلة.
@@ -15,8 +16,11 @@
 import { CHANNELS, isChannelOn, normalizeConfig, publicConfig, runAutoImportCore } from '../server/leadSource.js';
 import { redisJsonStore, redisStorage, safeEqual } from '../server/store.js';
 import { supabaseJsonStore, supabaseStorage } from '../server/supabase.js';
+import { processPushesOnce } from '../server/push.js';
 
 const CONFIG_KEY = 'crm:lead-source:config';
+const VAPID_KEY = 'crm:push:vapid';
+const PUSH_STATE_KEY = 'crm:push:state';
 
 const reply = (res, status, payload) => {
   res.statusCode = status;
@@ -61,18 +65,38 @@ export default async function handler(req, res) {
     }
 
     const config = normalizeConfig(await configStore.load());
+
     // كل قناة لها مشغّلها: يكفي أن تكون قناة واحدة مفعّلة (فيسبوك أو إنستجرام)
-    if (!CHANNELS.some((channel) => isChannelOn(config, channel))) {
-      return reply(res, 200, { ok: true, skipped: true, reason: 'السحب التلقائي متوقف (فيسبوك وإنستجرام)' });
+    // السحب التلقائي والتذكيرات مستقلان، فلا يوقف توقف القنوات إرسال التذكيرات.
+    let summary = null;
+    if (CHANNELS.some((channel) => isChannelOn(config, channel))) {
+      summary = await runAutoImportCore({
+        storage,
+        config,
+        saveConfig: (updated) => configStore.save(updated),
+      });
     }
 
-    const summary = await runAutoImportCore({
-      storage,
-      config,
-      saveConfig: (updated) => configStore.save(updated),
-    });
+    // ===== التذكيرات ورسائل الشات: تُرسَل من المُشغّل الدوري (كل دقيقة) =====
+    // هنا يأتي دور processPushesOnce على الاستضافة (بديل setInterval المحلي):
+    // يقرأ التذكيرات المستحقة من القاعدة ويرسل إشعاراً لكل جهاز المسجَّل مرة واحدة فقط.
+    let push = null;
+    try {
+      const vapidStore = useSupabase ? supabaseJsonStore(process.env, VAPID_KEY) : redisJsonStore(process.env, VAPID_KEY);
+      const stateStore = useSupabase ? supabaseJsonStore(process.env, PUSH_STATE_KEY) : redisJsonStore(process.env, PUSH_STATE_KEY);
+      push = await processPushesOnce({ storage, vapidStore, stateStore });
+    } catch (error) {
+      // فشل الإشعارات لا يوقف سحب الأرقام — يُسجَّل ويُعاد في الدورة القادمة
+      push = { error: String(error?.message || error) };
+    }
 
-    return reply(res, 200, { ok: true, summary, config: publicConfig(config) });
+    return reply(res, 200, {
+      ok: true,
+      skipped: summary === null,
+      summary,
+      push,
+      config: publicConfig(config),
+    });
   } catch (error) {
     return reply(res, 500, { ok: false, error: String(error?.message || error) });
   }

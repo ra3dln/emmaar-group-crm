@@ -13,13 +13,14 @@ import {
   LogIn, Undo2, UserCog, MessageCircle, Send, ArrowRight, Moon, Sun, Menu,
   Rows, LayoutList, List, ShieldAlert, MapPinOff, Navigation,
   ChevronRight, ChevronLeft,
+  Workflow, BellRing, ClipboardList, MessagesSquare, Share2, LineChart,
   Megaphone, Globe, Link2, Facebook, ChevronDown
 } from 'lucide-react';
 import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, TabType } from './types';
-import { isOnline, SYNC_EVENT, pushKey } from './sync';
+import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey } from './sync';
 import { buildPreview, buildSampleCsv, buildFakeCampaignCsv, decodeText, parseTable, type ImportPreview } from './leadImport';
 import { alarm, loadAlarmSettings, saveAlarmSettings, DEFAULT_ALARM_SETTINGS, type AlarmSettings } from './alarm';
-import { enablePush, disablePush, pushState, sendTestPush, pushSupported, registerWorker, type PushState } from './push';
+import { enablePush, disablePush, pushState, sendTestPush, pushSupported, registerWorker, resyncPush, localNotification, type PushState } from './push';
 
 // ===== الحضور والانصراف =====
 const ATTENDANCE_KEY = 'crm_attendance';
@@ -191,20 +192,10 @@ const hashPassword = async (plain: string, salt?: string): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${s}::${plain}`));
   return `${HASH_PREFIX}${s}:${toHex(digest)}`;
 };
-const isHashedPassword = (v?: string): boolean => typeof v === 'string' && v.startsWith(HASH_PREFIX);
-// يتحقق من كلمة المرور ويُرجع البصمة المحدّثة (لترقية كلمة المرور القديمة غير المشفرة تلقائياً)
-const verifyPassword = async (plain: string, stored?: string): Promise<{ ok: boolean; upgraded?: string }> => {
-  if (!stored) return { ok: false };
-  if (!isHashedPassword(stored)) {
-    const ok = stored === plain;
-    return ok ? { ok, upgraded: await hashPassword(plain) } : { ok: false };
-  }
-  const rest = stored.slice(HASH_PREFIX.length);
-  const idx = rest.indexOf(':');
-  if (idx < 0) return { ok: false };
-  const again = await hashPassword(plain, rest.slice(0, idx));
-  return { ok: again === stored };
-};
+// ملاحظة أمنية: لا يوجد في المتصفح أي **تحقق** من كلمة المرور ولا مقارنة للبصمات.
+// التحقق كله يحدث على السيرفر (server/auth.js + server/authApi.js)، فحتى لو عدّل أحدهم
+// كود الصفحة من Inspect لن يستطيع تسجيل دخول أو استخراج أي بيانات. والبصمة المستخدمة هنا
+// هي فقط لتشفير كلمة مرور **حساب جديد** قبل إرساله (ولا تُقبل أبداً لحساب موجود).
 
 // ===== الرتب الثلاث: CEO / Team Leader / Sales Agent =====
 // الرتبة تُشتق من الدور الداخلي (admin = CEO، supervisor = Team Leader، sales = Sales Agent)
@@ -1069,19 +1060,11 @@ const vibrateDevice = () => {
   }
 };
 
-const sendNotification = (title: string, body: string) => {
-  if (Notification.permission === 'granted') {
-    const notification = new Notification(title, {
-      body,
-      tag: 'crm-reminder',
-      requireInteraction: true,
-    });
-
-    notification.onclick = () => {
-      window.focus();
-      notification.close();
-    };
-  }
+// إشعار الجهاز: يمر عبر Service Worker (يعمل على آيفون وأندرويد)
+// وبصامت — نوتفكيشن فقط بلا رنة أو اهتزاز متكرر.
+const sendNotification = (title: string, body: string, tag?: string) => {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  void localNotification(title, body, tag || `crm-${Date.now()}`);
 };
 
 function App() {
@@ -1125,19 +1108,77 @@ function App() {
   
   const [searchTerm, setSearchTerm] = useState('');
   const [propertySearch, setPropertySearch] = useState('');
+  // بند ٤: الحالة المفتوحة — صفحة فيها كل أرقام الحالة دي
+  const [statusBoard, setStatusBoard] = useState<string | null>(null);
+  // صوت رسائل المحادثة فقط — التذكيرات نوتفكيشن صامتة (بند ٦) وما بتستخدمش الصوت.
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [notificationPermission, setNotificationPermission] = useState(false);
   const [inAppNotification, setInAppNotification] = useState<{title: string, body: string} | null>(null);
 
   // ===== المنبه والإشعارات الحقيقية =====
   const [alarmSettings, setAlarmSettings] = useState<AlarmSettings>(() => loadAlarmSettings());
-  const [activeAlarm, setActiveAlarm] = useState<{ id: string; title: string; body: string; phone: string; quiet: boolean } | null>(null);
+  const [activeAlarm, setActiveAlarm] = useState<{ id: string; title: string; body: string; phone: string; quiet: boolean; firedAt: number } | null>(null);
   const [showNotifyPanel, setShowNotifyPanel] = useState(false);
   const [notifState, setNotifState] = useState<PushState>('default');
   const [notifBusy, setNotifBusy] = useState(false);
   const [notifMessage, setNotifMessage] = useState('');
 
   const alarmNotifiedKey = 'crm_alarmed';
+
+  // ----- بند ٦ (التذكيرات نوتفكيشن فقط) وبند ٨ (التأخير بعد ٥ دقايق) -----
+  const reminderFiredKey = 'crm_reminder_fired';
+  const reminderActedKey = 'crm_reminder_acted';
+  const REMINDER_ACTION_WINDOW_MS = 5 * 60 * 1000; // لو مافيش إجراء خلال ٥ دقايق → «متأخر»
+
+  const readIdMap = (key: string): Record<string, string> => {
+    try {
+      return JSON.parse(localStorage.getItem(key) || '{}');
+    } catch {
+      return {};
+    }
+  };
+
+  // لحظة وصول التذكير: منها يبدأ عدّاد الخمس دقايق
+  const markReminderFired = (id: string) => {
+    const map = readIdMap(reminderFiredKey);
+    if (!map[id]) {
+      map[id] = new Date().toISOString();
+      localStorage.setItem(reminderFiredKey, JSON.stringify(map));
+    }
+  };
+
+  // أي إجراء (إتمام / تأجيل / فتح التذكير) يقفل نافذة الخمس دقايق
+  const markReminderAction = (id: string) => {
+    const map = readIdMap(reminderActedKey);
+    map[id] = new Date().toISOString();
+    localStorage.setItem(reminderActedKey, JSON.stringify(map));
+  };
+
+  // تذكير مرّ عليه ٥ دقايق بلا أي إجراء → يُسجّل «متأخر» مرة واحدة
+  const applyReminderDelays = () => {
+    try {
+      const all: Reminder[] = JSON.parse(localStorage.getItem('crm_reminders') || '[]');
+      const fired = readIdMap(reminderFiredKey);
+      const acted = readIdMap(reminderActedKey);
+      let delayedName = '';
+      const next = all.map((r) => {
+        if (r.isCompleted || r.isDelayed) return r;
+        const at = fired[r.id];
+        if (!at || acted[r.id]) return r;
+        if (Date.now() - new Date(at).getTime() < REMINDER_ACTION_WINDOW_MS) return r;
+        delayedName = delayedName || r.clientName || '';
+        return { ...r, isDelayed: true, delayCount: (r.delayCount || 0) + 1 };
+      });
+      if (delayedName) {
+        localStorage.setItem('crm_reminders', JSON.stringify(next));
+        setInAppNotification({ title: '⏱ تأخير — مافيش إجراء على التذكير', body: `${delayedName} اتسجّل «متأخر»` });
+        setTimeout(() => setInAppNotification(null), 8000);
+        if (currentUser) loadData();
+      }
+    } catch {
+      /* لا شيء */
+    }
+  };
 
   const readReminders = (): Reminder[] => {
     try {
@@ -1147,42 +1188,41 @@ function App() {
     }
   };
 
-  // تشغيل المنبه لتذكير معيّن: يرنّ باستمرار حتى الإسكات أو الإتمام أو انتهاء المدة
+  // بند ٦: التذكير نوتفكيشن فقط — بلا رنة وبلا صوت متكرر.
+  // بنعرض بطاقة التذكير على الشاشة + إشعار الجهاز، والعدّاد بيبدأ فوراً.
   const startAlarm = (reminder: any) => {
-    const settings = loadAlarmSettings();
-    if (!settings.enabled) return;
-    const title = `⏰ حان وقت الاتصال بـ ${reminder.clientName || 'عميل'}`;
+    const title = ` حان وقت الاتصال بـ ${reminder.clientName || 'عميل'}`;
     const body = `${reminder.clientPhone || ''}${reminder.note ? ' — ' + reminder.note : ''}`.trim();
-    setActiveAlarm({ id: reminder.id, title, body, phone: reminder.clientPhone || '', quiet: false });
-    const started = alarm.start({
-      sound: settings.sound,
-      volume: settings.volume,
-      durationSec: settings.durationSec,
-      vibrate: settings.vibrate,
-      title,
-      body,
-      onEnd: () => setActiveAlarm((cur) => (cur && cur.id === reminder.id ? { ...cur, quiet: true } : cur)),
-    });
-    if (!started) setActiveAlarm((cur) => (cur ? { ...cur, quiet: true } : cur));
+    alarm.stop(); // لو فيه رنة قديمة شغّالة من نسخة أقدم، تتقفل
+    setActiveAlarm({ id: reminder.id, title, body, phone: reminder.clientPhone || '', quiet: true, firedAt: Date.now() });
+    markReminderFired(reminder.id);
   };
 
   const startAlarmById = (id: string) => {
     const reminder = readReminders().find((r) => r.id === id);
-    if (reminder) startAlarm(reminder);
+    if (reminder) {
+      markReminderAction(id); // فتح التذكير = إجراء
+      startAlarm(reminder);
+    }
   };
 
   const completeReminder = (id: string) => {
+    markReminderAction(id);
     const next = readReminders().map((r) => (r.id === id ? { ...r, isCompleted: true } : r));
     localStorage.setItem('crm_reminders', JSON.stringify(next));
+    void pushKey('crm_reminders');
     loadData();
   };
 
   const snoozeReminder = (id: string, minutes: number) => {
+    // التأجيل إجراء متعمد: يقفل عدّاد الخمس دقائق ولا يُحسب «متأخر».
+    markReminderAction(id);
     const next = readReminders().map((r) => {
       if (r.id !== id) return r;
-      return { ...r, dateTime: new Date(Date.now() + minutes * 60000).toISOString(), isDelayed: true, delayCount: (r.delayCount || 0) + 1 };
+      return { ...r, dateTime: new Date(Date.now() + minutes * 60000).toISOString() };
     });
     localStorage.setItem('crm_reminders', JSON.stringify(next));
+    void pushKey('crm_reminders');
     // نُخرجه من قائمة «تم إشعاره» حتى يرنّ مرة أخرى في موعده الجديد
     try {
       const notified = JSON.parse(localStorage.getItem('crm_notified') || '[]').filter((item: string) => item !== id);
@@ -1196,41 +1236,13 @@ function App() {
   };
 
   const hideAlarm = () => {
+    if (activeAlarm) markReminderAction(activeAlarm.id);
     alarm.stop();
     setActiveAlarm(null);
   };
 
-  // تجهيز الصوت: المتصفح يمنع الصوت قبل أول تفاعل من المستخدم،
-  // فبمجرد أي لمسة نفتح الصوت — ولو كان هناك منبه ظاهر وصامت نُعيد رنّته فوراً.
-  const alarmRef = useRef<{ id: string; title: string; body: string; quiet: boolean } | null>(null);
-  alarmRef.current = activeAlarm;
-
-  useEffect(() => {
-    const unlock = () => {
-      alarm.unlock();
-      const current = alarmRef.current;
-      if (current && !current.quiet && !alarm.isRinging) {
-        const settings = loadAlarmSettings();
-        alarm.start({
-          sound: settings.sound,
-          volume: settings.volume,
-          durationSec: settings.durationSec,
-          vibrate: settings.vibrate,
-          title: current.title,
-          body: current.body,
-          onEnd: () => setActiveAlarm((cur) => (cur && cur.id === current.id ? { ...cur, quiet: true } : cur)),
-        });
-      }
-    };
-    window.addEventListener('pointerdown', unlock);
-    window.addEventListener('keydown', unlock);
-    window.addEventListener('touchstart', unlock);
-    return () => {
-      window.removeEventListener('pointerdown', unlock);
-      window.removeEventListener('keydown', unlock);
-      window.removeEventListener('touchstart', unlock);
-    };
-  }, []);
+  // ملاحظة: كان فيه هنا «فتح الصوت ثم إعادة الرنّة» — اتشال خلاص
+  // لأن التذكيرات بقت نوتفكيشن فقط (بند ٦).
 
   // فتح المنبه تلقائياً لو وصل المستخدم من إشعار
   useEffect(() => {
@@ -1249,7 +1261,6 @@ function App() {
       const msg = event.data || {};
       if (msg.type === 'silence') {
         alarm.stop();
-        setActiveAlarm((cur) => (cur && (!msg.id || cur.id === msg.id) ? { ...cur, quiet: true } : cur));
       }
       if (msg.type === 'snooze' && msg.id) snoozeReminder(msg.id, Number(msg.minutes) || loadAlarmSettings().snoozeMin);
       if (msg.type === 'open-alarm' && msg.id) startAlarmById(msg.id);
@@ -1258,11 +1269,13 @@ function App() {
     return () => navigator.serviceWorker.removeEventListener('message', onMessage);
   }, []);
 
-  // حالة الإشعارات على هذا الجهاز
+  // حالة الإشعارات على هذا الجهاز + إعادة تسجيل الاشتراك تلقائياً عند كل دخول
+  // (آيفون يجدّد الاشتراك بعد تحديث التطبيق، والقاعدة قد تكون اتغيّرت — بهذا
+  // يظل الجهاز مسجّلاً بلا أن يضغط المستخدم «تفعيل» من جديد).
   useEffect(() => {
     if (!currentUser) return;
-    pushState().then(setNotifState).catch(() => {});
-  }, [currentUser, showNotifyPanel]);
+    resyncPush({ id: currentUser.id, name: currentUser.name }).then(setNotifState).catch(() => {});
+  }, [currentUser?.id, showNotifyPanel]);
   const [loginAnimation, setLoginAnimation] = useState<User | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [deletingUser, setDeletingUser] = useState<User | null>(null);
@@ -1296,17 +1309,56 @@ function App() {
         localStorage.removeItem('impersonator_user');
       }
     }
-    const user = localStorage.getItem('current_user');
-    if (user) {
-      const restored: User = JSON.parse(user);
-      setCurrentUser(restored);
-      // عند تحديث الصفحة يبدأ كل دور من التبويب المناسب له بدل صفحة فارغة
-      setActiveTab(restored.role === 'sales' ? 'dashboard' : 'admin-users');
-    }
-    
+
     if ('Notification' in window && Notification.permission === 'granted') {
       setNotificationPermission(true);
     }
+  }, []);
+
+  // ===== التحقق من الجلسة **قبل** إظهار أي بيانات =====
+  // الحماية الحقيقية: بيانات العملاء لا تُقرأ إلا بكوكي جلسة صادر من السيرفر.
+  // فلا يكفي أن يكون في هذا المتصفح «جلسة» قديمة، ولا أن يعرف أحدهم رابط الموقع.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let authorized = false;
+      let reachable = true;
+      try {
+        const res = await fetch(`${AUTH_API}?action=me`, { cache: 'no-store', credentials: 'same-origin' });
+        const data: any = await res.json().catch(() => null);
+        if (res.ok && data?.ok) authorized = true;
+      } catch {
+        // تعذّر الوصول للسيرفر (انقطاع مؤقت) — لا نُخرج المستخدم، تبقى جلسته على جهازه
+        reachable = false;
+      }
+      if (cancelled) return;
+      if (!reachable) return;
+      if (!authorized) {
+        handleLogout();
+        return;
+      }
+      markAuthorized();
+      // الجلسة سليمة: نستعيد المستخدم المحفوظ على هذا الجهاز
+      try {
+        const stored = localStorage.getItem('current_user');
+        if (!stored) return;
+        const restored: User = JSON.parse(stored);
+        setCurrentUser(restored);
+        setActiveTab(restored.role === 'sales' ? 'dashboard' : 'admin-users');
+      } catch {
+        localStorage.removeItem('current_user');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // السيرفر رفض أي طلب بيانات (لا جلسة) => نخفي كل شيء ونعرض شاشة الدخول فوراً
+  useEffect(() => {
+    const onAuthRequired = () => handleLogout();
+    window.addEventListener(AUTH_EVENT, onAuthRequired);
+    return () => window.removeEventListener(AUTH_EVENT, onAuthRequired);
   }, []);
 
   // عند وصول تحديثات من جهاز آخر (مزامنة) نعيد تحميل البيانات فوراً
@@ -1348,21 +1400,22 @@ function App() {
           notifiedIds.push(reminder.id);
           localStorage.setItem('crm_notified', JSON.stringify(notifiedIds));
           
-          if (soundEnabled) playNotificationSound();
-          vibrateDevice();
+          // نوتفكيشن فقط: إشعار الجهاز + بطاقة على الشاشة، بلا صوت
           sendNotification(
-            '⏰ تذكير بالاتصال',
-            `حان وقت الاتصال بـ ${reminder.clientName}\n${reminder.clientPhone}`
+            ` حان وقت الاتصال بـ ${reminder.clientName}`,
+            `${reminder.clientPhone}${reminder.note ? ' — ' + reminder.note : ''}`
           );
+          // بداية عدّاد الخمس دقايق
+          markReminderFired(reminder.id);
           
           setInAppNotification({
-            title: `⏰ حان وقت الاتصال بـ ${reminder.clientName}`,
+            title: ` حان وقت الاتصال بـ ${reminder.clientName}`,
             body: `${reminder.clientPhone} - ${reminder.note || ''}`
           });
           
           setTimeout(() => setInAppNotification(null), 10000);
 
-          // المنبه: يرنّ باستمرار (كمنبه حقيقي) لتذكيراتك أنت حتى الإسكات أو الإتمام
+          // بطاقة التذكير على الشاشة (بلا رنة) لتذكيراتك أنت
           if (reminder.userId === currentUser.id) {
             try {
               const alarmed = JSON.parse(localStorage.getItem('crm_alarmed') || '[]');
@@ -1377,6 +1430,9 @@ function App() {
           }
         }
       });
+
+      // بند ٨: تذكير بلا إجراء خلال ٥ دقايق يتسجّل «متأخر»
+      applyReminderDelays();
     };
     
     checkReminders();
@@ -1436,11 +1492,29 @@ function App() {
         )
       );
     }
-    // العقارات مشتركة: كل السيلز والمدير يرون نفس قائمة العقارات مع اسم من أضافها
-    setProperties(allProperties);
+    // العقارات: عقارات الفريق تظهر للجميع، والعقار الخاص لا يخرج من جهاز صاحبه
+    // ولا يُحمَّل أصلاً في متصفح مندوب آخر (الإدارة وقائد الفريق يرون عقارات فريقهم).
+    const ownerOf = (p: Property) => p.userId;
+    const teamIds = currentUser.team
+      ? new Set<string>([currentUser.id, ...allUsers.filter((u: User) => u.team === currentUser.team).map((u: User) => u.id)])
+      : null;
+    setProperties(
+      allProperties.filter((p: Property) => {
+        if (p.scope !== 'private') return true;
+        if (currentUser.role === 'admin') return true;
+        if (currentUser.role === 'supervisor') return !!teamIds && teamIds.has(ownerOf(p));
+        return ownerOf(p) === currentUser.id;
+      })
+    );
   };
 
   const handleLogout = () => {
+    // إنهاء الجلسة على السيرفر أيضاً: الكوكي يُبطَل فلا تُقرأ بيانات بلا دخول جديد
+    try {
+      void fetch(`${AUTH_API}?action=logout`, { method: 'POST', credentials: 'same-origin' });
+    } catch {
+      /* لا شيء */
+    }
     localStorage.removeItem('current_user');
     // الخروج النهائي ينهي أيضاً أي «دخول لحساب سيلز»
     localStorage.removeItem('impersonator_user');
@@ -1696,8 +1770,8 @@ function App() {
     const latest = fresh[fresh.length - 1];
     if (soundEnabled) playNotificationSound();
     vibrateDevice();
-    sendNotification(`💬 رسالة من ${latest.fromName}`, latest.text.slice(0, 120));
-    setInAppNotification({ title: `💬 رسالة من ${latest.fromName}`, body: latest.text.slice(0, 120) });
+    sendNotification(` رسالة من ${latest.fromName}`, latest.text.slice(0, 120));
+    setInAppNotification({ title: ` رسالة من ${latest.fromName}`, body: latest.text.slice(0, 120) });
     setTimeout(() => setInAppNotification(null), 10000);
   }, [messages, currentUser, soundEnabled]);
 
@@ -1886,7 +1960,7 @@ function App() {
 
   // حفظ مكالمة: سجل مشترك للإدارة + حدث في الخط الزمني للعميل + تذكير بموعد الاتصال القادم
   // + الكومنت ينزل تلقائياً كبطاقة في «الفيدباك اليومي» (فوق: خط العميل الزمني ينزل هو كذلك من addClientActivity)
-  const handleSaveCall = (payload: { result: 'answered' | 'no-answer'; comment: string; nextCallAt: string }) => {
+  const handleSaveCall = (payload: { result: 'answered' | 'no-answer'; comment: string; status?: string; nextCallAt: string }) => {
     const target = callClient;
     if (!target) return;
     // «لم يرد» تُكتب في الكومنتات تلقائياً — حتى لو لم يكتب المندوب شيئاً
@@ -1909,18 +1983,24 @@ function App() {
     addClientActivity(
       target.id,
       'call',
-      payload.result === 'answered' ? 'اتصال: تم الرد ✅' : 'اتصال: لم يرد ❌',
+      payload.result === 'answered' ? 'اتصال: تم الرد ' : 'اتصال: لم يرد ',
       currentUser.name
     );
+    // الحالة المختارة من القائمة المنسدلة (follow up / done deal …) هي الحالة المسجّلة،
+    // ولو مافيش اختيار نرجع للحالة الافتراضية حسب نتيجة الاتصال.
+    const pickedStatus = payload.status || (payload.result === 'answered' ? 'follow-up' : 'no-answer');
     if (callComment) {
-      // بطاقة واحدة فقط في «الفيدباك اليومي» منسوبة لمن كتب الكومنت، وبحالة واضحة
-      // على شريط الفيدباك: «no answer» عند عدم الرد، و«follow up» عند الرد.
       addClientActivity(target.id, 'feedback', `من المكالمة: ${callComment}`, currentUser.name, {
         authorId: currentUser.id,
         callStatus: payload.result === 'answered' ? 'called' : 'no-answer',
         cardId: log.id,
-        status: payload.result === 'answered' ? 'follow-up' : 'no-answer',
+        status: pickedStatus,
       });
+    }
+    // المرحلة تتحرّك تلقائياً مع الحالة المختارة (زي صندوق الفيدباك)
+    const pickedMeta = FEEDBACK_STATUS_BY_ID[pickedStatus];
+    if (pickedMeta?.stage && target.stage !== pickedMeta.stage) {
+      handleUpdateClientStage(target.id, pickedMeta.stage);
     }
 
     if (payload.nextCallAt) {
@@ -1943,7 +2023,7 @@ function App() {
     }
 
     setInAppNotification({
-      title: '✅ تم تسجيل الاتصال',
+      title: ' تم تسجيل الاتصال',
       body: `كومنتك اتسجلت في الفيدباك اليومي — ${target.name}`,
     });
     setTimeout(() => setInAppNotification(null), 6000);
@@ -1969,20 +2049,20 @@ function App() {
             exit={{ opacity: 0, y: -100 }}
             className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4"
           >
-            <div className="glass-card rounded-2xl p-4 border-purple-400/50 glow-primary">
+            <div className="panel p-4 border-[var(--brand-primary-soft)] glow-primary">
               <div className="flex items-start gap-3">
                 <motion.div
                   animate={{ scale: [1, 1.2, 1] }}
                   transition={{ duration: 0.5, repeat: Infinity }}
                   className="w-10 h-10 gradient-primary rounded-full flex items-center justify-center"
                 >
-                  <Bell className="w-5 h-5 text-white" />
+                  <Bell className="w-5 h-5 text-[var(--text-strong)]" />
                 </motion.div>
                 <div className="flex-1">
-                  <p className="font-bold text-white text-sm">{inAppNotification.title}</p>
-                  <p className="text-gray-300 text-xs mt-1">{inAppNotification.body}</p>
+                  <p className="font-bold text-[var(--text-strong)] text-sm">{inAppNotification.title}</p>
+                  <p className="text-[var(--text)] text-xs mt-1">{inAppNotification.body}</p>
                 </div>
-                <button onClick={() => setInAppNotification(null)} className="p-1 hover:bg-white/10 rounded-lg">
+                <button onClick={() => setInAppNotification(null)} className="p-1 hover:bg-[var(--tint-2)] rounded-[var(--r-sm)]">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -1993,14 +2073,14 @@ function App() {
 
       {/* شريط «أنت داخل حساب سيلز» — يظل ظاهراً في أعلى الشاشة حتى ترجع للإدارة */}
       {impersonator && (
-        <div className="sticky top-0 z-50 bg-gradient-to-l from-amber-500/30 via-purple-600/30 to-amber-500/30 border-b-2 border-amber-400/60 backdrop-blur-md shadow-lg">
+        <div className="sticky top-0 z-50 bg-amber-400/10 border-b-2 border-amber-400/60">
           <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2 sm:py-2.5 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs sm:text-sm min-w-0">
               <UserCog className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300 shrink-0" />
-              <span className="text-white font-bold truncate">
+              <span className="text-[var(--text-strong)] font-bold truncate">
                 أنت الآن داخل حساب <span className="text-amber-300">{currentUser.name}</span>
               </span>
-              <span className="hidden lg:inline text-[11px] text-gray-200/80">
+              <span className="hidden lg:inline text-[11px] text-[var(--text)]/80">
                 — ما تراه الآن هو ما يراه هذا الحساب بالضبط
               </span>
             </div>
@@ -2009,7 +2089,7 @@ function App() {
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
                 onClick={handleReturnToAdmin}
-                className="bg-amber-400 text-slate-900 px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl font-bold text-[11px] sm:text-xs flex items-center gap-1.5 sm:gap-2 hover:bg-amber-300 transition-colors shadow"
+                className="bg-amber-400 text-slate-900 px-3 sm:px-4 py-1.5 sm:py-2 rounded-[var(--r-md)] font-bold text-[11px] sm:text-xs flex items-center gap-1.5 sm:gap-2 hover:bg-amber-300 transition-colors shadow"
               >
                 <Undo2 className="w-4 h-4" />
                 <span className="sm:hidden">الرجوع للإدارة</span>
@@ -2018,7 +2098,7 @@ function App() {
               <button
                 onClick={handleLogout}
                 title="خروج نهائي من النظام"
-                className="p-1.5 sm:p-2 bg-black/30 text-gray-200 rounded-xl hover:bg-black/50 transition-colors"
+                className="p-1.5 sm:p-2 bg-black/30 text-[var(--text)] rounded-[var(--r-md)] hover:bg-black/50 transition-colors"
               >
                 <LogOut className="w-4 h-4" />
               </button>
@@ -2031,16 +2111,10 @@ function App() {
         {/* القائمة الجانبية — على يمين الشاشة */}
         <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''} ${desktopNavHidden ? 'rail' : ''}`}>
           <div className="sidebar-brand">
-            <motion.img
-              whileHover={{ rotate: 360, scale: 1.05 }}
-              transition={{ duration: 0.6 }}
-              src="/emaar-logo.jpg"
-              alt="Emaar Group"
-              className="brand-mark object-cover"
-            />
+            <img src="/emaar-logo.jpg" alt="Emaar Group" className="brand-mark object-cover" />
             <div className="min-w-0">
-              <h1 className="text-base font-extrabold gradient-text leading-tight truncate">Emaar Group CRM</h1>
-              <p className="text-[10.5px] text-gray-500 truncate">نظام CRM الخاص بشركة إعمار جروب</p>
+              <h1 className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight truncate">Emaar Group CRM</h1>
+              <p className="text-[10.5px] text-[var(--text-dim)] truncate">إعمار جروب — إدارة العملاء</p>
             </div>
           </div>
 
@@ -2072,7 +2146,7 @@ function App() {
             {impersonator && (
               <button
                 onClick={handleReturnToAdmin}
-                className="w-full flex items-center justify-center gap-2 rounded-xl bg-amber-400/15 border border-amber-400/40 text-amber-200 py-2.5 px-3 text-[11.5px] font-bold hover:bg-amber-400/25 transition-colors"
+                className="w-full flex items-center justify-center gap-2 rounded-[var(--r-md)] bg-amber-400/15 border border-amber-400/40 text-amber-200 py-2.5 px-3 text-[11.5px] font-bold hover:bg-amber-400/25 transition-colors"
               >
                 <Undo2 className="w-4 h-4 shrink-0" />
                 <span className="truncate">الرجوع لحساب: {impersonator.name}</span>
@@ -2083,15 +2157,15 @@ function App() {
               <button
                 onClick={() => setSoundEnabled(!soundEnabled)}
                 className="icon-btn !w-9 !h-9"
-                title={soundEnabled ? 'صوت التنبيه: مفعّل' : 'صوت التنبيه: مكتوم'}
+                title={soundEnabled ? 'صوت رسائل المحادثة: مفعّل' : 'صوت رسائل المحادثة: مكتوم'}
               >
                 {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
               </button>
             </div>
             <div className="user-card">
-              <span className="avatar !rounded-full">{userInitial}</span>
+              <span className="avatar">{userInitial}</span>
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold text-white truncate">{currentUser.name}</p>
+                <p className="text-xs font-bold text-[var(--text-strong)] truncate">{currentUser.name}</p>
                 <span className={`${rankClass(currentUser.role)} !mt-0.5`}>
                   {rankLabel(currentUser.role)}
                 </span>
@@ -2126,6 +2200,7 @@ function App() {
 
             <div className="min-w-0 flex-1">
               <h2 className="page-heading">{activeTabMeta?.label || 'الرئيسية'}</h2>
+              <p className="page-sub">{navGroups.find((g) => g.items.some((t) => t.id === activeTab))?.label || ''}</p>
             </div>
 
             {/* أيقونة دائرية + الاسم وتحته الرتبة (CEO / Team Leader / Sales Agent) — يظهران حتى على الهاتف */}
@@ -2145,20 +2220,14 @@ function App() {
               whileHover={{ scale: 1.05 }}
               onClick={() => { alarm.unlock(); setShowNotifyCenter(true); }}
               title="الإشعارات"
-              className={`relative p-1.5 rounded-lg border ${
-                unseenNotifCount > 0
-                  ? 'bg-purple-500/20 border-purple-500/40 text-purple-200'
-                  : 'bg-white/5 border-white/10 text-gray-400'
-              }`}
+              className="icon-btn relative"
             >
               <Bell className="w-4 h-4" />
               {unseenNotifCount > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold animate-pulse">
-                  {unseenNotifCount > 9 ? '9+' : unseenNotifCount}
-                </span>
+                <span className="topbar-badge">{unseenNotifCount > 9 ? '9+' : unseenNotifCount}</span>
               )}
               {notifState !== 'subscribed' && unseenNotifCount === 0 && (
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-400 rounded-full animate-pulse" />
+                <span className="topbar-badge is-warn" />
               )}
             </motion.button>
 
@@ -2170,13 +2239,11 @@ function App() {
               whileHover={{ scale: 1.1 }}
               onClick={() => setActiveTab(chatTab)}
               title="المحادثات"
-              className="relative p-1.5 bg-cyan-500/20 rounded-lg"
+              className="icon-btn relative top-chat-btn"
             >
-              <MessageCircle className="w-4 h-4 text-cyan-300" />
+              <MessageCircle className="w-4 h-4" />
               {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold animate-pulse">
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </span>
+                <span className="topbar-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>
               )}
             </motion.button>
 
@@ -2184,7 +2251,7 @@ function App() {
               whileHover={{ scale: 1.05 }}
               onClick={() => setShowAddClient(true)}
               title="عميل جديد"
-              className="gradient-primary text-white p-2 md:px-4 md:py-2 rounded-lg font-bold text-sm flex items-center gap-2 shadow-lg glow-primary btn-hover"
+              className="btn-primary"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden lg:inline">عميل جديد</span>
@@ -2195,9 +2262,7 @@ function App() {
               whileHover={{ scale: 1.05 }}
               onClick={impersonator ? handleReturnToAdmin : handleLogout}
               title={impersonator ? `الرجوع لحساب: ${impersonator.name}` : 'تسجيل الخروج'}
-              className={`p-1.5 rounded-lg ${
-                impersonator ? 'bg-amber-400/20 text-amber-300' : 'bg-red-500/20 text-red-400'
-              }`}
+              className="icon-btn"
             >
               {impersonator ? <Undo2 className="w-4 h-4" /> : <LogOut className="w-4 h-4" />}
             </motion.button>
@@ -2206,7 +2271,7 @@ function App() {
 
         <main className="app-content">
         <AnimatePresence mode="wait">
-          {activeTab === 'dashboard' && currentUser.role === 'sales' && <DashboardView stats={stats} clients={clients} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} />}
+          {activeTab === 'dashboard' && currentUser.role === 'sales' && <DashboardView stats={stats} clients={clients} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} onOpenStatus={setStatusBoard} onCompleteReminder={completeReminder} onActed={markReminderAction} />}
           {activeTab === 'clients' && currentUser.role === 'sales' && <ClientsView
             currentUser={currentUser}
             onRefresh={loadData}
@@ -2237,27 +2302,28 @@ function App() {
           {activeTab === 'pipeline' && currentUser.role === 'sales' && <PipelineView clients={clients} onUpdateStage={handleUpdateClientStage} />}
           {activeTab === 'properties' && <PropertiesView properties={filteredProperties} users={users} currentUser={currentUser} searchTerm={propertySearch} onSearch={setPropertySearch} onSelect={setSelectedProperty} onAdd={() => setShowAddProperty(true)} />}
           {activeTab === 'reminders' && currentUser.role === 'sales' && <RemindersView reminders={reminders} onComplete={(id: string) => {
+            markReminderAction(id);
             const target = reminders.find((r: Reminder) => r.id === id);
             if (target?.clientId) addClientActivity(target.clientId, 'reminder', 'تم تنفيذ التذكير', currentUser.name);
             const updated = reminders.map(r => r.id === id ? { ...r, isCompleted: true } : r);
             setReminders(updated);
-            localStorage.setItem('crm_reminders', JSON.stringify(JSON.parse(localStorage.getItem('crm_reminders') || '[]').map((r: Reminder) => r.id === id ? { ...r, isCompleted: true } : r)));
+            const stored = JSON.parse(localStorage.getItem('crm_reminders') || '[]')
+              .map((r: Reminder) => r.id === id ? { ...r, isCompleted: true } : r);
+            localStorage.setItem('crm_reminders', JSON.stringify(stored));
+            void pushKey('crm_reminders');
           }} onDelay={(id: string, minutes: number) => {
-            const updated = reminders.map(r => {
-              if (r.id === id) {
-                const newTime = new Date(new Date(r.dateTime).getTime() + minutes * 60000);
-                return { ...r, dateTime: newTime.toISOString(), isDelayed: true, delayCount: r.delayCount + 1 };
-              }
-              return r;
+            // «تأجيل» إجراء مقصود — مش تأخير. عدّاد التأخير يزيد فقط عند
+            // مرور ٥ دقائق بلا أي إجراء (applyReminderDelays).
+            markReminderAction(id);
+            const reschedule = (r: Reminder) => ({
+              ...r,
+              dateTime: new Date(new Date(r.dateTime).getTime() + minutes * 60000).toISOString(),
             });
-            setReminders(updated);
-            localStorage.setItem('crm_reminders', JSON.stringify(JSON.parse(localStorage.getItem('crm_reminders') || '[]').map((r: Reminder) => {
-              if (r.id === id) {
-                const newTime = new Date(new Date(r.dateTime).getTime() + minutes * 60000);
-                return { ...r, dateTime: newTime.toISOString(), isDelayed: true, delayCount: r.delayCount + 1 };
-              }
-              return r;
-            })));
+            setReminders(reminders.map((r: Reminder) => (r.id === id ? reschedule(r) : r)));
+            const stored = JSON.parse(localStorage.getItem('crm_reminders') || '[]')
+              .map((r: Reminder) => (r.id === id ? reschedule(r) : r));
+            localStorage.setItem('crm_reminders', JSON.stringify(stored));
+            void pushKey('crm_reminders');
           }} onDelete={(id: string) => {
             setReminders(reminders.filter(r => r.id !== id));
             localStorage.setItem('crm_reminders', JSON.stringify(JSON.parse(localStorage.getItem('crm_reminders') || '[]').filter((r: Reminder) => r.id !== id)));
@@ -2374,25 +2440,32 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* شريط التذكير الرنّان — نفس شكل الإشعار الأصلي مع أزرار الإسكات والإتمام والتأجيل */}
+      {/* بند ٤: صفحة كل الأرقام في حالة واحدة */}
+      <AnimatePresence>
+        {statusBoard && (
+          <StatusBoardView
+            statusId={statusBoard}
+            clients={currentUser.role === 'sales'
+              ? clients.filter((c: Client) => c.userId === currentUser.id || c.assignedTo === currentUser.id)
+              : clients}
+            onClose={() => setStatusBoard(null)}
+            onCall={(c: Client) => setCallClient(c)}
+            onSelect={(c: Client) => { setStatusBoard(null); setSelectedClient(c); }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* بطاقة التذكير — نوتفكيشن فقط: تم / تأجيل / اتصال (بلا رنة) */}
       <AnimatePresence>
         {activeAlarm && (
           <AlarmBar
             alarm={activeAlarm}
             snoozeMinutes={alarmSettings.snoozeMin}
-            onSilence={() => { alarm.stop(); setActiveAlarm((cur) => (cur ? { ...cur, quiet: true } : cur)); }}
-            onResume={() => {
-              const settings = loadAlarmSettings();
-              alarm.start({
-                sound: settings.sound, volume: settings.volume, durationSec: settings.durationSec,
-                vibrate: settings.vibrate, title: activeAlarm.title, body: activeAlarm.body,
-                onEnd: () => setActiveAlarm((cur) => (cur ? { ...cur, quiet: true } : cur)),
-              });
-              setActiveAlarm((cur) => (cur ? { ...cur, quiet: false } : cur));
-            }}
+            lateAfterMinutes={5}
             onComplete={() => { if (activeAlarm) completeReminder(activeAlarm.id); hideAlarm(); }}
             onSnooze={() => { if (activeAlarm) snoozeReminder(activeAlarm.id, alarmSettings.snoozeMin); hideAlarm(); }}
             onDismiss={hideAlarm}
+            onDial={() => { if (activeAlarm) markReminderAction(activeAlarm.id); }}
           />
         )}
       </AnimatePresence>
@@ -2441,7 +2514,7 @@ function ChatThread({ me, otherIds, messages, onSend, emptyHint, disabledReason,
 
   if (!groupId && !(otherIds || []).length) {
     return (
-      <div className="p-10 text-center text-sm text-gray-400">
+      <div className="p-10 text-center text-sm text-[var(--text-muted)]">
         {disabledReason || 'المحادثة غير متاحة حالياً'}
       </div>
     );
@@ -2451,7 +2524,7 @@ function ChatThread({ me, otherIds, messages, onSend, emptyHint, disabledReason,
     <div className="flex flex-col">
       <div className="h-[60vh] min-h-64 lg:h-[52vh] overflow-y-auto p-4 space-y-3">
         {thread.length === 0 && (
-          <div className="text-center py-16 text-sm text-gray-500">{emptyHint}</div>
+          <div className="text-center py-16 text-sm text-[var(--text-dim)]">{emptyHint}</div>
         )}
 
         {thread.map((m: ChatMessage) => {
@@ -2459,10 +2532,10 @@ function ChatThread({ me, otherIds, messages, onSend, emptyHint, disabledReason,
           return (
             <div key={m.id} className={`flex ${mine ? 'justify-start' : 'justify-end'}`}>
               <div
-                className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed border ${
+                className={`max-w-[80%] rounded-[var(--r-xl)] px-4 py-2.5 text-sm leading-relaxed border ${
                   mine
-                    ? 'bg-gradient-to-br from-purple-600 to-violet-700 text-white border-purple-400/30 rounded-tr-sm'
-                    : 'bg-white/10 text-gray-100 border-white/10 rounded-tl-sm'
+                    ? 'bg-[var(--brand-fill)] text-[var(--on-brand)] border-[var(--brand-primary-soft)] rounded-tr-sm'
+                    : 'bg-[var(--tint-2)] text-[var(--text-strong)] border-[var(--border)] rounded-tl-sm'
                 }`}
               >
                 {!mine && groupId && (
@@ -2471,7 +2544,7 @@ function ChatThread({ me, otherIds, messages, onSend, emptyHint, disabledReason,
                 <p className="whitespace-pre-wrap break-words">{m.text}</p>
                 <span
                   className={`block text-[10px] mt-1 ${
-                    mine ? 'text-purple-100/80' : 'text-gray-400'
+                    mine ? 'text-[var(--on-brand)]' : 'text-[var(--text-muted)]'
                   }`}
                 >
                   {chatTime(m.createdAt)}
@@ -2491,19 +2564,19 @@ function ChatThread({ me, otherIds, messages, onSend, emptyHint, disabledReason,
         <div ref={endRef} />
       </div>
 
-      <form onSubmit={submit} className="border-t border-white/10 p-2.5 sm:p-3 flex items-center gap-2">
+      <form onSubmit={submit} className="border-t border-[var(--border)] p-2.5 sm:p-3 flex items-center gap-2">
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder={disabled ? 'الإرسال معطّل أثناء التصفح' : 'اكتب رسالتك...'}
           disabled={disabled}
-          className="flex-1 min-w-0 bg-white/5 border border-purple-500/20 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 text-white text-sm focus:border-purple-500/50 disabled:opacity-60"
+          className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 sm:px-4 py-2.5 sm:py-3 text-[var(--text-strong)] text-sm focus:border-[var(--brand)] disabled:opacity-60"
         />
         <button
           type="submit"
           disabled={disabled || !text.trim()}
           title="إرسال"
-          className="gradient-primary text-white p-2.5 sm:px-5 sm:py-3 rounded-xl font-bold text-sm disabled:opacity-40 flex items-center gap-2 whitespace-nowrap shrink-0"
+          className="gradient-primary text-[var(--text-strong)] p-2.5 sm:px-5 sm:py-3 rounded-[var(--r-md)] font-bold text-sm disabled:opacity-40 flex items-center gap-2 whitespace-nowrap shrink-0"
         >
           <Send className="w-4 h-4" />
           <span className="hidden sm:inline">إرسال</span>
@@ -2548,9 +2621,9 @@ function SalesChatView({ currentUser, users, messages, onSend, onRead, readOnly 
 
   if (!managers.length) {
     return (
-      <div className="glass-card rounded-2xl p-12 text-center">
-        <MessageCircle className="w-14 h-14 text-gray-600 mx-auto mb-3" />
-        <p className="text-gray-400">لا يوجد حساب إدارة في النظام بعد</p>
+      <div className="panel p-12 text-center">
+        <MessageCircle className="w-14 h-14 text-[var(--text-dim)] mx-auto mb-3" />
+        <p className="text-[var(--text-muted)]">لا يوجد حساب إدارة في النظام بعد</p>
       </div>
     );
   }
@@ -2558,8 +2631,8 @@ function SalesChatView({ currentUser, users, messages, onSend, onRead, readOnly 
   return (
     <div className="space-y-4">
       {readOnly && (
-        <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
-          🔎 أنت تتصفّح محادثة <span className="font-bold">{currentUser.name}</span> من حساب الإدارة —
+        <div className="rounded-[var(--r-md)] border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+           أنت تتصفّح محادثة <span className="font-bold">{currentUser.name}</span> من حساب الإدارة —
           الإرسال معطّل والرسائل لا تُعلَّم كمقروءة، حتى لا تفوت رسائل على السيلز.
         </div>
       )}
@@ -2567,9 +2640,9 @@ function SalesChatView({ currentUser, users, messages, onSend, onRead, readOnly 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-            <MessageCircle className="w-5 h-5 text-cyan-400" /> المحادثة
+            <MessageCircle className="w-5 h-5 text-[var(--brand)]" /> المحادثة
           </h2>
-          <p className="text-xs text-gray-400 mt-1">
+          <p className="text-xs text-[var(--text-muted)] mt-1">
             محادثة خاصة مع كل حساب من حسابات الإدارة ({managers.length}) — الرسائل تصل خلال ثوانٍ
           </p>
         </div>
@@ -2577,8 +2650,8 @@ function SalesChatView({ currentUser, users, messages, onSend, onRead, readOnly 
 
       <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
         {/* قائمة حسابات الإدارة */}
-        <div className={`glass-card rounded-2xl overflow-hidden ${threadOpen ? 'hidden lg:block' : ''}`}>
-          <div className="max-h-[60vh] lg:max-h-[56vh] overflow-y-auto divide-y divide-white/5">
+        <div className={`panel overflow-hidden ${threadOpen ? 'hidden lg:block' : ''}`}>
+          <div className="max-h-[60vh] lg:max-h-[56vh] overflow-y-auto divide-y divide-[var(--border)]">
             {managers.map((mgr: User) => {
               const convo = threadWith(mgr.id);
               const last = convo[convo.length - 1];
@@ -2588,24 +2661,24 @@ function SalesChatView({ currentUser, users, messages, onSend, onRead, readOnly 
                 <button
                   key={mgr.id}
                   onClick={() => { setOpenId(mgr.id); setThreadOpen(true); }}
-                  className={`w-full text-right p-3.5 flex items-center gap-3 transition-colors ${isOpen ? 'bg-blue-500/15' : 'hover:bg-white/5'}`}>
-                  <div className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 ${unread ? 'gradient-primary' : 'bg-white/10'}`}>
-                    <span className={`font-bold ${unread ? 'text-white' : 'text-gray-300'}`}>{mgr.name[0]}</span>
+                  className={`w-full text-right p-3.5 flex items-center gap-3 transition-colors ${isOpen ? 'bg-[var(--brand-primary-softer)]' : 'hover:bg-[var(--tint-1)]'}`}>
+                  <div className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 ${unread ? 'bg-[var(--brand)]' : 'bg-[var(--tint-2)]'}`}>
+                    <span className={`font-bold ${unread ? 'text-[var(--text-strong)]' : 'text-[var(--text)]'}`}>{mgr.name[0]}</span>
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-bold text-white text-sm truncate">{mgr.name}</span>
-                      {last && <span className="text-[10px] text-gray-500 whitespace-nowrap">{chatTime(last.createdAt)}</span>}
+                      <span className="font-bold text-[var(--text-strong)] text-sm truncate">{mgr.name}</span>
+                      {last && <span className="text-[10px] text-[var(--text-dim)] whitespace-nowrap">{chatTime(last.createdAt)}</span>}
                     </div>
                     <div className="flex items-center justify-between gap-2 mt-0.5">
-                      <span className="text-[10.5px] text-gray-500">{rankLabel(mgr.role)}</span>
+                      <span className="text-[10.5px] text-[var(--text-dim)]">{rankLabel(mgr.role)}</span>
                       {unread > 0 && (
                         <span className="min-w-5 h-5 px-1.5 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold text-white shrink-0">
                           {unread > 9 ? '9+' : unread}
                         </span>
                       )}
                     </div>
-                    <span className="block text-[11px] text-gray-400 truncate mt-0.5">
+                    <span className="block text-[11px] text-[var(--text-muted)] truncate mt-0.5">
                       {last ? `${last.fromId === currentUser.id ? 'أنت: ' : ''}${last.text}` : 'لا توجد رسائل بعد'}
                     </span>
                   </div>
@@ -2616,22 +2689,22 @@ function SalesChatView({ currentUser, users, messages, onSend, onRead, readOnly 
         </div>
 
         {/* المحادثة المفتوحة */}
-        <div className={`glass-card rounded-2xl overflow-hidden ${!threadOpen ? 'hidden lg:block' : ''}`}>
+        <div className={`panel overflow-hidden ${!threadOpen ? 'hidden lg:block' : ''}`}>
           {visible ? (
             <>
-              <div className="flex items-center gap-3 p-4 border-b border-white/10 bg-white/5">
+              <div className="flex items-center gap-3 p-4 border-b border-[var(--border)] bg-[var(--tint-1)]">
                 <button
                   onClick={() => setThreadOpen(false)}
                   title="رجوع إلى قائمة حسابات الإدارة"
-                  className="lg:hidden p-2 -ms-1 bg-white/10 rounded-lg hover:bg-white/20 transition-colors shrink-0">
-                  <ArrowRight className="w-4 h-4 text-white" />
+                  className="lg:hidden p-2 -ms-1 bg-[var(--tint-2)] rounded-[var(--r-sm)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+                  <ArrowRight className="w-4 h-4 text-[var(--text-strong)]" />
                 </button>
                 <div className="w-11 h-11 gradient-primary rounded-full flex items-center justify-center shrink-0">
-                  <Shield className="w-5 h-5 text-white" />
+                  <Shield className="w-5 h-5 text-[var(--text-strong)]" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-bold text-white truncate">{visible.name}</h3>
-                  <p className="text-[11px] text-gray-400">{rankLabel(visible.role)} — محادثة خاصة</p>
+                  <h3 className="font-bold text-[var(--text-strong)] truncate">{visible.name}</h3>
+                  <p className="text-[11px] text-[var(--text-muted)]">{rankLabel(visible.role)} — محادثة خاصة</p>
                 </div>
               </div>
               <ChatThread
@@ -2644,12 +2717,12 @@ function SalesChatView({ currentUser, users, messages, onSend, onRead, readOnly 
               />
             </>
           ) : (
-            <div className="p-12 text-center text-sm text-gray-400">اختر حساباً من القائمة لبدء المحادثة</div>
+            <div className="p-12 text-center text-sm text-[var(--text-muted)]">اختر حساباً من القائمة لبدء المحادثة</div>
           )}
         </div>
       </div>
 
-      <p className="text-[11px] text-gray-500 text-center">
+      <p className="text-[11px] text-[var(--text-dim)] text-center">
         * لكل حساب إدارة محادثة خاصة معك على حدة، وأي حساب إدارة جديد يُضاف تظهر له محادثة مع كل السيلز تلقائياً.
       </p>
     </div>
@@ -2733,54 +2806,54 @@ function AdminChatView({ currentUser, users, messages, onSend, onRead, onGroupRe
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-            <MessageCircle className="w-5 h-5 text-cyan-400" /> المحادثات
+            <MessageCircle className="w-5 h-5 text-[var(--brand)]" /> المحادثات
           </h2>
-          <p className="text-xs text-gray-400 mt-1">
+          <p className="text-xs text-[var(--text-muted)] mt-1">
             محادثة خاصة مع كل سيلز + غرفة المدراء • رسائل جديدة: <span className="text-red-400 font-bold">{totalUnread}</span>
           </p>
         </div>
         <div className="relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="ابحث باسم السيلز..."
-            className="w-full sm:w-56 bg-white/5 border border-purple-500/20 rounded-xl pr-9 pl-3 py-2.5 text-white text-sm"
+            className="w-full sm:w-56 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm"
           />
         </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
         {/* قائمة الأشخاص */}
-        <div className={`glass-card rounded-2xl overflow-hidden ${threadOpen || groupOpen ? 'hidden lg:block' : ''}`}>
+        <div className={`panel overflow-hidden ${threadOpen || groupOpen ? 'hidden lg:block' : ''}`}>
           {/* غرفة المدراء: كل حساب إدارة — الحالي والذي يُضاف لاحقاً — عضو فيها تلقائياً */}
           <button
             onClick={() => { setGroupOpen(true); setThreadOpen(false); }}
-            className={`w-full text-right p-3.5 flex items-center gap-3 transition-colors border-b border-white/10 ${groupOpen ? 'bg-blue-500/15' : 'hover:bg-white/5'}`}>
-            <div className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 ${groupUnread ? 'gradient-primary' : 'bg-white/10'}`}>
-              <Users className={`w-5 h-5 ${groupUnread ? 'text-white' : 'text-gray-300'}`} />
+            className={`w-full text-right p-3.5 flex items-center gap-3 transition-colors border-b border-[var(--border)] ${groupOpen ? 'bg-[var(--brand-primary-softer)]' : 'hover:bg-[var(--tint-1)]'}`}>
+            <div className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 ${groupUnread ? 'gradient-primary' : 'bg-[var(--tint-2)]'}`}>
+              <Users className={`w-5 h-5 ${groupUnread ? 'text-[var(--text-strong)]' : 'text-[var(--text)]'}`} />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-2">
-                <span className="font-bold text-white text-sm truncate">{MANAGERS_GROUP_NAME}</span>
-                {groupLast && <span className="text-[10px] text-gray-500 whitespace-nowrap">{chatTime(groupLast.createdAt)}</span>}
+                <span className="font-bold text-[var(--text-strong)] text-sm truncate">{MANAGERS_GROUP_NAME}</span>
+                {groupLast && <span className="text-[10px] text-[var(--text-dim)] whitespace-nowrap">{chatTime(groupLast.createdAt)}</span>}
               </div>
               <div className="flex items-center justify-between gap-2 mt-0.5">
-                <span className="text-[10.5px] text-gray-500">{managers.length} من المدراء</span>
+                <span className="text-[10.5px] text-[var(--text-dim)]">{managers.length} من المدراء</span>
                 {groupUnread > 0 && (
                   <span className="min-w-5 h-5 px-1.5 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold text-white shrink-0">
                     {groupUnread > 9 ? '9+' : groupUnread}
                   </span>
                 )}
               </div>
-              <span className="block text-[11px] text-gray-400 truncate mt-0.5">
+              <span className="block text-[11px] text-[var(--text-muted)] truncate mt-0.5">
                 {groupLast ? `${groupLast.fromId === currentUser.id ? 'أنت: ' : `${groupLast.fromName}: `}${groupLast.text}` : 'لا توجد رسائل بعد'}
               </span>
             </div>
           </button>
-          <div className="max-h-[65vh] lg:max-h-[58vh] overflow-y-auto divide-y divide-white/5">
-            {noPeople && <p className="p-6 text-center text-sm text-gray-500">لا يوجد حسابات سيلز بعد</p>}
-            {!noPeople && filtered.length === 0 && <p className="p-6 text-center text-sm text-gray-500">لا يوجد نتائج مطابقة</p>}
+          <div className="max-h-[65vh] lg:max-h-[58vh] overflow-y-auto divide-y divide-[var(--border)]">
+            {noPeople && <p className="p-6 text-center text-sm text-[var(--text-dim)]">لا يوجد حسابات سيلز بعد</p>}
+            {!noPeople && filtered.length === 0 && <p className="p-6 text-center text-sm text-[var(--text-dim)]">لا يوجد نتائج مطابقة</p>}
             {filtered.map((person: User) => {
               const convo = conversationWith(person.id);
               const last = convo[convo.length - 1];
@@ -2791,19 +2864,19 @@ function AdminChatView({ currentUser, users, messages, onSend, onRead, onGroupRe
                   key={person.id}
                   onClick={() => { setSelectedId(person.id); setThreadOpen(true); setGroupOpen(false); }}
                   className={`w-full text-right p-3.5 flex items-center gap-3 transition-colors ${
-                    isOpen ? 'bg-purple-500/20' : 'hover:bg-white/5'
+                    isOpen ? 'bg-[var(--brand-primary-softer)]' : 'hover:bg-[var(--tint-1)]'
                   }`}
                 >
-                  <div className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 ${unread ? 'gradient-primary' : 'bg-white/10'}`}>
-                    <span className={`font-bold ${unread ? 'text-white' : 'text-gray-300'}`}>{person.name[0]}</span>
+                  <div className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 ${unread ? 'bg-[var(--brand)]' : 'bg-[var(--tint-2)]'}`}>
+                    <span className={`font-bold ${unread ? 'text-[var(--text-strong)]' : 'text-[var(--text)]'}`}>{person.name[0]}</span>
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-bold text-white text-sm truncate">{person.name}</span>
-                      {last && <span className="text-[10px] text-gray-500 whitespace-nowrap">{chatTime(last.createdAt)}</span>}
+                      <span className="font-bold text-[var(--text-strong)] text-sm truncate">{person.name}</span>
+                      {last && <span className="text-[10px] text-[var(--text-dim)] whitespace-nowrap">{chatTime(last.createdAt)}</span>}
                     </div>
                     <div className="flex items-center justify-between gap-2 mt-0.5">
-                      <span className="text-[11px] text-gray-400 truncate">
+                      <span className="text-[11px] text-[var(--text-muted)] truncate">
                         {last ? `${last.fromId === currentUser.id ? 'أنت: ' : ''}${last.text}` : 'لا توجد رسائل بعد'}
                       </span>
                       {unread > 0 && (
@@ -2820,22 +2893,22 @@ function AdminChatView({ currentUser, users, messages, onSend, onRead, onGroupRe
         </div>
 
         {/* المحادثة المفتوحة */}
-        <div className={`glass-card rounded-2xl overflow-hidden ${!threadOpen && !groupOpen ? 'hidden lg:block' : ''}`}>
+        <div className={`panel overflow-hidden ${!threadOpen && !groupOpen ? 'hidden lg:block' : ''}`}>
           {groupOpen ? (
             <>
-              <div className="flex items-center gap-3 p-4 border-b border-white/10 bg-white/5">
+              <div className="flex items-center gap-3 p-4 border-b border-[var(--border)] bg-[var(--tint-1)]">
                 <button
                   onClick={() => setGroupOpen(false)}
                   title="رجوع إلى القائمة"
-                  className="lg:hidden p-2 -ms-1 bg-white/10 rounded-lg hover:bg-white/20 transition-colors shrink-0">
-                  <ArrowRight className="w-4 h-4 text-white" />
+                  className="lg:hidden p-2 -ms-1 bg-[var(--tint-2)] rounded-[var(--r-sm)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+                  <ArrowRight className="w-4 h-4 text-[var(--text-strong)]" />
                 </button>
                 <div className="w-11 h-11 gradient-primary rounded-full flex items-center justify-center shrink-0">
-                  <Users className="w-5 h-5 text-white" />
+                  <Users className="w-5 h-5 text-[var(--text-strong)]" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-bold text-white truncate">{MANAGERS_GROUP_NAME}</h3>
-                  <p className="text-[11px] text-gray-400">
+                  <h3 className="font-bold text-[var(--text-strong)] truncate">{MANAGERS_GROUP_NAME}</h3>
+                  <p className="text-[11px] text-[var(--text-muted)]">
                     محادثة جماعية لكل المدراء ({managers.length}) — أي حساب إدارة جديد يُضاف يدخلها تلقائياً
                   </p>
                 </div>
@@ -2851,20 +2924,20 @@ function AdminChatView({ currentUser, users, messages, onSend, onRead, onGroupRe
             </>
           ) : selected ? (
             <>
-              <div className="flex items-center gap-3 p-4 border-b border-white/10 bg-white/5">
+              <div className="flex items-center gap-3 p-4 border-b border-[var(--border)] bg-[var(--tint-1)]">
                 <button
                   onClick={() => setThreadOpen(false)}
                   title="رجوع إلى قائمة السيلز"
-                  className="lg:hidden p-2 -ms-1 bg-white/10 rounded-lg hover:bg-white/20 transition-colors shrink-0"
+                  className="lg:hidden p-2 -ms-1 bg-[var(--tint-2)] rounded-[var(--r-sm)] hover:bg-[var(--tint-3)] transition-colors shrink-0"
                 >
-                  <ArrowRight className="w-4 h-4 text-white" />
+                  <ArrowRight className="w-4 h-4 text-[var(--text-strong)]" />
                 </button>
                 <div className="w-11 h-11 gradient-primary rounded-full flex items-center justify-center shrink-0">
-                  <span className="text-white font-bold">{selected.name[0]}</span>
+                  <span className="text-[var(--text-strong)] font-bold">{selected.name[0]}</span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-bold text-white truncate">{selected.name}</h3>
-                  <p className="text-[11px] text-gray-400">
+                  <h3 className="font-bold text-[var(--text-strong)] truncate">{selected.name}</h3>
+                  <p className="text-[11px] text-[var(--text-muted)]">
                     {selected.role === 'supervisor' ? 'مشرف' : 'سيلز'}
                     {selected.username ? ` • @${selected.username}` : ''}
                   </p>
@@ -2879,12 +2952,12 @@ function AdminChatView({ currentUser, users, messages, onSend, onRead, onGroupRe
               />
             </>
           ) : (
-            <div className="p-12 text-center text-sm text-gray-400">اختر شخصاً من القائمة لبدء المحادثة</div>
+            <div className="p-12 text-center text-sm text-[var(--text-muted)]">اختر شخصاً من القائمة لبدء المحادثة</div>
           )}
         </div>
       </div>
 
-      <p className="text-[11px] text-gray-500 text-center">
+      <p className="text-[11px] text-[var(--text-dim)] text-center">
         * كل سيلز يرى محادثته مع الإدارة فقط ولا يرى محادثات غيره، والرسائل تُزامَن بين كل الأجهزة تلقائياً.
       </p>
     </div>
@@ -2902,7 +2975,7 @@ function getTabGroups(role: string): NavGroup[] {
       items: [
         { id: 'dashboard', icon: Home, label: 'الرئيسية' },
         { id: 'clients', icon: Users, label: 'العملاء' },
-        { id: 'pipeline', icon: Target, label: 'المراحل' },
+        { id: 'pipeline', icon: Workflow, label: 'المراحل' },
       ],
     },
     {
@@ -2912,9 +2985,9 @@ function getTabGroups(role: string): NavGroup[] {
     {
       label: 'المتابعة',
       items: [
-        { id: 'reminders', icon: Bell, label: 'التذكيرات' },
-        { id: 'daily-feedback', icon: MessageSquare, label: 'الفيدباك' },
-        { id: 'chat', icon: MessageCircle, label: 'المحادثة' },
+        { id: 'reminders', icon: BellRing, label: 'التذكيرات' },
+        { id: 'daily-feedback', icon: ClipboardList, label: 'الفيدباك' },
+        { id: 'chat', icon: MessagesSquare, label: 'المحادثة' },
         { id: 'reports', icon: BarChart3, label: 'التقارير' },
       ],
     },
@@ -2926,16 +2999,16 @@ function getTabGroups(role: string): NavGroup[] {
       items: [
         { id: 'admin-users', icon: UserCheck, label: 'فريق العمل' },
         { id: 'admin-attendance', icon: Clock, label: 'الحضور' },
-        { id: 'admin-analytics', icon: BarChart3, label: 'التحليلات' },
+        { id: 'admin-analytics', icon: LineChart, label: 'التحليلات' },
       ],
     },
     {
       label: 'متابعة العمل',
       items: [
-        { id: 'pipeline', icon: Target, label: 'المراحل' },
-        { id: 'admin-leads', icon: UserPlus, label: 'توزيع الأرقام' },
-        { id: 'admin-feedback', icon: MessageSquare, label: 'الفيدباك اليومي' },
-        { id: 'admin-chat', icon: MessageCircle, label: 'المحادثات' },
+        { id: 'pipeline', icon: Workflow, label: 'المراحل' },
+        { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
+        { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
+        { id: 'admin-chat', icon: MessagesSquare, label: 'المحادثات' },
       ],
     },
     {
@@ -2955,16 +3028,16 @@ function getTabGroups(role: string): NavGroup[] {
         items: [
           { id: 'admin-users', icon: UserCheck, label: 'فريقي' },
           { id: 'admin-attendance', icon: Clock, label: 'الحضور' },
-          { id: 'admin-analytics', icon: BarChart3, label: 'التحليلات' },
+          { id: 'admin-analytics', icon: LineChart, label: 'التحليلات' },
         ],
       },
       {
         label: 'متابعة العمل',
         items: [
-          { id: 'pipeline', icon: Target, label: 'المراحل' },
-          { id: 'admin-leads', icon: UserPlus, label: 'توزيع الأرقام' },
-          { id: 'admin-feedback', icon: MessageSquare, label: 'الفيدباك اليومي' },
-          { id: 'admin-chat', icon: MessageCircle, label: 'المحادثات' },
+          { id: 'pipeline', icon: Workflow, label: 'المراحل' },
+          { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
+          { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
+          { id: 'admin-chat', icon: MessagesSquare, label: 'المحادثات' },
         ],
       },
       {
@@ -2989,20 +3062,8 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
   }, [done, onDone]);
 
   const accent = isAdmin
-    ? {
-        icon: Shield,
-        gradient: 'from-purple-500 via-violet-500 to-fuchsia-500',
-        ring: 'border-purple-400/60',
-        text: 'text-purple-300',
-        orb: 'bg-purple-500/25',
-      }
-    : {
-        icon: UserCheck,
-        gradient: 'from-cyan-500 via-emerald-500 to-teal-400',
-        ring: 'border-cyan-400/60',
-        text: 'text-cyan-300',
-        orb: 'bg-cyan-500/25',
-      };
+    ? { icon: Shield, ring: 'border-[var(--brand-primary-soft)]', text: 'text-[var(--text-muted)]' }
+    : { icon: UserCheck, ring: 'border-[var(--brand-primary-soft)]', text: 'text-[var(--brand)]' };
   const Icon = accent.icon;
 
   // نعرض الشاشة عبر Portal حتى لا تتأثر بأنيميشن الدخول للجذر (transform)
@@ -3015,8 +3076,6 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
       className="app-root fixed inset-0 z-[200] flex items-center justify-center overflow-hidden"
       dir="rtl"
     >
-      <div className={`absolute top-1/4 right-1/4 w-72 h-72 rounded-full blur-3xl animate-float ${accent.orb}`}></div>
-      <div className={`absolute bottom-1/4 left-1/4 w-80 h-80 rounded-full blur-3xl animate-float ${accent.orb}`}></div>
 
       <div className="relative z-10 flex flex-col items-center text-center px-6">
         <div className="relative w-28 h-28 mb-8">
@@ -3033,8 +3092,7 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
             initial={{ scale: 0.4, rotate: -180, opacity: 0 }}
             animate={{ scale: 1, rotate: 0, opacity: 1 }}
             transition={{ type: 'spring', stiffness: 160, damping: 14 }}
-            className={`w-28 h-28 rounded-full bg-gradient-to-br ${accent.gradient} flex items-center justify-center`}
-            style={{ boxShadow: isAdmin ? '0 0 70px rgba(168,85,247,0.6)' : '0 0 70px rgba(34,211,238,0.5)' }}
+            className="w-28 h-28 rounded-full bg-[var(--brand-fill)] flex items-center justify-center"
           >
             <AnimatePresence mode="wait">
               {done ? (
@@ -3044,7 +3102,7 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
                   animate={{ scale: 1, rotate: 0 }}
                   transition={{ type: 'spring', stiffness: 220, damping: 12 }}
                 >
-                  <Check className="w-14 h-14 text-white" />
+                  <Check className="w-14 h-14 text-[var(--text-strong)]" />
                 </motion.span>
               ) : (
                 <motion.span
@@ -3052,7 +3110,7 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
                   animate={{ scale: [1, 1.12, 1] }}
                   transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
                 >
-                  <Icon className="w-14 h-14 text-white" />
+                  <Icon className="w-14 h-14 text-[var(--text-strong)]" />
                 </motion.span>
               )}
             </AnimatePresence>
@@ -3065,14 +3123,14 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
           transition={{ delay: 0.2 }}
           className="text-3xl sm:text-4xl font-bold gradient-text mb-3"
         >
-          {done ? 'تم تسجيل الدخول 🎉' : `مرحباً ${user.name} 👋`}
+          {done ? 'تم تسجيل الدخول' : `مرحباً ${user.name}`}
         </motion.h1>
 
         <motion.p
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.35 }}
-          className="text-gray-400 mb-8"
+          className="text-[var(--text-muted)] mb-8"
         >
           {done
             ? 'جارٍ فتح النظام...'
@@ -3081,9 +3139,9 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
             : 'جارٍ تحضير مساحة العمل...'}
         </motion.p>
 
-        <div className="w-64 h-1.5 bg-white/10 rounded-full overflow-hidden">
+        <div className="w-64 h-1.5 bg-[var(--tint-2)] rounded-full overflow-hidden">
           <motion.div
-            className={`h-full bg-gradient-to-r ${accent.gradient} rounded-full`}
+            className="h-full bg-[var(--brand-fill)] rounded-full"
             initial={{ width: '0%' }}
             animate={{ width: '100%' }}
             transition={{ duration: 1.5, ease: 'easeInOut' }}
@@ -3106,11 +3164,16 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
 }
 
 // Login Screen
-function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
+// الدخول يمر بـ /api/auth **على السيرفر** — لا مقارنة كلمة مرور في المتصفح.
+// هذا هو الفرق الجوهري: من يعرف رابط الموقع يحصل على شاشة دخول فقط،
+// وبلا كلمة مرور صحيحة لا تُقدَّم له أي بيانات (٤٠١ من السيرفر).
+function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) => void; initialNotice?: string }) {
+  // ملاحظة: لا يوجد أي كود لتغيير كلمات المرور في المتصفح إطلاقاً —
+  // تغيير كلمة المرور يتم على السيرفر فقط (node scripts/set-password.mjs).
   const [loginType, setLoginType] = useState<'admin' | 'sales' | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(initialNotice);
   const [loading, setLoading] = useState(false);
   const [shake, setShake] = useState(false);
 
@@ -3118,222 +3181,214 @@ function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
     initializeSystem();
   }, []);
 
-  // دخول آمن: نتحقق من كلمة المرور بالتشفير (مع ترقية أي كلمة مرور قديمة تلقائياً عند أول دخول)
+  // بعد نجاح الدخول: نُضيف الحساب لقائمة المستخدمين على هذا الجهاز
+  // (حتى لا يخرج التطبيق نفسه لعدم وجود بيانات محلية قبل أول مزامنة) ثم نفتح المزامنة
+  const finishLogin = (user: User) => {
+    try {
+      const store: User[] = JSON.parse(localStorage.getItem('crm_users') || '[]');
+      localStorage.setItem('crm_users', JSON.stringify([...store.filter((u) => u.id !== user.id), user]));
+    } catch {
+      /* لا شيء */
+    }
+    markAuthorized();
+    setLoading(true);
+    setTimeout(() => onLogin(user), 900);
+  };
+
+  const fail = (message: string) => {
+    setLoading(false);
+    setError(message);
+    setShake(true);
+    setTimeout(() => setShake(false), 600);
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (loading) return;
     setError('');
-
-    const users: User[] = JSON.parse(localStorage.getItem('crm_users') || '[]');
-    const candidate = users.find((u) =>
-      u.username.toLowerCase() === username.trim().toLowerCase() &&
-      u.isActive &&
-      (loginType === 'admin' ? isManagerRole(u.role) : u.role === 'sales')
-    );
-
-    const check = candidate ? await verifyPassword(password, candidate.password) : { ok: false };
-    if (!candidate || !check.ok) {
-      setError('اسم المستخدم أو كلمة المرور غير صحيحة');
-      setShake(true);
-      setTimeout(() => setShake(false), 600);
-      return;
-    }
-
-    // ترقية كلمة المرور النصية القديمة إلى بصمة مشفّرة
-    if (check.upgraded) {
-      const next = users.map((u) => (u.id === candidate.id ? { ...u, password: check.upgraded as string } : u));
-      localStorage.setItem('crm_users', JSON.stringify(next));
-      void pushKey('crm_users');
-    }
-
     setLoading(true);
-    setTimeout(() => onLogin(candidate), 900);
+    try {
+      const res = await fetch(`${AUTH_API}?action=login`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim(), password, loginType }),
+      });
+      const data: any = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) {
+        fail(data?.error || 'تعذّر تسجيل الدخول — حاول مرة أخرى');
+        return;
+      }
+      // الدخول مباشر بكلمة المرور الصحيحة: لا توجد أي شاشة إلزامية بعدها
+      finishLogin({ ...data.user, password: '' } as User);
+    } catch {
+      fail('تعذّر الاتصال بالسيرفر — تأكد من اتصالك بالإنترنت');
+    }
   };
 
   if (!loginType) {
     return (
-      <div className="app-root min-h-screen flex items-center justify-center p-4">
-        <div className="glass-card rounded-3xl p-8 w-full max-w-md glow-primary">
-          <div className="text-center mb-8">
-            <motion.img
-              src="/emaar-logo.jpg"
-              alt="Emaar Group"
-              animate={{ scale: [1, 1.04, 1] }}
-              transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
-              className="w-28 h-28 rounded-2xl object-cover mx-auto mb-4 glow-primary border border-white/10"
-            />
-            <h1 className="text-3xl font-bold gradient-text mb-2">Emaar Group CRM</h1>
-            <p className="text-gray-400">نظام CRM الخاص بشركة إعمار جروب</p>
+      <div className="login-wrap">
+        <div className="login-brand">
+          <div className="flex items-center gap-3">
+            <img src="/emaar-logo.jpg" alt="Emaar Group" className="login-mark" />
+            <div className="min-w-0">
+              <p className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight">Emaar Group</p>
+              <p className="text-[11px] text-[var(--text-dim)] leading-tight">إعمار جروب — تسويق عقاري</p>
+            </div>
           </div>
-          
-          <div className="space-y-4">
-            <motion.button
-              onClick={() => setLoginType('admin')}
-              initial={{ opacity: 0, y: 25 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.15 }}
-              whileHover={{ scale: 1.03, y: -3 }}
-              whileTap={{ scale: 0.97 }}
-              className="w-full gradient-primary text-white py-4 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover flex items-center justify-center gap-3"
-            >
-              <Shield className="w-6 h-6" />
-              CEO / Team Leader
-            </motion.button>
-            
-            <motion.button
-              onClick={() => setLoginType('sales')}
-              initial={{ opacity: 0, y: 25 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3 }}
-              whileHover={{ scale: 1.03, y: -3 }}
-              whileTap={{ scale: 0.97 }}
-              className="w-full bg-white/10 text-white py-4 rounded-xl font-bold text-lg hover:bg-white/20 transition-colors border border-white/10 flex items-center justify-center gap-3"
-            >
-              <UserCheck className="w-6 h-6" />
-              Sales Agent
-            </motion.button>
+
+          <h1 className="login-title">تسجيل الدخول</h1>
+
+          <div className="login-roles">
+            <button type="button" onClick={() => setLoginType('admin')} className="login-role">
+              <span className="login-role-icon"><Shield className="w-4.5 h-4.5" /></span>
+              <span className="login-role-body">
+                <span className="login-role-name">الإدارة</span>
+                <span className="login-role-note">CEO / Team Leader</span>
+              </span>
+              <ChevronLeft className="login-role-go w-4 h-4" />
+            </button>
+
+            <button type="button" onClick={() => setLoginType('sales')} className="login-role">
+              <span className="login-role-icon"><UserCheck className="w-4.5 h-4.5" /></span>
+              <span className="login-role-body">
+                <span className="login-role-name">مندوب مبيعات</span>
+                <span className="login-role-note">Sales Agent</span>
+              </span>
+              <ChevronLeft className="login-role-go w-4 h-4" />
+            </button>
           </div>
-          
+
+          <p className="login-code">Emaar Group CRM</p>
         </div>
+
+        <LoginPlan lines={['متصل بقاعدة بيانات الفريق', 'أي تعديل يظهر على كل الأجهزة في ثوانٍ.']} />
       </div>
     );
   }
 
   return (
-    <div className="app-root min-h-screen flex items-center justify-center p-4">
-      <div className="glass-card rounded-3xl p-8 w-full max-w-md glow-primary">
-        <div className="text-center mb-8">
-          <div className="relative w-20 h-20 mx-auto mb-4">
-            {[0, 0.5, 1].map((delay) => (
-              <motion.span
-                key={delay}
-                className="absolute inset-0 rounded-full border-2 border-purple-400/50"
-                initial={{ scale: 1, opacity: 0.6 }}
-                animate={{ scale: 2, opacity: 0 }}
-                transition={{ duration: 2, repeat: Infinity, delay, ease: 'easeOut' }}
-              />
-            ))}
-            <motion.div
-              initial={{ scale: 0, rotate: -120 }}
-              animate={{ scale: 1, rotate: 0 }}
-              transition={{ type: 'spring', stiffness: 180, damping: 14 }}
-              className="w-20 h-20 rounded-2xl overflow-hidden glow-primary border border-white/10"
-            >
-              <img src="/emaar-logo.jpg" alt="Emaar Group" className="w-full h-full object-cover" />
-            </motion.div>
+    <div className="login-wrap">
+      <div className="login-brand">
+        <div className="flex items-center gap-3">
+          <img src="/emaar-logo.jpg" alt="Emaar Group" className="login-mark" />
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight">Emaar Group</p>
+            <p className="text-[11px] text-[var(--text-dim)] leading-tight">إعمار جروب — تسويق عقاري</p>
           </div>
-          <h1 className="text-2xl font-bold gradient-text mb-2">
-            {loginType === 'admin' ? 'دخول الإدارة (CEO / Team Leader)' : 'دخول السيلز'}
-          </h1>
         </div>
-        
-        <motion.form
-          onSubmit={handleLogin}
-          animate={shake ? { x: [0, -12, 12, -9, 9, -4, 0] } : { x: 0 }}
-          transition={{ duration: 0.5 }}
-          className="space-y-4"
-        >
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">اسم المستخدم</label>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50"
-              placeholder="اسم المستخدم"
-              dir="ltr"
-              required
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">كلمة المرور</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white focus:border-purple-500/50"
-              placeholder="كلمة المرور"
-              dir="ltr"
-              required
-            />
-          </div>
-          
-          <AnimatePresence>
-            {error && (
-              <motion.p
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="text-red-400 text-sm text-center bg-red-500/10 border border-red-500/20 rounded-xl py-2 px-3 flex items-center justify-center gap-2"
-              >
-                <AlertTriangle className="w-4 h-4" />
-                {error}
-              </motion.p>
-            )}
-          </AnimatePresence>
-          
-          <motion.button
-            type="submit"
-            disabled={loading}
-            whileHover={{ scale: loading ? 1 : 1.02 }}
-            whileTap={{ scale: loading ? 1 : 0.98 }}
-            className="w-full gradient-primary text-white py-3 rounded-xl font-bold text-lg shadow-lg glow-primary btn-hover flex items-center justify-center gap-3 disabled:cursor-wait"
+
+        <h1 className="login-title">
+          {loginType === 'admin' ? 'دخول الإدارة' : 'دخول المندوبين'}
+        </h1>
+
+        <div className="login-card">
+          <motion.form
+            onSubmit={handleLogin}
+            animate={shake ? { x: [0, -10, 10, -7, 7, -3, 0] } : { x: 0 }}
+            transition={{ duration: 0.45 }}
           >
-            {loading ? (
-              <>
-                <motion.span
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }}
-                  className="w-5 h-5 rounded-full border-2 border-white/40 border-t-white"
-                />
-                جارٍ التحقق...
-              </>
-            ) : (
-              <>
-                {loginType === 'admin' ? <Shield className="w-5 h-5" /> : <UserCheck className="w-5 h-5" />}
-                تسجيل الدخول
-              </>
-            )}
-          </motion.button>
-          
-          <button
-            type="button"
-            onClick={() => setLoginType(null)}
-            className="w-full bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20"
-          >
-            رجوع
-          </button>
-        </motion.form>
+            <div className="login-field">
+              <label className="login-label" htmlFor="login-username">اسم المستخدم</label>
+              <input
+                id="login-username"
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="login-input"
+                placeholder="اسم المستخدم"
+                dir="ltr"
+                autoComplete="username"
+                required
+              />
+            </div>
+
+            <div className="login-field">
+              <label className="login-label" htmlFor="login-password">كلمة المرور</label>
+              <input
+                id="login-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="login-input"
+                placeholder="كلمة المرور"
+                dir="ltr"
+                autoComplete="current-password"
+                required
+              />
+            </div>
+
+            <AnimatePresence>
+              {error && (
+                <motion.p
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="login-error"
+                >
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  {error}
+                </motion.p>
+              )}
+            </AnimatePresence>
+
+            <button type="submit" disabled={loading} className="login-submit">
+              {loading ? (
+                <>
+                  <motion.span
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }}
+                    className="w-4 h-4 rounded-full border-2"
+                    style={{
+                      borderColor: 'color-mix(in srgb, var(--on-brand) 30%, transparent)',
+                      borderTopColor: 'var(--on-brand)',
+                    }}
+                  />
+                  جارٍ التحقق...
+                </>
+              ) : (
+                <>
+                  {loginType === 'admin' ? <Shield className="w-4.5 h-4.5" /> : <UserCheck className="w-4.5 h-4.5" />}
+                  تسجيل الدخول
+                </>
+              )}
+            </button>
+          </motion.form>
+        </div>
+
+        <button type="button" onClick={() => setLoginType(null)} className="login-back">
+          <ChevronRight className="w-4 h-4" />
+          رجوع
+        </button>
       </div>
+
+      <LoginPlan lines={['متصل بقاعدة بيانات الفريق']} />
     </div>
   );
 }
 
 // Dashboard View
-function DashboardView({ stats, clients, reminders, properties, currentUser, impersonating }: any) {
+function DashboardView({ stats, clients, reminders, properties, currentUser, impersonating, onOpenStatus, onCompleteReminder, onActed }: any) {
   const dueReminders = reminders.filter((r: Reminder) => isReminderDue(r) && !r.isCompleted);
+  // عملاي أنا فقط — خانات الحالات تحسب أرقامي
+  const myClients = (clients || []).filter((c: Client) => c.userId === currentUser.id || c.assignedTo === currentUser.id);
   const [todayRecord, setTodayRecord] = useState<Attendance | undefined>(() => getTodayCheckIn(currentUser.id));
   const myHistory = getAttendance().filter((a: Attendance) => a.userId === currentUser.id).sort((a: Attendance, b: Attendance) => b.checkInAt.localeCompare(a.checkInAt)).slice(0, 7);
   
   return (
     <div className="space-y-6">
-      <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-3xl p-6 relative overflow-hidden">
-        <div className="absolute inset-0 opacity-20 pointer-events-none">
-          <div className="absolute -top-10 -right-10 w-52 h-52 gradient-primary rounded-full blur-3xl animate-float"></div>
-          <div className="absolute -bottom-14 left-8 w-40 h-40 rounded-full blur-3xl animate-float" style={{ background: 'var(--accent)' }}></div>
+      <div className="page-intro">
+        <div className="min-w-0">
+          <h2>أهلاً {String(currentUser.name || '').split(' ')[0]}</h2>
+          <p>{new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
         </div>
-        <div className="relative z-10 flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-2xl font-extrabold gradient-text mb-1">مرحباً بك 👋</h2>
-            <p className="text-sm text-gray-400">إليك نظرة سريعة على نشاطك اليوم</p>
-          </div>
-          <span className="chip">
-            <Calendar className="w-3.5 h-3.5" />
-            {new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' })}
-          </span>
+        <div className="page-intro-facts">
+          <div className="page-fact"><b>{stats.totalClients}</b><span>إجمالي العملاء</span></div>
+          <div className="page-fact"><b>{stats.dueNow}</b><span>مستحق الآن</span></div>
+          <div className="page-fact"><b>{dueReminders.length}</b><span>تذكير مستحق</span></div>
         </div>
-      </motion.div>
+      </div>
 
       {/* الحضور والانصراف للسيلز فقط — لا يظهر أثناء دخول الإدارة إلى حسابه،
           لأن الإدارة لا تسجّل حضوراً بدلاً منه. */}
@@ -3345,69 +3400,107 @@ function DashboardView({ stats, clients, reminders, properties, currentUser, imp
         />
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      {/* الأرقام العامة: سطر واحد هادئ. البطل في الصفحة دي هو لوحة الحالات تحت. */}
+      <div className="stat-strip">
         {[
-          { label: 'إجمالي العملاء', value: stats.totalClients, icon: Users, gradient: 'from-purple-500 to-violet-600' },
-          { label: 'عملاء كامبين', value: stats.campaignClients, icon: UserPlus, gradient: 'from-violet-500 to-purple-600' },
-          { label: 'عملاء فيسبوك', value: stats.facebookClients, icon: Star, gradient: 'from-cyan-500 to-purple-500' },
-          { label: 'عملاء خارجي', value: stats.externalClients, icon: Award, gradient: 'from-purple-500 to-fuchsia-500' },
-          { label: 'العقارات', value: stats.totalProperties, icon: Building2, gradient: 'from-blue-500 to-cyan-500' },
-          { label: 'مستحقة الآن', value: stats.dueNow, icon: Zap, gradient: 'from-violet-500 to-fuchsia-500' },
-        ].map((stat, i) => (
-          <motion.div key={stat.label} initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}
-            className="stat-card">
-            <div className={`stat-icon bg-gradient-to-br ${stat.gradient} mb-3`}>
-              <stat.icon className="w-5 h-5" />
-            </div>
-            <p className="text-2xl font-extrabold text-white leading-none">{stat.value}</p>
-            <p className="text-[11.5px] text-gray-400 mt-1.5">{stat.label}</p>
-          </motion.div>
+          { label: 'إجمالي العملاء', value: stats.totalClients },
+          { label: 'عملاء كامبين', value: stats.campaignClients },
+          { label: 'عملاء فيسبوك', value: stats.facebookClients },
+          { label: 'عملاء خارجي', value: stats.externalClients },
+          { label: 'العقارات', value: stats.totalProperties },
+          { label: 'مستحقة الآن', value: stats.dueNow, alert: true },
+        ].map((stat) => (
+          <div key={stat.label} className={`stat-cell${stat.alert && stat.value > 0 ? ' is-alert' : ''}`}>
+            <span className="stat-label">{stat.label}</span>
+            <span className="stat-value">{stat.value}</span>
+          </div>
         ))}
       </div>
 
+      {/* بند ٤: لوحة الحالات — الرقم هو البطل، والضغط يفتح صفحة كل أرقام الحالة */}
+      <section className="panel status-panel">
+        <div className="panel-head">
+          <h3>حالات عملائي</h3>
+          <span className="chip">{myClients.length} رقم</span>
+        </div>
+        <div className="status-buckets">
+          {FEEDBACK_STATUSES.map((s) => {
+            const n = myClients.filter((c: Client) => latestFeedbackStatusOf(c) === s.id).length;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                title={s.ar}
+                className={`sb-cell ${s.cls}${n === 0 ? ' is-empty' : ''}`}
+                onClick={() => onOpenStatus?.(s.id)}
+              >
+                <span className="sb-count">{n}</span>
+                <span className="sb-body">
+                  <b>{s.label}</b>
+                  <small>{s.ar}</small>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
       {dueReminders.length > 0 && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card rounded-2xl p-6 border-red-500/30">
-          <h3 className="text-lg font-bold text-red-400 mb-4">⚠️ تذكيرات مستحقة الآن</h3>
-          <div className="space-y-3">
+        <section className="panel">
+          <div className="panel-head">
+            <h3>تذكيرات مستحقة الآن</h3>
+            <span className="chip">{dueReminders.length}</span>
+          </div>
+          <div className="due-list">
             {dueReminders.map((reminder: Reminder) => (
-              <div key={reminder.id} className="bg-red-500/5 border border-red-500/20 rounded-xl p-4">
-                <p className="font-bold text-white">{reminder.clientName}</p>
-                <p className="text-sm text-gray-400" dir="ltr">{reminder.clientPhone}</p>
+              <div key={reminder.id} className="due-row">
+                <div className="due-who">
+                  <b>{reminder.clientName}</b>
+                  <span dir="ltr">{reminder.clientPhone}</span>
+                </div>
+                {reminder.isDelayed && (
+                  <span className="due-late">متأخر{reminder.delayCount > 1 ? ` ×${reminder.delayCount}` : ''}</span>
+                )}
+                <div className="due-acts">
+                  <a href={`tel:${reminder.clientPhone}`} className="rc-action" dir="ltr"
+                    onClick={() => onActed?.(reminder.id)}>اتصال</a>
+                  <button type="button" className="rc-action is-done"
+                    onClick={() => onCompleteReminder?.(reminder.id)}>تم</button>
+                </div>
               </div>
             ))}
           </div>
-        </motion.div>
+        </section>
       )}
 
       {/* سجل حضوري الشخصي - بدون أي إحداثيات (لا يظهر أثناء دخول الإدارة) */}
       {!impersonating && myHistory.length > 0 && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card rounded-2xl p-6">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <Clock className="w-5 h-5 text-purple-400" />
-            سجل حضورك وانصرافك
-          </h3>
-          <div className="space-y-2">
+        <div className="panel">
+          <div className="panel-head">
+            <h3><Clock className="w-4 h-4" />سجل حضورك وانصرافك</h3>
+          </div>
+          <div className="divide-y divide-[var(--border)]">
             {myHistory.map((rec: Attendance) => (
-              <div key={rec.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white/5 rounded-xl px-4 py-3">
-                <span className="text-sm text-gray-300">{formatDayLabel(rec.date)}</span>
+              <div key={rec.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 py-3">
+                <span className="text-[12.5px] text-[var(--text)]">{formatDayLabel(rec.date)}</span>
                 <div className="flex flex-wrap items-center gap-3">
-                  <span className="text-sm font-bold text-emerald-400">حضور {formatTime(rec.checkInAt)}</span>
+                  <span className="text-[12.5px] font-bold text-emerald-400">حضور {formatTime(rec.checkInAt)}</span>
                   {rec.checkOutAt ? (
-                    <span className="text-sm font-bold text-amber-400">انصراف {formatTime(rec.checkOutAt)}</span>
+                    <span className="text-[12.5px] font-bold text-amber-400">انصراف {formatTime(rec.checkOutAt)}</span>
                   ) : (
-                    <span className="text-sm text-gray-500">لم تسجل انصرافاً</span>
+                    <span className="text-[12.5px] text-[var(--text-dim)]">لم تسجل انصرافاً</span>
                   )}
                   {workedMinutes(rec) > 0 && (
-                    <span className="text-xs text-gray-400 bg-white/5 rounded-full px-2 py-0.5">{formatDuration(workedMinutes(rec))}</span>
+                    <span className="text-[11px] text-[var(--text-muted)] border border-[var(--border)] rounded-full px-2 py-0.5 tabular">{formatDuration(workedMinutes(rec))}</span>
                   )}
                 </div>
               </div>
             ))}
           </div>
-          <p className="text-[11px] text-gray-500 mt-3">
+          <p className="px-4 py-3 text-[11px] text-[var(--text-dim)] border-t border-[var(--border)]">
             * سجلك الشخصي يعرض الوقت فقط — الموقع التفصيلي يظهر للإدارة فقط.
           </p>
-        </motion.div>
+        </div>
       )}
     </div>
   );
@@ -3491,34 +3584,30 @@ function AttendanceCard({ currentUser, record, onUpdate }: { currentUser: User; 
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="glass-card rounded-2xl p-6 relative overflow-hidden"
+      className="panel"
     >
-      <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
-        <div className="absolute -top-10 -left-10 w-48 h-48 bg-gradient-to-br from-emerald-500 to-cyan-500 rounded-full blur-3xl animate-float"></div>
-      </div>
-
-      <div className="relative z-10 flex flex-col lg:flex-row items-center justify-between gap-5">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-4">
         <div className="text-center lg:text-right">
-          <h3 className="text-xl font-bold text-white flex items-center gap-2 justify-center lg:justify-start">
-            <Clock className="w-5 h-5 text-cyan-400" />
+          <h3 className="panel-title flex items-center gap-2 justify-center lg:justify-start">
+            <Clock className="w-4 h-4" />
             الحضور والانصراف
           </h3>
-          <p className="text-xs text-gray-400 mt-1">{formatDayLabel(todayKey())}</p>
+          <p className="text-[11.5px] text-[var(--text-muted)] mt-1">{formatDayLabel(todayKey())}</p>
 
-          {!record && <p className="text-gray-300 mt-2">لم تسجل حضورك اليوم بعد</p>}
+          {!record && <p className="text-[12.5px] text-[var(--text)] mt-2">لم تسجل حضورك اليوم بعد</p>}
 
           {record && (
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-3 space-y-1.5">
-              <p className="text-emerald-400 font-bold">
-                ✅ حضرت الساعة <span className="text-white">{formatTime(record.checkInAt)}</span> — تم تأكيد موقعك
+            <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-2.5 space-y-1">
+              <p className="text-[12.5px] text-emerald-400 font-semibold">
+                حضرت الساعة <span className="text-[var(--text-strong)]">{formatTime(record.checkInAt)}</span> — تم تأكيد موقعك
               </p>
               {record.checkOutAt ? (
-                <p className="text-amber-400 font-bold">
-                  🚪 انصرفت الساعة <span className="text-white">{formatTime(record.checkOutAt)}</span>
-                  {workedMinutes(record) > 0 && <span className="text-gray-300 font-normal"> • مدة العمل {formatDuration(workedMinutes(record))}</span>}
+                <p className="text-[12.5px] text-amber-400 font-semibold">
+                  انصرفت الساعة <span className="text-[var(--text-strong)]">{formatTime(record.checkOutAt)}</span>
+                  {workedMinutes(record) > 0 && <span className="text-[var(--text)] font-normal"> — مدة العمل {formatDuration(workedMinutes(record))}</span>}
                 </p>
               ) : (
-                <p className="text-gray-400">لم تسجل انصرافك بعد</p>
+                <p className="text-[12.5px] text-[var(--text-muted)]">لم تسجل انصرافك بعد</p>
               )}
             </motion.div>
           )}
@@ -3531,21 +3620,22 @@ function AttendanceCard({ currentUser, record, onUpdate }: { currentUser: User; 
               whileTap={{ scale: busy ? 1 : 0.96 }}
               onClick={() => stamp('in')}
               disabled={busy}
-              className="gradient-success text-white px-10 py-4 rounded-xl font-bold text-lg shadow-lg glow-success flex items-center justify-center gap-2 disabled:opacity-70"
+              className="btn-success !px-7 !py-3"
             >
               {status ? (
                 <>
                   <motion.span
                     animate={{ rotate: 360 }}
                     transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }}
-                    className="w-5 h-5 rounded-full border-2 border-white/40 border-t-white"
+                    className="w-4 h-4 rounded-full border-2"
+                    style={{ borderColor: 'color-mix(in srgb, currentColor 30%, transparent)', borderTopColor: 'currentColor' }}
                   />
                   {status === 'locating' ? 'جارٍ تحديد موقعك...' : 'جارٍ تسجيل الحضور...'}
                 </>
               ) : (
                 <>
-                  <Check className="w-6 h-6" />
-                  حضور
+                  <Check className="w-4.5 h-4.5" />
+                  تسجيل حضور
                 </>
               )}
             </motion.button>
@@ -3557,29 +3647,30 @@ function AttendanceCard({ currentUser, record, onUpdate }: { currentUser: User; 
               whileTap={{ scale: busy ? 1 : 0.96 }}
               onClick={() => stamp('out')}
               disabled={busy}
-              className="bg-gradient-to-r from-amber-500 to-orange-500 text-white px-10 py-4 rounded-xl font-bold text-lg shadow-lg flex items-center justify-center gap-2 disabled:opacity-70"
+              className="btn-warn !px-7 !py-3"
             >
               {status ? (
                 <>
                   <motion.span
                     animate={{ rotate: 360 }}
                     transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }}
-                    className="w-5 h-5 rounded-full border-2 border-white/40 border-t-white"
+                    className="w-4 h-4 rounded-full border-2"
+                    style={{ borderColor: 'color-mix(in srgb, currentColor 30%, transparent)', borderTopColor: 'currentColor' }}
                   />
                   {status === 'locating' ? 'جارٍ تحديد موقعك...' : 'جارٍ تسجيل الانصراف...'}
                 </>
               ) : (
                 <>
-                  <LogOut className="w-6 h-6" />
-                  انصراف
+                  <LogOut className="w-4.5 h-4.5" />
+                  تسجيل انصراف
                 </>
               )}
             </motion.button>
           )}
 
           {record && record.checkOutAt && (
-            <div className="px-8 py-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold flex items-center gap-3">
-              <Check className="w-5 h-5" /> يوم عمل مكتمل
+            <div className="px-5 py-3 rounded-[var(--r-sm)] bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[12.5px] font-semibold flex items-center gap-2">
+              <Check className="w-4 h-4" /> يوم عمل مكتمل
             </div>
           )}
         </div>
@@ -3591,7 +3682,7 @@ function AttendanceCard({ currentUser, record, onUpdate }: { currentUser: User; 
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="relative z-10 mt-4 text-red-400 text-sm text-center bg-red-500/10 border border-red-500/20 rounded-xl py-2 px-3 flex items-center justify-center gap-2"
+            className="relative z-10 mt-4 text-red-400 text-sm text-center bg-red-500/10 border border-red-500/20 rounded-[var(--r-md)] py-2 px-3 flex items-center justify-center gap-2"
           >
             <AlertTriangle className="w-4 h-4 shrink-0" />
             {error}
@@ -3600,7 +3691,7 @@ function AttendanceCard({ currentUser, record, onUpdate }: { currentUser: User; 
         {/* تحذير مؤشرات التزييف — غير مانع، لكنه يسجّل ويظهر للإدارة */}
         {flags.length > 0 && (
           <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-            className="relative z-10 mt-4 text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-xl py-2 px-3">
+            className="relative z-10 mt-4 text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-[var(--r-md)] py-2 px-3">
             <p className="font-bold flex items-center gap-2"><ShieldAlert className="w-4 h-4" /> تم تسجيل الحضور مع مؤشرات تحتاج مراجعة:</p>
             <ul className="list-disc pr-5 mt-1 space-y-0.5">
               {flags.map((f) => <li key={f}>{f}</li>)}
@@ -3613,38 +3704,38 @@ function AttendanceCard({ currentUser, record, onUpdate }: { currentUser: User; 
       <AnimatePresence>
         {gpsHelp && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[95] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+            className="fixed inset-0 z-[95] flex items-center justify-center p-4 bg-black/60"
             onClick={() => setGpsHelp('')}>
-            <motion.div initial={{ scale: 0.94, y: 14 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0 }}
+            <motion.div initial={{ scale: 0.97, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.97, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="glass-card rounded-3xl p-6 w-full max-w-md">
+              className="glass-card rounded-[var(--r-md)] p-5 w-full max-w-md">
               <div className="flex items-center gap-3 mb-4">
-                <div className="w-12 h-12 rounded-2xl bg-amber-400/15 border border-amber-400/30 grid place-items-center">
-                  <MapPinOff className="w-6 h-6 text-amber-300" />
+                <div className="w-10 h-10 rounded-[var(--r-sm)] bg-amber-400/15 border border-amber-400/30 grid place-items-center">
+                  <MapPinOff className="w-5 h-5 text-amber-300" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-white">لازم تشغيل الموقع (GPS) أولاً</h3>
-                  <p className="text-[11px] text-gray-400">
+                  <h3 className="text-lg font-bold text-[var(--text-strong)]">لازم تشغيل الموقع (GPS) أولاً</h3>
+                  <p className="text-[11px] text-[var(--text-muted)]">
                     {gpsHelp === 'denied' ? 'المتصفح يحجب صلاحية الموقع' : 'خدمة الموقع مغلقة في الجهاز'}
                   </p>
                 </div>
               </div>
-              <ol className="space-y-2.5 text-sm text-gray-200 list-decimal pr-5">
+              <ol className="space-y-2.5 text-sm text-[var(--text)] list-decimal pr-5">
                 <li>افتح <b>إعدادات الهاتف</b> ← <b>الموقع / Location</b> وشغّله.</li>
                 <li>اضبط الدقة على <b>عالي الدقة / High accuracy</b>.</li>
-                <li>ارجع للمتصفح: اضغط أيقونة <b>القفل 🔒</b> جنب العنوان ← <b>الموقع</b> ← <b>اسمح (Allow)</b>.</li>
-                <li>لو الموبايل: اسحب من أعلى الشاشة وشغّل أيقونة <b>GPS 📍</b> ثم أعد المحاولة.</li>
+                <li>ارجع للمتصفح: اضغط أيقونة <b>القفل </b> جنب العنوان ← <b>الموقع</b> ← <b>اسمح (Allow)</b>.</li>
+                <li>لو الموبايل: اسحب من أعلى الشاشة وشغّل أيقونة <b>GPS </b> ثم أعد المحاولة.</li>
               </ol>
-              <p className="text-[11px] text-amber-300 bg-amber-400/10 border border-amber-400/25 rounded-xl px-3 py-2 mt-3">
+              <p className="text-[11px] text-amber-300 bg-amber-400/10 border border-amber-400/25 rounded-[var(--r-md)] px-3 py-2 mt-3">
                 لا يمكن للمتصفح فتح شاشة إعدادات الهاتف مباشرة لأسباب أمنية — نفّذ الخطوات أعله ثم اضغط «حاول مرة أخرى» وسيُسجّل حضورك فوراً.
               </p>
               <div className="flex gap-2 mt-4">
                 <button onClick={() => { setGpsHelp(''); void stamp(record ? 'out' : 'in'); }}
-                  className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2">
+                  className="btn-primary flex-1 !py-3">
                   <Navigation className="w-4 h-4" /> حاول مرة أخرى
                 </button>
                 <button onClick={() => setGpsHelp('')}
-                  className="px-5 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20">
+                  className="px-5 py-3 rounded-[var(--r-sm)] text-[12.5px] font-semibold text-[var(--text)] border border-[var(--border)] hover:bg-[var(--tint-1)]">
                   إغلاق
                 </button>
               </div>
@@ -3660,17 +3751,17 @@ function AttendanceCard({ currentUser, record, onUpdate }: { currentUser: User; 
 // ===== شرائح الحالة بألوان منظمة لكل مرحلة =====
 const STAGE_META: Record<string, { label: string; cls: string; icon: string }> = {
   new: { label: 'جديد', cls: 'st-chip st-new', icon: '🆕' },
-  contacted: { label: 'تم التواصل', cls: 'st-chip st-contacted', icon: '📞' },
-  meeting: { label: 'موعد معاينة', cls: 'st-chip st-meeting', icon: '📅' },
-  negotiation: { label: 'تفاوض', cls: 'st-chip st-negotiation', icon: '💬' },
-  closed: { label: 'تم البيع', cls: 'st-chip st-closed', icon: '✅' },
-  lost: { label: 'ضائع', cls: 'st-chip st-lost', icon: '❌' },
+  contacted: { label: 'تم التواصل', cls: 'st-chip st-contacted', icon: '' },
+  meeting: { label: 'موعد معاينة', cls: 'st-chip st-meeting', icon: '' },
+  negotiation: { label: 'تفاوض', cls: 'st-chip st-negotiation', icon: '' },
+  closed: { label: 'تم البيع', cls: 'st-chip st-closed', icon: '' },
+  lost: { label: 'ضائع', cls: 'st-chip st-lost', icon: '' },
 };
 const LEAD_STATUS_META: Record<string, { label: string; cls: string; icon: string }> = {
   new: { label: 'رقم جديد', cls: 'st-chip st-new', icon: '🆕' },
-  viewed: { label: 'تم العرض', cls: 'st-chip st-meeting', icon: '👁️' },
-  contacted: { label: 'تم التواصل', cls: 'st-chip st-contacted', icon: '📞' },
-  closed: { label: 'مغلق', cls: 'st-chip st-closed', icon: '✅' },
+  viewed: { label: 'تم العرض', cls: 'st-chip st-meeting', icon: '' },
+  contacted: { label: 'تم التواصل', cls: 'st-chip st-contacted', icon: '' },
+  closed: { label: 'مغلق', cls: 'st-chip st-closed', icon: '' },
 };
 const SOURCE_LABEL: Record<string, string> = {
   campaign: 'Facebook Campaign',
@@ -3751,17 +3842,28 @@ function StatusMenu({ value, onPick, label = 'تسجيل فيدباك', classNam
   const [up, setUp] = useState(false);
   const [style, setStyle] = useState<React.CSSProperties>({});
 
+  // القائمة تُرسم داخل البورتال، وكل قياساتها من الشاشة نفسها:
+  // العرض كافي لوصف الحالة، والارتفاع محصور في المساحة المتاحة
+  // (تفتح لفوق لو المساحة تحت قليلة) — فما تتقطعش أبداً من حدود الشاشة.
   const place = useCallback(() => {
     const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - r.bottom;
-    const flip = spaceBelow < 330 && r.top > 330;
+    const width = Math.min(Math.max(r.width, 300), window.innerWidth - 16);
+    const spaceBelow = window.innerHeight - r.bottom - 10;
+    const spaceAbove = r.top - 10;
+    const flip = spaceBelow < 300 && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(160, Math.min(460, flip ? spaceAbove : spaceBelow));
     setUp(flip);
-    const width = Math.max(r.width, 230);
     let left = r.left;
     if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
-    setStyle({ position: 'fixed', left, width, ...(flip ? { bottom: window.innerHeight - r.top + 6 } : { top: r.bottom + 6 }) });
+    setStyle({
+      position: 'fixed',
+      left,
+      width,
+      maxHeight,
+      ...(flip ? { bottom: window.innerHeight - r.top + 6 } : { top: r.bottom + 6 }),
+    });
   }, []);
 
   useEffect(() => {
@@ -3882,14 +3984,14 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div initial={{ scale: 0.95, y: 12 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-card rounded-3xl w-full max-w-2xl max-h-[88vh] flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between gap-3 p-5 border-b border-white/10">
+        className="panel w-full max-w-2xl max-h-[88vh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between gap-3 p-5 border-b border-[var(--border)]">
           <div>
-            <h3 className="text-lg font-bold text-white">مركز التعليقات والفيدباك</h3>
-            <p className="text-[11px] text-gray-400">إجمالي التعليقات: <b className="text-white">{entries.length}</b> — كل التعليقات محفوظة لكل عميل على حدة</p>
+            <h3 className="text-lg font-bold text-[var(--text-strong)]">مركز التعليقات والفيدباك</h3>
+            <p className="text-[11px] text-[var(--text-muted)]">إجمالي التعليقات: <b className="text-[var(--text-strong)]">{entries.length}</b> — كل التعليقات محفوظة لكل عميل على حدة</p>
           </div>
           <div className="flex items-center gap-2">
             <div className="view-toggle">
@@ -3904,13 +4006,13 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
           {mode === 'summary' ? (
             <>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                <div className="glass-card rounded-xl p-3 text-center"><p className="text-xl font-extrabold text-white">{entries.length}</p><p className="text-[10.5px] text-gray-400">إجمالي التعليقات</p></div>
-                <div className="glass-card rounded-xl p-3 text-center"><p className="text-xl font-extrabold text-emerald-300">{summary.answered}</p><p className="text-[10.5px] text-gray-400">تم الرد</p></div>
-                <div className="glass-card rounded-xl p-3 text-center"><p className="text-xl font-extrabold text-red-300">{summary.noAnswer}</p><p className="text-[10.5px] text-gray-400">لم يرد</p></div>
-                <div className="glass-card rounded-xl p-3 text-center"><p className="text-xl font-extrabold text-blue-300">{clients.length}</p><p className="text-[10.5px] text-gray-400">عملاء لديهم سجل</p></div>
+                <div className="glass-card rounded-[var(--r-md)] p-3 text-center"><p className="text-xl font-extrabold text-[var(--text-strong)]">{entries.length}</p><p className="text-[10.5px] text-[var(--text-muted)]">إجمالي التعليقات</p></div>
+                <div className="glass-card rounded-[var(--r-md)] p-3 text-center"><p className="text-xl font-extrabold text-emerald-300">{summary.answered}</p><p className="text-[10.5px] text-[var(--text-muted)]">تم الرد</p></div>
+                <div className="glass-card rounded-[var(--r-md)] p-3 text-center"><p className="text-xl font-extrabold text-red-300">{summary.noAnswer}</p><p className="text-[10.5px] text-[var(--text-muted)]">لم يرد</p></div>
+                <div className="glass-card rounded-[var(--r-md)] p-3 text-center"><p className="text-xl font-extrabold text-[var(--brand)]">{clients.length}</p><p className="text-[10.5px] text-[var(--text-muted)]">عملاء لديهم سجل</p></div>
               </div>
-              <div className="glass-card rounded-xl p-4">
-                <h4 className="text-sm font-bold text-white mb-2">توزيع العملاء على المراحل</h4>
+              <div className="glass-card rounded-[var(--r-md)] p-4">
+                <h4 className="text-sm font-bold text-[var(--text-strong)] mb-2">توزيع العملاء على المراحل</h4>
                 <div className="flex flex-wrap gap-2">
                   {Object.entries(STAGE_META).map(([key, meta]) => (
                     <span key={key} className={meta.cls}>
@@ -3920,13 +4022,13 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
                 </div>
               </div>
               {salesRows.length > 0 && (
-                <div className="glass-card rounded-xl p-4">
-                  <h4 className="text-sm font-bold text-white mb-2">عدد التعليقات لكل سيلز</h4>
+                <div className="glass-card rounded-[var(--r-md)] p-4">
+                  <h4 className="text-sm font-bold text-[var(--text-strong)] mb-2">عدد التعليقات لكل سيلز</h4>
                   <div className="space-y-1.5">
                     {salesRows.map(([name, count]) => (
                       <div key={name} className="flex items-center justify-between text-xs">
-                        <span className="text-gray-300">{name}</span>
-                        <span className="font-bold text-white">{count}</span>
+                        <span className="text-[var(--text)]">{name}</span>
+                        <span className="font-bold text-[var(--text-strong)]">{count}</span>
                       </div>
                     ))}
                   </div>
@@ -3934,12 +4036,12 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
               )}
             </>
           ) : entries.length === 0 ? (
-            <p className="text-center text-sm text-gray-500 py-10">لا توجد تعليقات بعد</p>
+            <p className="text-center text-sm text-[var(--text-dim)] py-10">لا توجد تعليقات بعد</p>
           ) : (
             entries.map((e) => (
               <div key={`${e.kind}-${e.id}`} className="fb-item">
                 <div className="fb-head">
-                  <span className="font-bold text-gray-200">{e.client}{e.sales ? ` — ${e.sales}` : ''}</span>
+                  <span className="font-bold text-[var(--text)]">{e.client}{e.sales ? ` — ${e.sales}` : ''}</span>
                   <span>{formatDateTime(e.at)}</span>
                 </div>
                 <p className="fb-text"><FeedbackChip status={e.status} /> {e.text}</p>
@@ -4068,9 +4170,9 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
       {/* شريط البحث + الأدوات */}
       <div className="flex flex-col md:flex-row gap-3">
         <div className="flex-1 relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-[var(--text-muted)]" />
           <input type="text" placeholder="ابحث بالاسم أو الرقم أو العقار أو المبلغ (مثال: مليون)" value={searchTerm} onChange={(e) => onSearch(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-xl pr-10 pl-4 py-2.5 text-sm text-white focus:border-blue-500/50" />
+            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] pr-10 pl-4 py-2.5 text-[13.5px] text-[var(--text-strong)]" />
         </div>
         <div className="flex items-center gap-2">
           {/* أيقونتان لتحديد شكل العرض */}
@@ -4079,11 +4181,11 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
             <button className={view === 'table' ? 'on' : ''} onClick={() => switchView('table')} title="جدول بأعمدة"><Rows className="w-4 h-4" /></button>
           </div>
           <button onClick={() => setShowComments(true)}
-            className="flex items-center gap-1.5 text-xs font-bold text-amber-300 bg-amber-400/15 border border-amber-400/30 rounded-xl px-3 py-2.5 hover:bg-amber-400/25 transition-colors"
+            className="flex items-center gap-1.5 text-[11.5px] font-semibold text-amber-300 border border-amber-400/30 rounded-[var(--r-sm)] px-3 py-2.5"
             title="يعرض كل التعليقات وعددها وزرار التلخيص للـ CEO">
             <MessageSquare className="w-4 h-4" /> كل التعليقات
           </button>
-          <button onClick={onAdd} className="gradient-primary text-white px-4 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg">
+          <button onClick={onAdd} className="btn-primary">
             <Plus className="w-4 h-4" /> إضافة عميل
           </button>
         </div>
@@ -4098,8 +4200,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
       {/* قائمة واحدة: الأرقام الواردة والعملاء مرصوصون معاً */}
       {feed.length === 0 ? (
         <div className="text-center py-16">
-          <Users className="w-14 h-14 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400 text-sm">
+          <Users className="w-14 h-14 text-[var(--text-dim)] mx-auto mb-3" />
+          <p className="text-[var(--text-muted)] text-sm">
             {q ? 'لا نتائج مطابقة للبحث' : 'لا يوجد عملاء بعد — أضف عميلاً وسيظهر هنا فوراً'}
           </p>
         </div>
@@ -4170,8 +4272,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                           <a href={`tel:${lead!.phone}`} className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل"><PhoneCall className="w-3.5 h-3.5" /></a>
                           {onConvert && lead!.status !== 'closed' && (
                             <button onClick={() => onConvert(lead)} title="ينشئ عميلاً بهذا الرقم في قائمتك"
-                              className="text-[10.5px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-2.5 py-1.5 rounded-lg font-bold hover:bg-emerald-500/30 whitespace-nowrap">
-                              ➕ أضف لعملائي
+                              className="text-[10.5px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-2.5 py-1.5 rounded-[var(--r-sm)] font-bold hover:bg-emerald-500/30 whitespace-nowrap">
+                               أضف لعملائي
                             </button>
                           )}
                         </>
@@ -4242,6 +4344,10 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                         {sourceText}
                       </span>
                       {client?.stage === 'lost' && <span className="st-chip st-lost">ضائع</span>}
+                      {/* حالة العميل المختارة من القائمة المنسدلة: حبة صغيرة جنب الاسم */}
+                      {!isLead && (
+                        <FeedbackBar client={client} onPick={(statusId: string) => openComposer(client!, statusId)} />
+                      )}
                     </div>
 
                     {!isLead && last?.text && (
@@ -4275,8 +4381,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                         <a href={`tel:${lead!.phone}`} className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل"><PhoneCall className="w-3.5 h-3.5" /></a>
                         {onConvert && lead!.status !== 'closed' && (
                           <button onClick={() => onConvert(lead)} title="ينشئ عميلاً بهذا الرقم في قائمتك"
-                            className="text-[10.5px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-2.5 py-1.5 rounded-lg font-bold hover:bg-emerald-500/30 whitespace-nowrap">
-                            ➕ أضف لعملائي
+                            className="text-[10.5px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-2.5 py-1.5 rounded-[var(--r-sm)] font-bold hover:bg-emerald-500/30 whitespace-nowrap">
+                             أضف لعملائي
                           </button>
                         )}
                       </>
@@ -4290,11 +4396,6 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                       </>
                     )}
                   </div>
-
-                  {/* شريط الفيدباك: صف كامل بعرض الكارت تحت اسم العميل مباشرةً */}
-                  {!isLead && (
-                    <FeedbackBar client={client} onPick={(statusId: string) => openComposer(client!, statusId)} />
-                  )}
                 </motion.article>
                 {open && !isLead && <FeedbackComposer />}
               </Fragment>
@@ -4328,13 +4429,13 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-bold gradient-text">المراحل — لكل سيلز</h2>
-          <p className="text-xs text-gray-400 mt-1">اضغط اسم السيلز لعرض أرقامه وعدد الكومنتات، واضغط أي رقم لفتح كومنتاته</p>
+          <div className="page-intro"><div><h2>المراحل — لكل سيلز</h2></div></div>
+          <p className="text-xs text-[var(--text-muted)] mt-1">اضغط اسم السيلز لعرض أرقامه وعدد الكومنتات، واضغط أي رقم لفتح كومنتاته</p>
         </div>
         <div className="relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث عن سيلز أو عميل..."
-            className="w-full sm:w-56 bg-white/5 border border-white/10 rounded-xl pr-9 pl-3 py-2.5 text-white text-sm" />
+            className="w-full sm:w-56 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm" />
         </div>
       </div>
 
@@ -4359,7 +4460,7 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
             {isOpen && (
               <div className="pipe-list">
                 {userClients.length === 0 ? (
-                  <p className="text-sm text-gray-500 text-center py-4">{all.length === 0 ? 'لا يوجد عملاء لهذا السيلز بعد' : 'لا نتائج مطابقة للبحث'}</p>
+                  <p className="text-sm text-[var(--text-dim)] text-center py-4">{all.length === 0 ? 'لا يوجد عملاء لهذا السيلز بعد' : 'لا نتائج مطابقة للبحث'}</p>
                 ) : (
                   userClients.map((client: Client) => {
                     const src = SOURCE_KINDS[sourceKindOf(`${client.source} ${client.status}`)];
@@ -4399,8 +4500,8 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
       })}
       {salesUsers.length === 0 && (
         <div className="text-center py-16">
-          <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400">لا يوجد سيلز في الفريق</p>
+          <Users className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
+          <p className="text-[var(--text-muted)]">لا يوجد سيلز في الفريق</p>
         </div>
       )}
     </div>
@@ -4409,38 +4510,36 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
 
 function PipelineView({ clients, onUpdateStage }: any) {
   const stages = [
-    { id: 'new', label: 'جديد', color: 'from-blue-500 to-blue-600', icon: '🆕' },
-    { id: 'contacted', label: 'تم التواصل', color: 'from-purple-500 to-purple-600', icon: '📞' },
-    { id: 'meeting', label: 'موعد معاينة', color: 'from-cyan-500 to-cyan-600', icon: '📅' },
-    { id: 'negotiation', label: 'تفاوض', color: 'from-amber-500 to-amber-600', icon: '💬' },
-    { id: 'closed', label: 'تم البيع', color: 'from-emerald-500 to-emerald-600', icon: '✅' },
-    { id: 'lost', label: 'ضائع', color: 'from-red-500 to-red-600', icon: '❌' },
+    { id: 'new', label: 'جديد', color: 'stg-new' },
+    { id: 'contacted', label: 'تم التواصل', color: 'stg-contacted' },
+    { id: 'meeting', label: 'موعد معاينة', color: 'stg-meeting' },
+    { id: 'negotiation', label: 'تفاوض', color: 'stg-negotiation' },
+    { id: 'closed', label: 'تم البيع', color: 'stg-closed' },
+    { id: 'lost', label: 'ضائع', color: 'stg-lost' },
   ];
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-bold gradient-text">مراحل العملاء</h2>
+      <div className="page-intro"><div><h2>مراحل العملاء</h2></div></div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {stages.map((stage) => {
           const stageClients = clients.filter((c: Client) => c.stage === stage.id);
           return (
-            <div key={stage.id} className="glass-card rounded-2xl p-4">
-              <div className={`bg-gradient-to-r ${stage.color} rounded-xl p-3 mb-3`}>
-                <div className="flex items-center justify-between">
-                  <span className="text-2xl">{stage.icon}</span>
-                  <span className="bg-white/20 text-white px-2 py-1 rounded-full text-sm font-bold">{stageClients.length}</span>
-                </div>
-                <h3 className="font-bold text-white mt-2">{stage.label}</h3>
+            <div key={stage.id} className="panel p-4">
+              <div className="flex items-center gap-2.5 pb-3 mb-3 border-b border-[var(--border)]">
+                <span className={`w-2 h-2 rounded-full shrink-0 ${stage.color}`} />
+                <h3 className="panel-title flex-1">{stage.label}</h3>
+                <span className="text-xs font-bold text-[var(--text-muted)] tabular-nums">{stageClients.length}</span>
               </div>
               <div className="space-y-2">
                 {stageClients.map((client: Client) => (
-                  <div key={client.id} className="bg-white/5 rounded-lg p-3">
-                    <p className="font-medium text-white text-sm">{client.name}</p>
-                    <p className="text-xs text-gray-400" dir="ltr">{client.phone}</p>
+                  <div key={client.id} className="bg-[var(--tint-1)] rounded-[var(--r-sm)] p-3">
+                    <p className="font-medium text-[var(--text-strong)] text-sm">{client.name}</p>
+                    <p className="text-xs text-[var(--text-muted)]" dir="ltr">{client.phone}</p>
                     <select
                       value={client.stage}
                       onChange={(e) => onUpdateStage(client.id, e.target.value as Client['stage'])}
-                      className="mt-1.5 w-full bg-white/5 border border-purple-500/20 rounded-lg px-2 py-1 text-xs text-white"
+                      className="mt-1.5 w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-2 py-1 text-xs text-[var(--text-strong)]"
                     >
                       {stages.map((s) => <option key={s.id} value={s.id} className="bg-gray-900">{s.label}</option>)}
                     </select>
@@ -4456,63 +4555,138 @@ function PipelineView({ clients, onUpdateStage }: any) {
 }
 
 // ===== شريط التذكير الرنّان: نفس شكل الإشعار الأصلي + أزرار الإسكات والإتمام والتأجيل =====
-function AlarmBar({ alarm: current, snoozeMinutes, onSilence, onResume, onComplete, onSnooze, onDismiss }: any) {
+// ===== بند ٤: صفحة حالة واحدة — كل الأرقام اللي عليها الحالة دي =====
+function StatusBoardView({ statusId, clients, onClose, onCall, onSelect }: any) {
+  const meta = FEEDBACK_STATUS_BY_ID[statusId];
+  const items = (clients || []).filter((c: Client) => latestFeedbackStatusOf(c) === statusId);
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="status-board">
+      <div className="status-board-head">
+        <button type="button" onClick={onClose} className="icon-btn" title="رجوع">
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <span className={`sb-dot ${meta?.cls || ''}`} />
+        <div className="min-w-0 flex-1">
+          <h2 className="page-heading">{meta?.ar || meta?.label || 'حالة'}</h2>
+          <p className="page-sub">{meta?.label} — {items.length} رقم</p>
+        </div>
+      </div>
+
+      <div className="status-board-body">
+        {items.length === 0 ? (
+          <div className="panel p-10 text-center">
+            <p className="text-[var(--text-muted)]">مفيش أرقام في الحالة دي لسه</p>
+          </div>
+        ) : (
+          <div className="panel divide-y divide-[var(--border)]">
+            {items.map((c: Client) => (
+              <div key={c.id} className="stb-row">
+                <div className="min-w-0 flex-1">
+                  <button type="button" className="stb-name" onClick={() => onSelect?.(c)}>{c.name}</button>
+                  <p className="stb-phone" dir="ltr">{c.phone}</p>
+                  {lastCommentOf(c)?.text ? <p className="stb-note">{lastCommentOf(c)?.text}</p> : null}
+                </div>
+                <a href={`tel:${c.phone}`} className="rc-action" dir="ltr">اتصال</a>
+                <button type="button" className="rc-action" onClick={() => onCall?.(c)}>تسجيل مكالمة</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+// ===== لوحة المخطط في شاشة الدخول (نفسها في شاشتي الدخول) =====
+// مخطط معماري مرسوم خطوطاً: الجدران والقواطع والأبواب والنوافذ وخط القياس.
+function LoginPlan({ lines }: { lines: string[] }) {
+  return (
+    <aside className="login-plan" aria-hidden="true">
+      <svg
+        className="login-plan-figure"
+        viewBox="0 0 400 300"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.2}
+        strokeLinecap="square"
+      >
+        <rect x="20" y="24" width="250" height="180" />
+        <rect x="27" y="31" width="236" height="166" />
+        <path d="M20 120h70" />
+        <path d="M120 120h60" />
+        <path d="M180 24v36" />
+        <path d="M180 85v119" />
+        <path d="M90 120V95" />
+        <path d="M90 95a25 25 0 0 1 25 25" />
+        <path d="M180 60V40" />
+        <path d="M180 40a20 20 0 0 1 20 20" />
+        <path d="M60 27.5h50" strokeWidth={4} />
+        <path d="M200 27.5h44" strokeWidth={4} />
+        <path d="M20 204v28h150v-28" />
+        <path d="M20 218h150" strokeDasharray="6 6" />
+        {/* خط القياس وسهم الشمال — طبقة القياس هي موضع لون الهوية الوحيد */}
+        <g className="plan-accent">
+          <path d="M20 256h250" />
+          <path d="M20 250v12" />
+          <path d="M270 250v12" />
+          <path d="M300 24v180" />
+          <path d="M294 24h12" />
+          <path d="M294 204h12" />
+          <circle cx="352" cy="56" r="16" />
+          <path d="M352 46v20" />
+          <path d="M346 52l6-6 6 6" />
+        </g>
+      </svg>
+      <div className="login-plan-text">
+        {lines.map((line, i) => (
+          <p key={line} className="login-plan-line">
+            {i === 0 && <span className="login-live-dot" />}
+            {line}
+          </p>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function AlarmBar({ alarm: current, snoozeMinutes = 5, lateAfterMinutes = 5, onComplete, onSnooze, onDismiss, onDial }: any) {
+  // عدّاد بسيط: يبيّن إمتى التذكير اتسجّل «متأخر» (٥ دقايق بلا إجراء)
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(t);
+  }, []);
+  const waitedMin = Math.max(0, Math.floor((now - (current.firedAt || now)) / 60000));
+  const late = waitedMin >= lateAfterMinutes;
+
   return (
     <motion.div
-      initial={{ opacity: 0, y: -100 }}
+      initial={{ opacity: 0, y: -60 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -100 }}
+      exit={{ opacity: 0, y: -60 }}
       className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4"
     >
-      <div className="glass-card rounded-2xl p-4 border-purple-400/50 glow-primary">
+      <div className={`panel p-4 ${late ? 'rc-panel is-late' : ''}`}>
         <div className="flex items-start gap-3">
-          <motion.div
-            animate={{ scale: [1, 1.2, 1] }}
-            transition={{ duration: 0.5, repeat: Infinity }}
-            className="w-10 h-10 gradient-primary rounded-full flex items-center justify-center shrink-0"
-          >
-            <Bell className="w-5 h-5 text-white" />
-          </motion.div>
+          <span className="rc-bell"><Bell className="w-4.5 h-4.5" /></span>
           <div className="flex-1 min-w-0">
-            <p className="font-bold text-white text-sm">{current.title}</p>
-            <p className="text-gray-300 text-xs mt-1">{current.body}</p>
-            {!current.quiet ? (
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                <button type="button" onClick={onSilence}
-                  className="text-[11px] bg-white/10 hover:bg-white/20 border border-white/15 text-gray-200 px-2.5 py-1 rounded-lg font-bold">
-                  🔕 إسكات
-                </button>
-                <button type="button" onClick={onSnooze}
-                  className="text-[11px] bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 text-purple-200 px-2.5 py-1 rounded-lg font-bold">
-                  ⏰ تأجيل {snoozeMinutes} د
-                </button>
-                {current.phone && (
-                  <a href={`tel:${current.phone}`}
-                    className="text-[11px] bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 text-cyan-200 px-2.5 py-1 rounded-lg font-bold"
-                    dir="ltr">
-                    📞 اتصال
-                  </a>
-                )}
-              </div>
-            ) : (
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                <button type="button" onClick={onResume}
-                  className="text-[11px] bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-200 px-2.5 py-1 rounded-lg font-bold">
-                  🔔 رجّع الرنة
-                </button>
-              </div>
-            )}
+            <p className="font-bold text-[var(--text-strong)] text-sm">{current.title}</p>
+            <p className="text-[var(--text-muted)] text-xs mt-1">{current.body}</p>
+            <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+              <span className={`rc-chip${late ? ' is-late' : ''}`}>
+                {late ? `متأخر — ${waitedMin} د بلا إجراء` : 'حان الموعد'}
+              </span>
+              {current.phone && (
+                <a href={`tel:${current.phone}`} className="rc-action" dir="ltr"
+                  onClick={() => onDial?.()}>اتصال</a>
+              )}
+              <button type="button" onClick={onSnooze} className="rc-action">تأجيل {snoozeMinutes} د</button>
+              <button type="button" onClick={onComplete} className="rc-action is-done">تم</button>
+            </div>
           </div>
-          <div className="flex flex-col gap-1 shrink-0">
-            <button type="button" onClick={onComplete} title="تم — إتمام التذكير"
-              className="p-1.5 hover:bg-emerald-500/20 rounded-lg text-emerald-400">
-              <Check className="w-4 h-4" />
-            </button>
-            <button type="button" onClick={onDismiss} title="إغلاق (تُسكت الرنة)"
-              className="p-1.5 hover:bg-white/10 rounded-lg">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
+          <button type="button" onClick={onDismiss} title="إغلاق" className="rc-close">
+            <X className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </motion.div>
@@ -4530,6 +4704,7 @@ const toLocalInput = (d: Date): string => {
 function CallFlowModal({ client, user, onClose, onSave }: any) {
   const [result, setResult] = useState<'' | 'answered' | 'no-answer'>('');
   const [comment, setComment] = useState('');
+  const [status, setStatus] = useState('');
   const [nextCallAt, setNextCallAt] = useState('');
   const [dialed, setDialed] = useState(false);
   const [done, setDone] = useState(false);
@@ -4544,11 +4719,12 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
     if (r === 'no-answer' && !comment.trim()) setComment(NO_ANSWER_COMMENT);
   };
 
+  // الحفظ يتوقّف حتى يكتمل الثلاثة: النتيجة + الكومنت + حالة الفيدباك
   const save = () => {
     if (!result) return;
-    // ضمانة أخيرة: لو اختار «لم يرد» وكتب كومنتاً فارغاً ينزل الكومنت تلقائياً
     const text = comment.trim() || (result === 'no-answer' ? NO_ANSWER_COMMENT : '');
-    onSave({ result, comment: text, nextCallAt });
+    if (!text || !status) return;
+    onSave({ result, comment: text, status, nextCallAt });
     setDone(true);
   };
 
@@ -4556,17 +4732,17 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-[75] flex items-center justify-center p-3 sm:p-4 bg-black/85" onClick={onClose}>
       <motion.div initial={{ scale: 0.94, y: 14 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.94 }}
-        className="glass-card rounded-3xl p-5 sm:p-6 w-full max-w-lg max-h-[92vh] overflow-y-auto"
+        className="panel p-5 sm:p-6 w-full max-w-lg max-h-[92vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}>
 
         {done ? (
           <div className="text-center py-6">
-            <div className="w-16 h-16 mx-auto rounded-2xl gradient-success flex items-center justify-center mb-4">
-              <Check className="w-8 h-8 text-white" />
+            <div className="w-16 h-16 mx-auto rounded-[var(--r-xl)] gradient-success flex items-center justify-center mb-4">
+              <Check className="w-8 h-8 text-[var(--text-strong)]" />
             </div>
-            <h3 className="text-lg font-bold text-white mb-1">تم تسجيل الاتصال</h3>
-            <p className="text-xs text-gray-400 mb-5">
-              {result === 'answered' ? 'مسجّلة: تم الرد ✅' : 'مسجّلة: لم يرد ❌'}
+            <h3 className="text-lg font-bold text-[var(--text-strong)] mb-1">تم تسجيل الاتصال</h3>
+            <p className="text-xs text-[var(--text-muted)] mb-5">
+              {result === 'answered' ? 'مسجّلة: تم الرد ' : 'مسجّلة: لم يرد '}
               {nextCallAt ? ' • وتم ضبط تذكير بموعد الاتصال القادم' : ''}
             </p>
             <button onClick={onClose} className="btn-primary w-full justify-center">إغلاق</button>
@@ -4575,12 +4751,12 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
           <>
             <div className="flex items-start justify-between gap-3 mb-4">
               <div className="min-w-0">
-                <h2 className="text-lg font-bold text-white truncate">{client.name}</h2>
-                <p className="text-sm text-gray-400" dir="ltr">{client.phone}</p>
+                <h2 className="text-lg font-bold text-[var(--text-strong)] truncate">{client.name}</h2>
+                <p className="text-sm text-[var(--text-muted)]" dir="ltr">{client.phone}</p>
               </div>
               <button type="button" onClick={onClose} title="إغلاق"
-                className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-                <X className="w-4 h-4 text-gray-300" />
+                className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+                <X className="w-4 h-4 text-[var(--text)]" />
               </button>
             </div>
 
@@ -4589,24 +4765,24 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
               <PhoneCall className="w-5 h-5" /> الاتصال بالعميل الآن
             </a>
 
-            <p className="text-xs text-gray-400 text-center mt-2 mb-4">
+            <p className="text-xs text-[var(--text-muted)] text-center mt-2 mb-4">
               {dialed ? 'حدّد نتيجة الاتصال بعد ما تقفل:' : 'اتصل بالعميل ثم سجّل النتيجة:'}
             </p>
 
             <div className="grid grid-cols-2 gap-3">
               <button type="button" onClick={() => pick('answered')}
-                className={`py-3.5 rounded-xl font-bold text-sm border-2 transition-all flex items-center justify-center gap-2 ${
+                className={`py-3.5 rounded-[var(--r-md)] font-bold text-sm border-2 transition-all flex items-center justify-center gap-2 ${
                   result === 'answered'
                     ? 'border-emerald-400 bg-emerald-500/20 text-emerald-300'
-                    : 'border-white/10 bg-white/5 text-gray-300 hover:border-emerald-400/50'
+                    : 'border-[var(--border)] bg-[var(--tint-1)] text-[var(--text)] hover:border-emerald-400/50'
                 }`}>
                 <Check className="w-4 h-4" /> تم الرد
               </button>
               <button type="button" onClick={() => pick('no-answer')}
-                className={`py-3.5 rounded-xl font-bold text-sm border-2 transition-all flex items-center justify-center gap-2 ${
+                className={`py-3.5 rounded-[var(--r-md)] font-bold text-sm border-2 transition-all flex items-center justify-center gap-2 ${
                   result === 'no-answer'
                     ? 'border-red-400 bg-red-500/20 text-red-300'
-                    : 'border-white/10 bg-white/5 text-gray-300 hover:border-red-400/50'
+                    : 'border-[var(--border)] bg-[var(--tint-1)] text-[var(--text)] hover:border-red-400/50'
                 }`}>
                 <X className="w-4 h-4" /> لم يرد
               </button>
@@ -4615,33 +4791,53 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
             {result && (
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-4 space-y-3">
                 <div>
-                  <label className="block text-xs font-bold text-gray-300 mb-1.5">
-                    {result === 'answered' ? '💬 فيدباك المكالمة / كومنت' : '💬 ملاحظة (سبب عدم الرد مثلاً)'}
+                  <label className="block text-xs font-bold text-[var(--text)] mb-1.5">
+                    {result === 'answered' ? 'فيدباك المكالمة / كومنت *' : 'ملاحظة (سبب عدم الرد مثلاً) *'}
                   </label>
                   <textarea value={comment} onChange={(e) => setComment(e.target.value)}
                     placeholder="اكتب ما قاله العميل أو ملاحظاتك…"
-                    className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white resize-none h-24" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-gray-300 mb-1.5 flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-amber-400" /> معاد الاتصال القادم (يوصلك تذكير في الوقت ده)
-                  </label>
-                  <input type="datetime-local" value={nextCallAt} onChange={(e) => setNextCallAt(e.target.value)}
-                    className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" />
-                  <div className="flex gap-2 mt-2">
-                    {[['بعد ساعة', 60], ['بعد ٣ ساعات', 180], ['بكرة نفس الوقت', 1440], ['بعد أسبوع', 10080]].map(([label, mins]) => (
-                      <button key={label as string} type="button"
-                        onClick={() => { const d = new Date(); d.setMinutes(d.getMinutes() + (mins as number)); setNextCallAt(toLocalInput(d)); }}
-                        className="text-[11px] font-bold text-purple-300 bg-purple-500/15 border border-purple-500/30 rounded-full px-3 py-1.5 hover:bg-purple-500/25 transition-colors">
-                        {label as string}
-                      </button>
-                    ))}
-                  </div>
+                    className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-24" />
                 </div>
 
-                <button onClick={save} className="btn-primary w-full justify-center py-3.5">
-                  <Send className="w-4 h-4" /> حفظ نتيجة الاتصال
-                </button>
+                {/* بند ٢: القائمة المنسدلة لحالة الفيدباك تظهر بعد كتابة الكومنت */}
+                {comment.trim() ? (
+                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-bold text-[var(--text)] mb-1.5">حالة الفيدباك *</label>
+                      <StatusMenu
+                        value={status}
+                        label="اختر الحالة (follow up / done deal …)"
+                        className="fc-status-menu"
+                        stopPropagation={false}
+                        onPick={(id: string) => setStatus(id)}
+                      />
+                    </div>
+
+                    {/* بند ٥: تاريخ الاتصال القادم ← يتسجّل تذكير */}
+                    <div>
+                      <label className="block text-xs font-bold text-[var(--text)] mb-1.5 flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-[var(--warn)]" /> موعد الاتصال القادم (يتسجّل تذكير في وقته)
+                      </label>
+                      <input type="datetime-local" value={nextCallAt} onChange={(e) => setNextCallAt(e.target.value)}
+                        className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" />
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {[['بعد ساعة', 60], ['بعد ٣ ساعات', 180], ['بكرة نفس الوقت', 1440], ['بعد أسبوع', 10080]].map(([label, mins]) => (
+                          <button key={label as string} type="button"
+                            onClick={() => { const d = new Date(); d.setMinutes(d.getMinutes() + (mins as number)); setNextCallAt(toLocalInput(d)); }}
+                            className="rc-action">
+                            {label as string}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <button onClick={save} disabled={!status} className="btn-primary w-full justify-center py-3.5 disabled:opacity-55">
+                      <Send className="w-4 h-4" /> حفظ نتيجة الاتصال
+                    </button>
+                  </motion.div>
+                ) : (
+                  <p className="fc-hint">اكتب الكومنت الأول — وبعدها تظهر حالة الفيدباك وموعد الاتصال القادم.</p>
+                )}
               </motion.div>
             )}
           </>
@@ -4678,22 +4874,22 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
   const goTarget = tab === 'reminders' ? 'reminders' : tab === 'leads' ? 'new-leads' : tab === 'calls' ? (isSales ? 'daily-feedback' : 'admin-feedback') : (isSales ? 'chat' : 'admin-chat');
 
   const now = Date.now();
-  const empty = (text: string) => <p className="text-sm text-gray-500 text-center py-10">{text}</p>;
+  const empty = (text: string) => <p className="text-sm text-[var(--text-dim)] text-center py-10">{text}</p>;
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-[72] flex items-center justify-center p-3 sm:p-4 bg-black/85" onClick={onClose}>
       <motion.div initial={{ scale: 0.95, y: 12 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95 }}
-        className="glass-card rounded-3xl p-4 sm:p-5 w-full max-w-xl max-h-[92vh] flex flex-col"
+        className="panel p-4 sm:p-5 w-full max-w-xl max-h-[92vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}>
 
         <div className="flex items-center justify-between gap-3 mb-3">
           <h2 className="text-lg font-bold gradient-text flex items-center gap-2">
-            <Bell className="w-5 h-5 text-purple-300" /> الإشعارات
+            <Bell className="w-5 h-5 text-[var(--text)]" /> الإشعارات
           </h2>
           <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-300" />
+            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+            <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
 
@@ -4702,10 +4898,10 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
             const n = countFor(t.id);
             return (
               <button key={t.id} type="button" onClick={() => setTab(t.id)}
-                className={`shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold border transition-all ${
+                className={`shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--r-md)] text-xs font-bold border transition-all ${
                   tab === t.id
-                    ? 'bg-purple-500/20 border-purple-400/60 text-purple-200'
-                    : 'bg-white/5 border-white/10 text-gray-400 hover:border-white/25'
+                    ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--text)]'
+                    : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'
                 }`}>
                 <t.icon className="w-4 h-4" />
                 {t.label}
@@ -4719,54 +4915,54 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
           {tab === 'reminders' && (reminders.length === 0 ? empty('لا توجد تذكيرات') : reminders.map((r: Reminder) => {
             const due = new Date(r.dateTime).getTime() <= now;
             return (
-              <div key={r.id} className={`rounded-xl border p-3 ${due ? 'bg-red-500/10 border-red-500/30' : 'bg-white/5 border-white/10'}`}>
+              <div key={r.id} className={`rounded-[var(--r-md)] border p-3 ${r.isDelayed ? 'bg-[var(--tint-1)] border-[var(--warn)]' : due ? 'bg-red-500/10 border-red-500/30' : 'bg-[var(--tint-1)] border-[var(--border)]'}`}>
                 <div className="flex items-center justify-between gap-2">
-                  <p className="font-bold text-white text-sm truncate">{r.clientName}</p>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${due ? 'bg-red-500/20 text-red-300' : 'bg-purple-500/20 text-purple-300'}`}>
-                    {due ? 'مستحق الآن' : formatDateTime(r.dateTime)}
+                  <p className="font-bold text-[var(--text-strong)] text-sm truncate">{r.clientName}</p>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.isDelayed ? 'bg-[color-mix(in_srgb,var(--warn)_20%,transparent)] text-[var(--warn)]' : due ? 'bg-red-500/20 text-red-300' : 'bg-[var(--brand-primary-softer)] text-[var(--text-muted)]'}`}>
+                    {r.isDelayed ? `متأخر${r.delayCount > 1 ? ` ×${r.delayCount}` : ''}` : due ? 'مستحق الآن' : formatDateTime(r.dateTime)}
                   </span>
                 </div>
-                <p className="text-xs text-gray-400 mt-1" dir="ltr">{r.clientPhone}</p>
-                {r.note && <p className="text-xs text-gray-300 mt-1">{r.note}</p>}
+                <p className="text-xs text-[var(--text-muted)] mt-1" dir="ltr">{r.clientPhone}</p>
+                {r.note && <p className="text-xs text-[var(--text)] mt-1">{r.note}</p>}
               </div>
             );
           }))}
 
           {tab === 'leads' && (leads.length === 0 ? empty('لا توجد أرقام جديدة') : leads.map((l: AssignedLead) => (
-            <div key={l.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+            <div key={l.id} className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3">
               <div className="flex items-center justify-between gap-2">
-                <p className="font-bold text-white text-sm truncate">{l.name || 'بدون اسم'}</p>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${l.status === 'new' ? 'bg-cyan-500/20 text-cyan-300' : 'bg-white/10 text-gray-300'}`}>
+                <p className="font-bold text-[var(--text-strong)] text-sm truncate">{l.name || 'بدون اسم'}</p>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${l.status === 'new' ? 'bg-[var(--brand-primary-softer)] text-[var(--brand)]' : 'bg-[var(--tint-2)] text-[var(--text)]'}`}>
                   {l.status === 'new' ? 'جديد' : l.status === 'viewed' ? 'تم العرض' : 'تم التواصل'}
                 </span>
               </div>
-              <p className="text-xs text-gray-400 mt-1" dir="ltr">{l.phone}</p>
-              {l.description && <p className="text-xs text-gray-500 mt-1">{l.description}</p>}
+              <p className="text-xs text-[var(--text-muted)] mt-1" dir="ltr">{l.phone}</p>
+              {l.description && <p className="text-xs text-[var(--text-dim)] mt-1">{l.description}</p>}
             </div>
           )))}
 
           {tab === 'messages' && (messages.length === 0 ? empty('لا توجد رسائل') : messages.map((m: ChatMessage) => (
-            <div key={m.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+            <div key={m.id} className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3">
               <div className="flex items-center justify-between gap-2">
-                <p className="font-bold text-white text-sm truncate">{m.fromName}</p>
-                <span className="text-[10px] text-gray-500">{formatDateTime(m.createdAt)}</span>
+                <p className="font-bold text-[var(--text-strong)] text-sm truncate">{m.fromName}</p>
+                <span className="text-[10px] text-[var(--text-dim)]">{formatDateTime(m.createdAt)}</span>
               </div>
-              <p className="text-sm text-gray-300 mt-1">{m.text}</p>
+              <p className="text-sm text-[var(--text)] mt-1">{m.text}</p>
             </div>
           )))}
 
           {tab === 'calls' && (callLogs.length === 0 ? empty('لا توجد مكالمات من الفريق بعد') : callLogs.map((c: CallLog) => (
-            <div key={c.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+            <div key={c.id} className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3">
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <p className="font-bold text-white text-sm truncate">{c.clientName}</p>
+                <p className="font-bold text-[var(--text-strong)] text-sm truncate">{c.clientName}</p>
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${c.result === 'answered' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}`}>
                   {c.result === 'answered' ? 'answered ✓' : 'not answered ✕'}
                 </span>
               </div>
-              <p className="text-[11px] text-gray-400 mt-1">
+              <p className="text-[11px] text-[var(--text-muted)] mt-1">
                 {c.salesName} • <span dir="ltr">{c.clientPhone}</span> • {formatDateTime(c.createdAt)}
               </p>
-              {c.comment && <p className="text-sm text-gray-200 mt-1.5 bg-black/20 rounded-lg px-2.5 py-1.5">{c.comment}</p>}
+              {c.comment && <p className="text-sm text-[var(--text)] mt-1.5 bg-black/20 rounded-[var(--r-sm)] px-2.5 py-1.5">{c.comment}</p>}
               {c.nextCallAt && (
                 <p className="text-[11px] text-amber-300 mt-1.5 flex items-center gap-1">
                   <Clock className="w-3 h-3" /> اتصال قادم: {formatDateTime(c.nextCallAt)}
@@ -4776,11 +4972,11 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
           )))}
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-2 mt-3 pt-3 border-t border-white/10">
-          <button type="button" onClick={onOpenAlarm} className="flex-1 bg-white/5 hover:bg-white/15 border border-white/10 text-gray-200 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2">
+        <div className="flex flex-col sm:flex-row gap-2 mt-3 pt-3 border-t border-[var(--border)]">
+          <button type="button" onClick={onOpenAlarm} className="flex-1 bg-[var(--tint-1)] hover:bg-[var(--tint-3)] border border-[var(--border)] text-[var(--text)] py-2.5 rounded-[var(--r-md)] text-xs font-bold flex items-center justify-center gap-2">
             ⚙️ إعدادات الإشعارات والمنبه
           </button>
-          <button type="button" onClick={() => onGo(goTarget)} className="flex-1 gradient-primary text-white py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2">
+          <button type="button" onClick={() => onGo(goTarget)} className="flex-1 gradient-primary text-[var(--text-strong)] py-2.5 rounded-[var(--r-md)] text-xs font-bold flex items-center justify-center gap-2">
             فتح {tabs.find((t: any) => t.id === tab)?.label} ←
           </button>
         </div>
@@ -4817,46 +5013,32 @@ function NotificationsPanel({ user, notifState, setNotifState, settings, onSaveS
     setBusy(false);
   };
 
-  // تجربة صوت المنبه نفسه لمدة قصيرة
-  const testSound = () => {
-    alarm.unlock();
-    const started = alarm.start({
-      sound: local.sound,
-      volume: local.volume,
-      durationSec: 4,
-      vibrate: local.vibrate,
-      title: 'تجربة صوت المنبه',
-      body: 'هذه تجربة — ستتوقف وحدها',
-    });
-    setMessage(started ? 'جرّب الصوت… سيتوقف وحده' : 'المتصفح منع الصوت — اضغط مرة أخرى في أي مكان بالصفحة');
-  };
-
   const active = notifState === 'subscribed';
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-4 bg-black/85" onClick={onClose}>
       <motion.div initial={{ scale: 0.95, y: 12 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95 }}
-        className="glass-card rounded-3xl p-5 sm:p-6 w-full max-w-xl max-h-[92vh] overflow-y-auto"
+        className="panel p-5 sm:p-6 w-full max-w-xl max-h-[92vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-4">
           <h2 className="text-lg font-bold gradient-text flex items-center gap-2">
-            <Bell className="w-5 h-5 text-purple-300" /> الإشعارات والمنبه
+            <Bell className="w-5 h-5 text-[var(--text)]" /> الإشعارات والتذكيرات
           </h2>
           <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-300" />
+            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+            <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
 
         {/* الحالة */}
-        <div className={`rounded-2xl px-4 py-4 border ${active ? 'bg-emerald-500/10 border-emerald-500/30' : notifState === 'denied' ? 'bg-red-500/10 border-red-500/30' : 'bg-white/5 border-white/10'}`}>
+        <div className={`rounded-[var(--r-xl)] px-4 py-4 border ${active ? 'bg-emerald-500/10 border-emerald-500/30' : notifState === 'denied' ? 'bg-red-500/10 border-red-500/30' : 'bg-[var(--tint-1)] border-[var(--border)]'}`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="font-bold text-white">
-                {active ? '✅ الإشعارات مفعّلة على هذا الجهاز' : notifState === 'denied' ? '⛔ الإشعارات محظورة من إعدادات المتصفح' : supported ? '⚠️ الإشعارات غير مفعّلة على هذا الجهاز' : '❌ المتصفح لا يدعم الإشعارات'}
+              <p className="font-bold text-[var(--text-strong)]">
+                {active ? ' الإشعارات مفعّلة على هذا الجهاز' : notifState === 'denied' ? ' الإشعارات محظورة من إعدادات المتصفح' : supported ? ' الإشعارات غير مفعّلة على هذا الجهاز' : ' المتصفح لا يدعم الإشعارات'}
               </p>
-              <p className="text-xs text-gray-400 mt-1">
+              <p className="text-xs text-[var(--text-muted)] mt-1">
                 {active
                   ? 'هذا الجهاز يستقبل رسائل الشات والتذكيرات حتى لو الموقع مقفول.'
                   : notifState === 'denied'
@@ -4867,17 +5049,17 @@ function NotificationsPanel({ user, notifState, setNotifState, settings, onSaveS
             <div className="flex flex-wrap gap-2">
               {active ? (
                 <button type="button" disabled={busy} onClick={disable}
-                  className="bg-white/10 hover:bg-white/15 text-white px-4 py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">
+                  className="bg-[var(--tint-2)] hover:bg-[var(--tint-3)] text-[var(--text-strong)] px-4 py-2.5 rounded-[var(--r-md)] font-bold text-sm disabled:opacity-50">
                   إيقاف على هذا الجهاز
                 </button>
               ) : (
                 <button type="button" disabled={busy || !supported} onClick={enable}
-                  className="gradient-primary text-white px-4 py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">
+                  className="gradient-primary text-[var(--text-strong)] px-4 py-2.5 rounded-[var(--r-md)] font-bold text-sm disabled:opacity-50">
                   {busy ? 'جارٍ التفعيل…' : 'تفعيل الإشعارات'}
                 </button>
               )}
               <button type="button" disabled={busy} onClick={test}
-                className="bg-cyan-500/20 border border-cyan-500/30 text-cyan-200 px-4 py-2.5 rounded-xl font-bold text-sm disabled:opacity-50">
+                className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--brand)] px-4 py-2.5 rounded-[var(--r-md)] font-bold text-sm disabled:opacity-50">
                 إشعار تجريبي
               </button>
             </div>
@@ -4885,97 +5067,53 @@ function NotificationsPanel({ user, notifState, setNotifState, settings, onSaveS
         </div>
 
         {/* إعدادات المنبه */}
-        <div className="mt-4 rounded-2xl bg-white/5 border border-white/10 px-4 py-4 space-y-4">
+        <div className="mt-4 rounded-[var(--r-xl)] bg-[var(--tint-1)] border border-[var(--border)] px-4 py-4 space-y-4">
           <div>
-            <h3 className="font-bold text-white mb-1">⏰ رنّة التذكيرات</h3>
-            <p className="text-xs text-gray-400">
-              يظهر إشعار التذكير كالعادة (بنفس شكله المألوف) وتُرنّ صوت الجرس معه — ويتوقف بزر الإسكات أو إسكات الجهاز أو زر ✅ لإتمام التذكير.
+            <h3 className="font-bold text-[var(--text-strong)] mb-1">التذكيرات</h3>
+            <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+              في وقت التذكير بالظبط يوصل: بطاقة على الشاشة + إشعار في الجهاز — بلا رنة وبلا تكرار.
+              ولو مرّت ٥ دقائق بلا أي إجراء (اتصال / تأجيل / تم) يتسجّل التذكير «متأخر» ويظهر عليه العدّاد.
             </p>
           </div>
 
-          <label className="flex items-center justify-between gap-3 bg-white/5 rounded-xl px-3 py-2.5">
-            <span className="text-sm text-white">تشغيل المنبه</span>
-            <input type="checkbox" checked={local.enabled} onChange={(e) => setLocal({ ...local, enabled: e.target.checked })} className="w-5 h-5 accent-purple-500" />
-          </label>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label>
-              <span className="text-xs text-gray-400 block mb-1">صوت المنبه</span>
-              <select value={local.sound} onChange={(e) => setLocal({ ...local, sound: e.target.value as any })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-lg px-3 py-2 text-white text-sm">
-                <option value="bell" className="bg-gray-900">جرس</option>
-                <option value="beep" className="bg-gray-900">نبضات</option>
-              </select>
-            </label>
-            <label>
-              <span className="text-xs text-gray-400 block mb-1">مدة الرنة</span>
-              <select value={local.durationSec} onChange={(e) => setLocal({ ...local, durationSec: Number(e.target.value) })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-lg px-3 py-2 text-white text-sm">
-                <option value={30} className="bg-gray-900">٣٠ ثانية</option>
-                <option value={60} className="bg-gray-900">دقيقة</option>
-                <option value={120} className="bg-gray-900">دقيقتان</option>
-                <option value={300} className="bg-gray-900">٥ دقائق</option>
-              </select>
-            </label>
-            <label>
-              <span className="text-xs text-gray-400 block mb-1">مدة التأجيل</span>
-              <select value={local.snoozeMin} onChange={(e) => setLocal({ ...local, snoozeMin: Number(e.target.value) })}
-                className="w-full bg-white/5 border border-purple-500/20 rounded-lg px-3 py-2 text-white text-sm">
-                <option value={1} className="bg-gray-900">دقيقة</option>
-                <option value={5} className="bg-gray-900">٥ دقائق</option>
-                <option value={10} className="bg-gray-900">١٠ دقائق</option>
-                <option value={15} className="bg-gray-900">١٥ دقيقة</option>
-              </select>
-            </label>
-            <label>
-              <span className="text-xs text-gray-400 block mb-1">مستوى الصوت: {Math.round(local.volume * 100)}%</span>
-              <input type="range" min={0.1} max={1} step={0.05} value={local.volume}
-                onChange={(e) => setLocal({ ...local, volume: Number(e.target.value) })}
-                className="w-full accent-purple-500" />
-            </label>
-          </div>
-
-          <label className="flex items-center justify-between gap-3 bg-white/5 rounded-xl px-3 py-2.5">
-            <span className="text-sm text-white">اهتزاز الهاتف مع الرنة</span>
-            {/* الاهتزاز يتبع الرنة ويقف معها */}
-            <input type="checkbox" checked={local.vibrate} onChange={(e) => setLocal({ ...local, vibrate: e.target.checked })} className="w-5 h-5 accent-purple-500" />
+          <label className="block sm:max-w-xs">
+            <span className="text-xs text-[var(--text-muted)] block mb-1">مدة التأجيل عند الضغط على «تأجيل»</span>
+            <select value={local.snoozeMin} onChange={(e) => setLocal({ ...local, snoozeMin: Number(e.target.value) })}
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm">
+              <option value={5} className="bg-gray-900">٥ دقائق</option>
+              <option value={10} className="bg-gray-900">١٠ دقائق</option>
+              <option value={15} className="bg-gray-900">١٥ دقيقة</option>
+              <option value={30} className="bg-gray-900">٣٠ دقيقة</option>
+            </select>
           </label>
 
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={testSound}
-              className="bg-purple-500/20 border border-purple-500/30 text-purple-200 px-4 py-2.5 rounded-xl font-bold text-sm">
-              🔉 تجربة الصوت
-            </button>
-            <button type="button" onClick={() => { alarm.stop(); onSaveSettings(local); setMessage('تم حفظ إعدادات المنبه ✓'); }}
-              className="gradient-primary text-white px-4 py-2.5 rounded-xl font-bold text-sm">
-              💾 حفظ الإعدادات
-            </button>
-            <button type="button" onClick={() => setLocal({ ...DEFAULT_ALARM_SETTINGS })}
-              className="bg-white/5 border border-white/10 text-gray-300 px-4 py-2.5 rounded-xl font-bold text-sm">
-              استعادة الافتراضي
+            <button type="button" onClick={() => { alarm.stop(); onSaveSettings(local); setMessage('تم حفظ إعدادات التذكيرات ✓'); }}
+              className="gradient-primary text-[var(--text-strong)] px-4 py-2.5 rounded-[var(--r-md)] font-bold text-sm">
+              حفظ الإعدادات
             </button>
           </div>
         </div>
 
         {message && (
-          <p className="mt-3 text-sm text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded-xl px-4 py-2.5">{message}</p>
+          <p className="mt-3 text-sm text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded-[var(--r-md)] px-4 py-2.5">{message}</p>
         )}
 
         {/* حدود تقنية مهمة — بصراحة */}
-        <div className="mt-4 rounded-2xl bg-white/5 border border-white/10 px-4 py-4">
-          <p className="text-xs font-bold text-gray-300 mb-2">ما يعمل وكيف — بصراحة:</p>
-          <ul className="text-[11px] text-gray-400 space-y-1.5 leading-relaxed">
-            <li>• <span className="text-gray-200">الإشعارات تصل والموقع مقفول</span> لأن السيرفر هو الذي يرسلها لمنصة إشعارات المتصفح.</li>
-            <li>• على <span className="text-gray-200">أندرويد</span>: من قائمة المتصفح اختر <span className="text-purple-300">«إضافة إلى الشاشة الرئيسية»</span> — بعدها يعمل الإشعار والمنبه كتطبيق حقيقي.</li>
-            <li>• على <span className="text-gray-200">آيفون</span>: الإشعارات تعمل فقط بعد إضافة الموقع للشاشة الرئيسية (iOS 16.4+).</li>
-            <li>• <span className="text-gray-200">الرنة المتصلة</span> تعمل والموقع مفتوح (وإن كانت الشاشة مقفولة)؛ ولو أُغلق الموقع تماماً يرنّ الإشعار ويتكرر كل ٢٠ ثانية حتى تفتحه.</li>
-            <li>• إذا أُغلق المتصفح نفسه من مدير المهام فلن يصل شيء حتى تفتحه — هذا قيد نظام التشغيل لا الموقع.</li>
-            <li>• زر إسكات الهاتف (يُصمت الجهاز) لا يمكن للتطبيق قراءته، لكنه يوقف الصوت فعلياً حتى ترجع وتُسكت المنبه.</li>
+        <div className="mt-4 rounded-[var(--r-xl)] bg-[var(--tint-1)] border border-[var(--border)] px-4 py-4">
+          <p className="text-xs font-bold text-[var(--text)] mb-2">ما يعمل وكيف — بصراحة:</p>
+          <ul className="text-[11px] text-[var(--text-muted)] space-y-1.5 leading-relaxed">
+            <li>• <span className="text-[var(--text)]">الإشعارات تصل والموقع مقفول</span> لأن السيرفر هو الذي يرسلها لمنصة إشعارات المتصفح (كل دقيقة).</li>
+            <li>• على <span className="text-[var(--text)]">أندرويد</span>: من قائمة المتصفح اختر <span className="text-[var(--text)]">«إضافة إلى الشاشة الرئيسية»</span> — بعدها يعمل الإشعار كتطبيق حقيقي.</li>
+            <li>• على <span className="text-[var(--text)]">آيفون</span>: الإشعارات تعمل فقط بعد إضافة الموقع للشاشة الرئيسية (iOS 16.4 وأحدث)، ولازم تضغط <span className="text-[var(--text)]">تفعيل الإشعارات</span> من داخل التطبيق مرة واحدة.</li>
+            <li>• <span className="text-[var(--text)]">تسجيل الجهاز يتجدّد تلقائياً</span> عند كل دخول، فلو تحدّث التطبيق أو تغيّرت قاعدة البيانات تفضل الإشعارات واصلة.</li>
+            <li>• الإشعار <span className="text-[var(--text)]">صامت</span>: يظهر مرة واحدة في وقته بلا رنة متكررة ولا اهتزاز مستمر. آيفون قد يضيف نغمة النظام مرة واحدة حسب إعدادات الجهاز.</li>
+            <li>• لو اتصلت بالعميل أو أجّلت أو أتممت التذكير من أول ٥ دقائق — التذكير ما يتسجّلش «متأخر».</li>
           </ul>
         </div>
 
         <button type="button" onClick={onClose}
-          className="w-full mt-4 bg-white/10 hover:bg-white/15 text-white py-3 rounded-xl font-bold">إغلاق</button>
+          className="w-full mt-4 bg-[var(--tint-2)] hover:bg-[var(--tint-3)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إغلاق</button>
       </motion.div>
     </motion.div>
   );
@@ -5019,20 +5157,20 @@ function WhatsAppComposer({ name, phones, onClose, onOpened }: { name?: string; 
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div initial={{ scale: 0.95, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95 }}
-        className="glass-card rounded-3xl p-5 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto"
+        className="panel p-5 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-4">
           <h2 className="text-lg font-bold gradient-text flex items-center gap-2">
             <MessageCircle className="w-5 h-5 text-emerald-400" /> إرسال واتساب
           </h2>
           <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-300" />
+            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+            <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
 
-        <p className="text-sm text-gray-300 mb-3">
-          العميل: <span className="text-white font-bold">{name || 'بدون اسم'}</span>
+        <p className="text-sm text-[var(--text)] mb-3">
+          العميل: <span className="text-[var(--text-strong)] font-bold">{name || 'بدون اسم'}</span>
         </p>
 
         {/* اختيار الرقم */}
@@ -5044,53 +5182,53 @@ function WhatsAppComposer({ name, phones, onClose, onOpened }: { name?: string; 
                 className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${
                   item === phone
                     ? 'bg-emerald-500/25 border-emerald-500/50 text-emerald-200'
-                    : 'bg-white/5 border-white/10 text-gray-300 hover:bg-white/10'
+                    : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text)] hover:bg-[var(--tint-2)]'
                 }`}>
                 {item}
               </button>
             ))}
           </div>
         ) : (
-          <p className="text-sm text-gray-400 mb-4" dir="ltr">{phone || 'لا يوجد رقم مسجّل'}</p>
+          <p className="text-sm text-[var(--text-muted)] mb-4" dir="ltr">{phone || 'لا يوجد رقم مسجّل'}</p>
         )}
 
-        <label className="block text-xs text-gray-400 mb-1">
+        <label className="block text-xs text-[var(--text-muted)] mb-1">
           الرسالة (اكتب <span className="text-emerald-300">{'{الاسم}'}</span> ليظهر مكانه اسم العميل)
         </label>
         <textarea value={template} onChange={(e) => setTemplate(e.target.value)} rows={4}
-          className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white text-sm resize-y" />
+          className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] text-sm resize-y" />
         <div className="flex flex-wrap gap-2 mt-2">
           <button type="button" onClick={() => setTemplate(DEFAULT_WA_TEMPLATE)}
-            className="text-xs bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 px-3 py-1.5 rounded-lg">
+            className="text-xs bg-[var(--tint-1)] hover:bg-[var(--tint-2)] border border-[var(--border)] text-[var(--text)] px-3 py-1.5 rounded-[var(--r-sm)]">
             استعادة الافتراضي
           </button>
           <button type="button"
             onClick={() => { saveWaTemplate(template); setSavedFlash(true); setTimeout(() => setSavedFlash(false), 1800); }}
-            className="text-xs bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 text-purple-200 px-3 py-1.5 rounded-lg">
+            className="text-xs bg-[var(--brand-primary-softer)] hover:bg-[var(--brand-primary-soft)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-3 py-1.5 rounded-[var(--r-sm)]">
             {savedFlash ? 'تم الحفظ ✓' : 'حفظ كقالب دائم'}
           </button>
           <button type="button" onClick={copyMessage}
-            className="text-xs bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 px-3 py-1.5 rounded-lg">
+            className="text-xs bg-[var(--tint-1)] hover:bg-[var(--tint-2)] border border-[var(--border)] text-[var(--text)] px-3 py-1.5 rounded-[var(--r-sm)]">
             {copied ? 'تم النسخ ✓' : 'نسخ الرسالة'}
           </button>
         </div>
 
-        <div className="mt-4 rounded-xl bg-white/5 border border-white/10 px-4 py-3">
-          <p className="text-[11px] text-gray-400 mb-1">الرسالة التي ستُرسل:</p>
-          <p className="text-sm text-gray-200 whitespace-pre-line">{message}</p>
+        <div className="mt-4 rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] px-4 py-3">
+          <p className="text-[11px] text-[var(--text-muted)] mb-1">الرسالة التي ستُرسل:</p>
+          <p className="text-sm text-[var(--text)] whitespace-pre-line">{message}</p>
         </div>
 
         {!ready && list.length > 0 && (
-          <p className="text-xs text-amber-400 mt-3">⚠️ الرقم غير مكتمل — اكتبه بصيغة 01xxxxxxxxx أو 201xxxxxxxxx</p>
+          <p className="text-xs text-amber-400 mt-3"> الرقم غير مكتمل — اكتبه بصيغة 01xxxxxxxxx أو 201xxxxxxxxx</p>
         )}
 
         <div className="flex flex-col sm:flex-row gap-2 mt-5">
           <button type="button" onClick={openWhatsApp} disabled={!ready}
-            className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-white/5 disabled:text-gray-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2">
+            className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-[var(--tint-1)] disabled:text-[var(--text-dim)] text-white py-3 rounded-[var(--r-md)] font-bold flex items-center justify-center gap-2">
             <MessageCircle className="w-5 h-5" /> فتح واتساب وإرسال
           </button>
           <button type="button" onClick={onClose}
-            className="sm:w-32 bg-white/10 hover:bg-white/15 text-white py-3 rounded-xl font-bold">إغلاق</button>
+            className="sm:w-32 bg-[var(--tint-2)] hover:bg-[var(--tint-3)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إغلاق</button>
         </div>
       </motion.div>
     </motion.div>
@@ -5108,10 +5246,10 @@ function WhatsAppButton({ name, phones, label = 'واتساب', className = '', 
         disabled={available.length === 0}
         title={available.length ? 'إرسال واتساب برسالة جاهزة' : 'لا يوجد رقم مسجّل'}
         onClick={(e) => { e.stopPropagation(); if (available.length) setOpen(true); }}
-        className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg border transition-colors ${
+        className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-[var(--r-sm)] border transition-colors ${
           available.length
             ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30'
-            : 'bg-white/5 border-white/10 text-gray-500 cursor-not-allowed'
+            : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-dim)] cursor-not-allowed'
         } ${className}`}
       >
         <MessageCircle className="w-3.5 h-3.5" /> {label}
@@ -5153,14 +5291,14 @@ function NeedsSearchModal({ properties, onClose, onApply }: any) {
   const shown = [...exact, ...near].slice(0, 40);
 
   const chip = (label: string, value: string) => (
-    <span key={`${label}-${value}`} className="inline-flex items-center gap-1 text-xs bg-purple-500/15 border border-purple-500/30 text-purple-200 px-2.5 py-1 rounded-full">
-      <span className="text-purple-400/80">{label}:</span> {value}
+    <span key={`${label}-${value}`} className="inline-flex items-center gap-1 text-xs bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-2.5 py-1 rounded-full">
+      <span className="text-[var(--text-muted)]/80">{label}:</span> {value}
     </span>
   );
 
   const boundField = (label: string, key: 'priceMin' | 'priceMax' | 'areaMin' | 'areaMax', value: number | null) => (
     <label className="flex-1 min-w-[120px]">
-      <span className="text-[11px] text-gray-400 block mb-1">{label}</span>
+      <span className="text-[11px] text-[var(--text-muted)] block mb-1">{label}</span>
       <input
         type="number"
         value={override ? override[key] : value === null ? '' : String(value)}
@@ -5173,19 +5311,19 @@ function NeedsSearchModal({ properties, onClose, onApply }: any) {
           };
           setOverride({ ...base, [key]: e.target.value });
         }}
-        className="w-full bg-white/5 border border-purple-500/20 rounded-lg px-3 py-2 text-white text-sm"
+        className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm"
         dir="ltr"
       />
     </label>
   );
 
   const resultCard = (row: any) => (
-    <div key={row.property.id} className="bg-white/5 rounded-xl px-4 py-3 border border-white/10">
+    <div key={row.property.id} className="bg-[var(--tint-1)] rounded-[var(--r-md)] px-4 py-3 border border-[var(--border)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="font-bold text-white text-sm">{row.property.name}</p>
-        <span className="text-sm text-purple-300 font-bold">{displayPrice(row.property.price)} ج.م</span>
+        <p className="font-bold text-[var(--text-strong)] text-sm">{row.property.name}</p>
+        <span className="text-sm text-[var(--text)] font-bold">{displayPrice(row.property.price)} ج.م</span>
       </div>
-      <p className="text-xs text-gray-400 mt-1">
+      <p className="text-xs text-[var(--text-muted)] mt-1">
         {[row.property.type, row.property.area ? `${row.property.area}م` : '', row.property.rooms ? `${row.property.rooms} غرف` : '', row.property.location]
           .filter(Boolean).join(' • ')}
       </p>
@@ -5193,13 +5331,13 @@ function NeedsSearchModal({ properties, onClose, onApply }: any) {
         <p className="text-[11px] text-emerald-300 mt-2">✓ {row.match.reasons.join(' • ')}</p>
       )}
       {row.match.warns.length > 0 && (
-        <p className="text-[11px] text-amber-300 mt-1">⚠ {row.match.warns.join(' • ')}</p>
+        <p className="text-[11px] text-amber-300 mt-1"> {row.match.warns.join(' • ')}</p>
       )}
       {(row.property.clientPhone || row.property.clientPhone2 || row.property.clientName) && (
         <div className="flex flex-wrap items-center gap-2 mt-2">
-          {row.property.clientName && <span className="text-[11px] text-gray-400">{row.property.clientName}</span>}
-          {row.property.clientPhone && <span className="text-[11px] text-gray-300" dir="ltr">{row.property.clientPhone}</span>}
-          {row.property.clientPhone2 && <span className="text-[11px] text-gray-300" dir="ltr">{row.property.clientPhone2}</span>}
+          {row.property.clientName && <span className="text-[11px] text-[var(--text-muted)]">{row.property.clientName}</span>}
+          {row.property.clientPhone && <span className="text-[11px] text-[var(--text)]" dir="ltr">{row.property.clientPhone}</span>}
+          {row.property.clientPhone2 && <span className="text-[11px] text-[var(--text)]" dir="ltr">{row.property.clientPhone2}</span>}
           <WhatsAppButton name={row.property.clientName} phones={[row.property.clientPhone, row.property.clientPhone2]} />
         </div>
       )}
@@ -5210,29 +5348,29 @@ function NeedsSearchModal({ properties, onClose, onApply }: any) {
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 bg-black/80" onClick={onClose}>
       <motion.div initial={{ scale: 0.95, y: 12 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95 }}
-        className="glass-card rounded-3xl p-4 sm:p-6 w-full max-w-3xl max-h-[92vh] overflow-y-auto"
+        className="panel p-4 sm:p-6 w-full max-w-3xl max-h-[92vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-3">
           <h2 className="text-lg font-bold gradient-text flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-purple-300" /> بحث باحتياجات العميل
+            <Sparkles className="w-5 h-5 text-[var(--text)]" /> بحث باحتياجات العميل
           </h2>
           <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-300" />
+            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+            <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
 
-        <p className="text-xs text-gray-400 mb-2">
+        <p className="text-xs text-[var(--text-muted)] mb-2">
           اكتب احتياجات العميل بكلامك العادي: النوع، المبلغ، المساحة، الغرف، المنطقة — والنظام يفهمها ويرشّح العقارات.
         </p>
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3}
           placeholder="مثال: العميل محتاج شقة ب اتنين مليون في التجمع الخامس بمساحة مية وعشرين متر و٣ غرف"
-          className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white text-sm resize-y" />
+          className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] text-sm resize-y" />
 
         <div className="flex flex-wrap gap-2 mt-2">
           {['شقة بمليونين في التجمع', 'فيلا ب 5 مليون و٤ غرف', 'شقة 90 متر لحد 3 مليون متشطبة'].map((sample) => (
             <button key={sample} type="button" onClick={() => setText(sample)}
-              className="text-[11px] bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 px-2.5 py-1 rounded-full">
+              className="text-[11px] bg-[var(--tint-1)] hover:bg-[var(--tint-2)] border border-[var(--border)] text-[var(--text)] px-2.5 py-1 rounded-full">
               {sample}
             </button>
           ))}
@@ -5252,8 +5390,8 @@ function NeedsSearchModal({ properties, onClose, onApply }: any) {
               {effective.delivery && chip('التسليم', effective.delivery === 'immediate' ? 'فوري' : 'بعد فترة')}
             </div>
 
-            <div className="bg-white/5 border border-white/10 rounded-xl px-4 py-3">
-              <p className="text-[11px] text-gray-400 mb-2">يمكنك تعديل حدود البحث (النظام يوسّع تلقائياً حول ما فهمه):</p>
+            <div className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3">
+              <p className="text-[11px] text-[var(--text-muted)] mb-2">يمكنك تعديل حدود البحث (النظام يوسّع تلقائياً حول ما فهمه):</p>
               <div className="flex flex-wrap gap-3">
                 {boundField('أقل سعر', 'priceMin', effective.priceMin)}
                 {boundField('أعلى سعر', 'priceMax', effective.priceMax)}
@@ -5265,11 +5403,11 @@ function NeedsSearchModal({ properties, onClose, onApply }: any) {
             <div className="flex flex-wrap items-center gap-3 text-sm">
               <span className="text-emerald-400 font-bold">نتائج مطابقة: {exact.length}</span>
               <span className="text-amber-400 font-bold">قريبة (تحتاج مراجعة): {near.length}</span>
-              {skipped.length > 0 && <span className="text-gray-500 text-xs">استبعدنا {skipped.length}</span>}
+              {skipped.length > 0 && <span className="text-[var(--text-dim)] text-xs">استبعدنا {skipped.length}</span>}
             </div>
 
             {shown.length === 0 && (
-              <div className="rounded-xl bg-white/5 border border-white/10 px-4 py-6 text-center text-gray-400 text-sm">
+              <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] px-4 py-6 text-center text-[var(--text-muted)] text-sm">
                 لا يوجد عقار مطابق — جرّب توسيع حدود السعر أو المساحة من الحقول أعلاه.
               </div>
             )}
@@ -5277,14 +5415,14 @@ function NeedsSearchModal({ properties, onClose, onApply }: any) {
             <div className="space-y-2">
               {shown.map((row) => {
                 const color = row.match.warns.length ? 'border-amber-500/30 bg-amber-500/5' : 'border-emerald-500/25 bg-emerald-500/5';
-                return <div key={row.property.id} className={`rounded-2xl border ${color} p-1`}>{resultCard(row)}</div>;
+                return <div key={row.property.id} className={`rounded-[var(--r-xl)] border ${color} p-1`}>{resultCard(row)}</div>;
               })}
             </div>
             {shown.length < exact.length + near.length && (
-              <p className="text-xs text-gray-500 text-center">… و {exact.length + near.length - shown.length} عقار آخر</p>
+              <p className="text-xs text-[var(--text-dim)] text-center">… و {exact.length + near.length - shown.length} عقار آخر</p>
             )}
             {shown.length > 0 && skipped.length > 0 && (
-              <div className="text-[11px] text-gray-500">
+              <div className="text-[11px] text-[var(--text-dim)]">
                 <p>أمثلة لما استبعدناه:</p>
                 <ul className="mt-1 space-y-0.5">
                   {skipped.slice(0, 3).map((r) => (
@@ -5298,11 +5436,11 @@ function NeedsSearchModal({ properties, onClose, onApply }: any) {
 
         <div className="flex flex-col sm:flex-row gap-2 mt-5">
           <button type="button" disabled={!hasFilter} onClick={() => onApply(effective)}
-            className="flex-1 gradient-primary disabled:bg-white/5 disabled:text-gray-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2">
+            className="flex-1 gradient-primary disabled:bg-[var(--tint-1)] disabled:text-[var(--text-dim)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold flex items-center justify-center gap-2">
             <Search className="w-4 h-4" /> طبّق هذا الفلتر على قائمة العقارات
           </button>
           <button type="button" onClick={onClose}
-            className="sm:w-32 bg-white/10 hover:bg-white/15 text-white py-3 rounded-xl font-bold">إغلاق</button>
+            className="sm:w-32 bg-[var(--tint-2)] hover:bg-[var(--tint-3)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إغلاق</button>
         </div>
       </motion.div>
     </motion.div>
@@ -5420,18 +5558,18 @@ function AttendanceMonthlyReport({ users }: any) {
   };
 
   return (
-    <div className="glass-card rounded-2xl p-4 sm:p-5">
+    <div className="panel p-4 sm:p-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h3 className="font-bold text-white flex items-center gap-2">
-            <BarChart3 className="w-5 h-5 text-purple-300" /> التقرير الشهري للحضور
+          <h3 className="font-bold text-[var(--text-strong)] flex items-center gap-2">
+            <BarChart3 className="w-5 h-5 text-[var(--text)]" /> التقرير الشهري للحضور
           </h3>
-          <p className="text-xs text-gray-400 mt-1">
+          <p className="text-xs text-[var(--text-muted)] mt-1">
             عدد أيام التأخير والغياب وساعات العمل لكل سيلز في شهر {monthLabel} — جاهز للتسليم للمحاسبة.
           </p>
         </div>
         <button type="button" onClick={() => setOpen(!open)}
-          className="bg-white/5 hover:bg-white/10 border border-purple-500/20 text-purple-200 px-4 py-2.5 rounded-xl text-sm font-bold whitespace-nowrap">
+          className="bg-[var(--tint-1)] hover:bg-[var(--tint-2)] border border-[var(--border)] text-[var(--text)] px-4 py-2.5 rounded-[var(--r-md)] text-sm font-bold whitespace-nowrap">
           {open ? 'إخفاء التقرير' : 'عرض التقرير'}
         </button>
       </div>
@@ -5441,19 +5579,19 @@ function AttendanceMonthlyReport({ users }: any) {
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
             <div className="flex flex-wrap gap-3 mt-4">
               <label>
-                <span className="text-[11px] text-gray-400 block mb-1">الشهر</span>
+                <span className="text-[11px] text-[var(--text-muted)] block mb-1">الشهر</span>
                 <input type="month" value={month} onChange={(e) => setMonth(e.target.value || todayKey().slice(0, 7))}
-                  className="bg-white/5 border border-purple-500/20 rounded-lg px-3 py-2 text-white text-sm" dir="ltr" />
+                  className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm" dir="ltr" />
               </label>
               <label>
-                <span className="text-[11px] text-gray-400 block mb-1">بداية الدوام</span>
+                <span className="text-[11px] text-[var(--text-muted)] block mb-1">بداية الدوام</span>
                 <input type="time" value={workStart} onChange={(e) => setWorkStart(e.target.value || '09:00')}
-                  className="bg-white/5 border border-purple-500/20 rounded-lg px-3 py-2 text-white text-sm" dir="ltr" />
+                  className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm" dir="ltr" />
               </label>
               <label>
-                <span className="text-[11px] text-gray-400 block mb-1">يوم الراحة</span>
+                <span className="text-[11px] text-[var(--text-muted)] block mb-1">يوم الراحة</span>
                 <select value={restDay} onChange={(e) => setRestDay(e.target.value)}
-                  className="bg-white/5 border border-purple-500/20 rounded-lg px-3 py-2 text-white text-sm">
+                  className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm">
                   <option value="5" className="bg-gray-900">الجمعة</option>
                   <option value="6" className="bg-gray-900">السبت</option>
                   <option value="none" className="bg-gray-900">لا يوجد</option>
@@ -5464,7 +5602,7 @@ function AttendanceMonthlyReport({ users }: any) {
             <div className="overflow-x-auto mt-4">
               <table className="w-full text-sm min-w-[720px]">
                 <thead>
-                  <tr className="text-gray-400 text-xs">
+                  <tr className="text-[var(--text-muted)] text-xs">
                     <th className="text-right py-2 px-2 font-bold">السيلز</th>
                     <th className="py-2 px-2">أيام الحضور</th>
                     <th className="py-2 px-2">أيام التأخير</th>
@@ -5479,34 +5617,34 @@ function AttendanceMonthlyReport({ users }: any) {
                 </thead>
                 <tbody>
                   {rows.map((row) => (
-                    <tr key={row.user.id} className="border-t border-white/10">
-                      <td className="py-2.5 px-2 text-white font-bold text-right whitespace-nowrap">
+                    <tr key={row.user.id} className="border-t border-[var(--border)]">
+                      <td className="py-2.5 px-2 text-[var(--text-strong)] font-bold text-right whitespace-nowrap">
                         {row.user.name}
-                        <span className="text-[11px] text-gray-500 mr-1">{row.user.role === 'supervisor' ? 'مشرف' : 'سيلز'}</span>
+                        <span className="text-[11px] text-[var(--text-dim)] mr-1">{row.user.role === 'supervisor' ? 'مشرف' : 'سيلز'}</span>
                       </td>
                       <td className="py-2.5 px-2 text-center text-emerald-300 font-bold">{row.days}</td>
-                      <td className={`py-2.5 px-2 text-center font-bold ${row.lateDays ? 'text-amber-400' : 'text-gray-500'}`}>{row.lateDays}</td>
-                      <td className="py-2.5 px-2 text-center text-gray-300">{row.lateMinutes ? formatDuration(row.lateMinutes) : '—'}</td>
-                      <td className={`py-2.5 px-2 text-center ${row.noCheckout ? 'text-amber-400' : 'text-gray-500'}`}>{row.noCheckout}</td>
+                      <td className={`py-2.5 px-2 text-center font-bold ${row.lateDays ? 'text-amber-400' : 'text-[var(--text-dim)]'}`}>{row.lateDays}</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text)]">{row.lateMinutes ? formatDuration(row.lateMinutes) : '—'}</td>
+                      <td className={`py-2.5 px-2 text-center ${row.noCheckout ? 'text-amber-400' : 'text-[var(--text-dim)]'}`}>{row.noCheckout}</td>
                       <td className={`py-2.5 px-2 text-center ${row.missing ? 'text-red-400' : 'text-emerald-300'}`}>{row.missing}</td>
-                      <td className="py-2.5 px-2 text-center text-gray-200">{row.hours} س</td>
-                      <td className="py-2.5 px-2 text-center text-gray-200">{row.avgHours || '—'} {row.avgHours ? 'س' : ''}</td>
-                      <td className="py-2.5 px-2 text-center text-gray-300" dir="ltr">{row.earliest}</td>
-                      <td className="py-2.5 px-2 text-center text-gray-300" dir="ltr">{row.latest}</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text)]">{row.hours} س</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text)]">{row.avgHours || '—'} {row.avgHours ? 'س' : ''}</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text)]" dir="ltr">{row.earliest}</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text)]" dir="ltr">{row.latest}</td>
                     </tr>
                   ))}
                   {rows.length > 0 && (
-                    <tr className="border-t border-purple-500/30 bg-white/5">
-                      <td className="py-2.5 px-2 text-purple-200 font-bold text-right">الإجمالي</td>
+                    <tr className="border-t border-[var(--brand-primary-soft)] bg-[var(--tint-1)]">
+                      <td className="py-2.5 px-2 text-[var(--text)] font-bold text-right">الإجمالي</td>
                       <td className="py-2.5 px-2 text-center text-emerald-300 font-bold">{totals.days}</td>
                       <td className="py-2.5 px-2 text-center text-amber-300 font-bold">{totals.lateDays}</td>
-                      <td className="py-2.5 px-2 text-center text-gray-200">{totals.lateMinutes ? formatDuration(totals.lateMinutes) : '—'}</td>
-                      <td className="py-2.5 px-2 text-center text-gray-200">{totals.noCheckout}</td>
-                      <td className="py-2.5 px-2 text-center text-gray-500">—</td>
-                      <td className="py-2.5 px-2 text-center text-gray-200">{totals.hours} س</td>
-                      <td className="py-2.5 px-2 text-center text-gray-500">—</td>
-                      <td className="py-2.5 px-2 text-center text-gray-500">—</td>
-                      <td className="py-2.5 px-2 text-center text-gray-500">—</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text)]">{totals.lateMinutes ? formatDuration(totals.lateMinutes) : '—'}</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text)]">{totals.noCheckout}</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text-dim)]">—</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text)]">{totals.hours} س</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text-dim)]">—</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text-dim)]">—</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text-dim)]">—</td>
                     </tr>
                   )}
                 </tbody>
@@ -5514,16 +5652,16 @@ function AttendanceMonthlyReport({ users }: any) {
             </div>
 
             {rows.length === 0 && (
-              <p className="text-sm text-gray-400 text-center py-6">لا يوجد سيلز لعرض تقريره</p>
+              <p className="text-sm text-[var(--text-muted)] text-center py-6">لا يوجد سيلز لعرض تقريره</p>
             )}
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-4">
-              <p className="text-[11px] text-gray-500">
+              <p className="text-[11px] text-[var(--text-dim)]">
                 «بلا تسجيل» = أيام العمل المتوقعة في الشهر ({expectedDays} يوم، بلا {restDay === '5' ? 'الجمعة' : restDay === '6' ? 'السبت' : 'يوم راحة'}) ناقص أيام الحضور الفعلية.
                 • «بلا انصراف» = سجّل حضوراً ولم يسجّل انصرافه.
               </p>
               <button type="button" onClick={exportCsv} disabled={rows.length === 0}
-                className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-white/5 disabled:text-gray-500 text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 whitespace-nowrap">
+                className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-[var(--tint-1)] disabled:text-[var(--text-dim)] text-white px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center justify-center gap-2 whitespace-nowrap">
                 <Download className="w-4 h-4" /> تنزيل التقرير (إكسل)
               </button>
             </div>
@@ -5536,17 +5674,26 @@ function AttendanceMonthlyReport({ users }: any) {
 
 // Properties View
 function PropertiesView({ properties, users, currentUser, searchTerm, onSearch, onSelect, onAdd }: any) {
-  const [onlyMine, setOnlyMine] = useState(false);
+  // بند ٣: تبويبان — «أسهم عقارات الفريق» و«عقاراتي الخاصة»
+  const [tab, setTab] = useState<'team' | 'private'>(() => (localStorage.getItem('crm_props_tab') === 'private' ? 'private' : 'team'));
   const [showNeeds, setShowNeeds] = useState(false);
   const [needs, setNeeds] = useState<NeedsQuery | null>(null);
   const nameOf = (userId: string) =>
     users?.find((u: User) => u.id === userId)?.name || 'عضو محذوف';
 
+  // العقار الخاص: يشوفه صاحبه والإدارة فقط؛ والعقار بلا نطاق = عام للفريق
+  const isPrivate = (p: Property) => p.scope === 'private';
+  const canSeePrivate = (p: Property) => p.userId === currentUser?.id || currentUser?.role !== 'sales';
+  const teamCount = (properties || []).filter((p: Property) => !isPrivate(p)).length;
+  const privateCount = (properties || []).filter((p: Property) => isPrivate(p) && canSeePrivate(p)).length;
+  const switchTab = (next: 'team' | 'private') => {
+    setTab(next);
+    localStorage.setItem('crm_props_tab', next);
+  };
+
   // فلتر احتياجات العميل + ترتيب: الأقرب للطلب أولاً
-  const visible = (onlyMine
-    ? properties.filter((p: Property) => p.userId === currentUser?.id)
-    : properties
-  )
+  const visible = (properties || [])
+    .filter((p: Property) => (tab === 'team' ? !isPrivate(p) : isPrivate(p) && canSeePrivate(p)))
     .map((p: Property) => ({ property: p, match: needs ? matchPropertyNeeds(p, needs) : null }))
     .filter((row: any) => !needs || row.match.ok)
     .sort((a: any, b: any) => (needs && b.match ? b.match.score - a.match.score : 0))
@@ -5556,83 +5703,98 @@ function PropertiesView({ properties, users, currentUser, searchTerm, onSearch, 
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="flex-1 relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--text-muted)]" />
           <input type="text" placeholder="بحث ذكي: اسم، نوع، موقع، أو مبلغ (مليون / 1,500,000)..." value={searchTerm} onChange={(e) => onSearch(e.target.value)}
-            className="w-full bg-white/5 border border-purple-500/20 rounded-xl pr-11 pl-4 py-3 text-white focus:border-purple-500/50" />
+            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-11 pl-4 py-3 text-[var(--text-strong)] focus:border-[var(--brand)]" />
         </div>
         <button
           onClick={() => setShowNeeds(true)}
-          className={`px-4 py-3 rounded-xl font-bold border transition-colors whitespace-nowrap ${
-            needs ? 'bg-purple-500/25 border-purple-500/50 text-purple-200' : 'bg-white/5 border-purple-500/20 text-gray-300 hover:text-white'
+          className={`px-4 py-3 rounded-[var(--r-md)] font-bold border transition-colors whitespace-nowrap ${
+            needs ? 'bg-[var(--brand-primary-soft)] border-[var(--brand-primary-soft)] text-[var(--text)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text)] hover:text-[var(--text-strong)]'
           }`}
         >
-          🧠 احتياجات العميل
+           احتياجات العميل
         </button>
-        <button
-          onClick={() => setOnlyMine(!onlyMine)}
-          className={`px-5 py-3 rounded-xl font-bold border transition-colors ${
-            onlyMine ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300' : 'bg-white/5 border-purple-500/20 text-gray-300'
-          }`}
-        >
-          {onlyMine ? '⭐ عقاراتي' : 'كل العقارات'}
+        <button onClick={onAdd} className="btn-primary">
+          <Plus className="w-4.5 h-4.5" /> إضافة عقار
         </button>
-        <button onClick={onAdd} className="gradient-primary text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg glow-primary">
-          <Plus className="w-5 h-5" /> إضافة عقار
+      </div>
+
+      {/* التبويبان: عقارات الفريق العامة / عقاراتي الخاصة */}
+      <div className="seg-bar" role="tablist" aria-label="نطاق العقارات">
+        <button type="button" role="tab" aria-selected={tab === 'team'}
+          className={`seg-item${tab === 'team' ? ' on' : ''}`} onClick={() => switchTab('team')}>
+          <Globe className="w-4 h-4" /> عقارات الفريق
+          <span className="seg-count">{teamCount}</span>
+        </button>
+        <button type="button" role="tab" aria-selected={tab === 'private'}
+          className={`seg-item${tab === 'private' ? ' on' : ''}`} onClick={() => switchTab('private')}>
+          <Shield className="w-4 h-4" /> عقاراتي الخاصة
+          <span className="seg-count">{privateCount}</span>
         </button>
       </div>
 
       {needs && (
-        <div className="rounded-2xl bg-purple-500/10 border border-purple-500/30 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <p className="text-xs text-purple-200">🧠 فلتر احتياجات العميل مُفعّل: {needsSummary(needs)}</p>
+        <div className="rounded-[var(--r-xl)] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <p className="text-xs text-[var(--text)]"> فلتر احتياجات العميل مُفعّل: {needsSummary(needs)}</p>
           <button type="button" onClick={() => setNeeds(null)}
-            className="text-xs bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg font-bold whitespace-nowrap self-start sm:self-auto">
+            className="text-xs bg-[var(--tint-2)] hover:bg-[var(--tint-3)] text-[var(--text-strong)] px-3 py-1.5 rounded-[var(--r-sm)] font-bold whitespace-nowrap self-start sm:self-auto">
             إزالة الفلتر
           </button>
         </div>
       )}
 
-      <p className="text-xs text-gray-400">
-        العقارات مشتركة مع كل الفريق — عدد النتائج: <span className="text-purple-300 font-bold">{visible.length}</span>
+      <p className="text-xs text-[var(--text-muted)]">
+        {tab === 'team'
+          ? `عقارات الفريق يراها الجميع — عدد النتائج: ${visible.length}`
+          : currentUser?.role === 'sales'
+          ? `عقاراتك الخاصة — تظهر لك وحدك — عدد النتائج: ${visible.length}`
+          : `العقارات الخاصة لكل مندوب — تشوفها الإدارة — عدد النتائج: ${visible.length}`}
       </p>
 
       {visible.length === 0 && (
-        <div className="glass-card rounded-2xl p-10 text-center">
-          <Building2 className="w-14 h-14 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400">لا توجد عقارات مطابقة</p>
+        <div className="panel p-10 text-center">
+          <Building2 className="w-14 h-14 text-[var(--text-dim)] mx-auto mb-3" />
+          <p className="text-[var(--text-muted)]">
+            {tab === 'team' ? 'لا توجد عقارات مطابقة' : 'لسه مفيش عقارات خاصة — ضيف أول عقار خاص بيك'}
+          </p>
         </div>
       )}
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {visible.map((property: Property) => (
           <motion.div key={property.id} whileHover={{ scale: 1.02 }} onClick={() => onSelect(property)}
-            className="glass-card rounded-2xl p-5 cursor-pointer">
+            className="panel p-5 cursor-pointer">
             {property.images?.[0] && (
               <div className="relative mb-3">
-                <img src={property.images[0]} alt={property.name} loading="lazy" className="w-full h-36 object-cover rounded-xl" />
+                <img src={property.images[0]} alt={property.name} loading="lazy" className="w-full h-36 object-cover rounded-[var(--r-md)]" />
                 {property.images.length > 1 && (
-                  <span className="absolute bottom-2 left-2 bg-black/70 text-white text-[11px] px-2 py-0.5 rounded-full">🖼 {property.images.length} صور</span>
+                  <span className="absolute bottom-2 left-2 bg-black/70 text-white text-[11px] px-2 py-0.5 rounded-full"> {property.images.length} صور</span>
                 )}
                 {property.latitude && property.longitude ? (
-                  <span className="absolute bottom-2 right-2 bg-black/70 text-emerald-300 text-[11px] px-2 py-0.5 rounded-full">🗺 على الخريطة</span>
+                  <span className="absolute bottom-2 right-2 bg-black/70 text-emerald-300 text-[11px] px-2 py-0.5 rounded-full"> على الخريطة</span>
                 ) : null}
               </div>
             )}
             <div className="flex items-center gap-3 mb-3">
               <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center">
-                <Building2 className="w-6 h-6 text-white" />
+                <Building2 className="w-6 h-6 text-[var(--text-strong)]" />
               </div>
               <div className="min-w-0 flex-1">
-                <h4 className="font-bold text-white truncate">{property.name}</h4>
-                <p className="text-sm text-gray-400">{property.type}{property.area ? ` • ${property.area}م` : ''}</p>
+                <h4 className="font-bold text-[var(--text-strong)] truncate">{property.name}</h4>
+                <p className="text-sm text-[var(--text-muted)]">{property.type}{property.area ? ` • ${property.area}م` : ''}</p>
               </div>
             </div>
-            {property.location && <p className="text-xs text-gray-400 mb-2">📍 {property.location}</p>}
-            {property.description && (
-              <p className="text-xs text-gray-400 mb-2 line-clamp-2">📝 {property.description}</p>
+            {tab === 'private' && property.userId !== currentUser?.id && (
+              <p className="text-[11px] text-[var(--text-dim)] mb-1.5">خاص بـ {nameOf(property.userId)}</p>
             )}
-            <div className="flex items-center justify-between gap-2 pt-3 border-t border-white/10">
-              <span className="text-sm text-purple-400 font-bold">{displayPrice(property.price)} ج.م</span>
-              <span className="text-[11px] text-gray-400 bg-white/5 border border-white/10 rounded-full px-2 py-0.5 whitespace-nowrap">
+            {property.location && <p className="text-xs text-[var(--text-muted)] mb-2"> {property.location}</p>}
+            {property.description && (
+              <p className="text-xs text-[var(--text-muted)] mb-2 line-clamp-2"> {property.description}</p>
+            )}
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-[var(--border)]">
+              <span className="text-sm text-[var(--text-muted)] font-bold">{displayPrice(property.price)} ج.م</span>
+              <span className="text-[11px] text-[var(--text-muted)] bg-[var(--tint-1)] border border-[var(--border)] rounded-full px-2 py-0.5 whitespace-nowrap">
                 {property.userId === currentUser?.id ? 'أضفته أنت' : nameOf(property.userId)}
               </span>
             </div>
@@ -5660,8 +5822,8 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: any)
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold gradient-text">التذكيرات</h2>
-        <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
+        <div className="page-intro"><div><h2>التذكيرات</h2></div></div>
+        <button onClick={onAdd} className="gradient-primary text-[var(--text-strong)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 glow-primary">
           <Plus className="w-4 h-4" /> تذكير جديد
         </button>
       </div>
@@ -5670,32 +5832,32 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: any)
         {pending.map((reminder: Reminder) => {
           const isDue = isReminderDue(reminder);
           return (
-            <div key={reminder.id} className={`glass-card rounded-2xl p-4 ${isDue ? 'border-red-500/50' : ''}`}>
+            <div key={reminder.id} className={`panel p-4 ${isDue ? 'border-red-500/50' : ''}`}>
               <div className="flex items-start justify-between">
                 <div>
-                  <h4 className="font-bold text-white text-lg">{reminder.clientName}</h4>
-                  <p className="text-sm text-purple-400" dir="ltr">{reminder.clientPhone}</p>
-                  <p className="text-xs text-gray-400 mt-1">{formatDateTime(reminder.dateTime)}</p>
+                  <h4 className="font-bold text-[var(--text-strong)] text-lg">{reminder.clientName}</h4>
+                  <p className="text-sm text-[var(--text-muted)]" dir="ltr">{reminder.clientPhone}</p>
+                  <p className="text-xs text-[var(--text-muted)] mt-1">{formatDateTime(reminder.dateTime)}</p>
                   {reminder.note && (
-                    <p className="text-xs text-gray-300 mt-1.5 flex items-center gap-1.5">
+                    <p className="text-xs text-[var(--text)] mt-1.5 flex items-center gap-1.5">
                       {reminder.note.startsWith('متابعة تلقائية') && (
-                        <span className="text-[10px] bg-purple-500/20 border border-purple-500/30 text-purple-200 rounded-full px-1.5 py-0.5 shrink-0">تلقائي</span>
+                        <span className="text-[10px] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--text)] rounded-full px-1.5 py-0.5 shrink-0">تلقائي</span>
                       )}
                       <span className="truncate">{reminder.note}</span>
                     </p>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => onComplete(reminder.id)} title="إتمام" className="p-2 bg-emerald-500/20 rounded-lg">
+                  <button onClick={() => onComplete(reminder.id)} title="إتمام" className="p-2 bg-emerald-500/20 rounded-[var(--r-sm)]">
                     <Check className="w-4 h-4 text-emerald-400" />
                   </button>
-                  <button onClick={() => onDelay(reminder.id, 30)} title="تأجيل نصف ساعة" className="p-2 bg-amber-500/20 rounded-lg">
+                  <button onClick={() => onDelay(reminder.id, 30)} title="تأجيل نصف ساعة" className="p-2 bg-amber-500/20 rounded-[var(--r-sm)]">
                     <Clock className="w-4 h-4 text-amber-400" />
                   </button>
-                  <button onClick={() => onDelay(reminder.id, 60)} title="تأجيل ساعة" className="p-2 bg-orange-500/20 rounded-lg">
+                  <button onClick={() => onDelay(reminder.id, 60)} title="تأجيل ساعة" className="p-2 bg-orange-500/20 rounded-[var(--r-sm)]">
                     <Clock className="w-4 h-4 text-orange-400" />
                   </button>
-                  <button onClick={() => onDelete(reminder.id)} title="حذف" className="p-2 bg-red-500/20 rounded-lg">
+                  <button onClick={() => onDelete(reminder.id)} title="حذف" className="p-2 bg-red-500/20 rounded-[var(--r-sm)]">
                     <Trash2 className="w-4 h-4 text-red-400" />
                   </button>
                 </div>
@@ -5737,20 +5899,20 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd }:
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-xl font-bold gradient-text">الفيدباك اليومي</h2>
-          <p className="text-xs text-gray-400 mt-1">
+          <div className="page-intro"><div><h2>الفيدباك اليومي</h2></div></div>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
             {mine.length} كومنت على {groups.length} رقم — كل رقم في كارت، والكومنتات مرصوصة تحته
           </p>
         </div>
-        <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
+        <button onClick={onAdd} className="gradient-primary text-[var(--text-strong)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 glow-primary">
           <Plus className="w-4 h-4" /> إضافة فيدباك
         </button>
       </div>
 
       {groups.length === 0 && (
-        <div className="glass-card rounded-2xl p-8 text-center">
-          <MessageSquare className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400 text-sm">لا يوجد فيدباك بعد — أي كومنت تكتبه على عميل من تبويب «العملاء» ينزل هنا فوراً.</p>
+        <div className="panel p-8 text-center">
+          <MessageSquare className="w-12 h-12 text-[var(--text-dim)] mx-auto mb-3" />
+          <p className="text-[var(--text-muted)] text-sm">لا يوجد فيدباك بعد — أي كومنت تكتبه على عميل من تبويب «العملاء» ينزل هنا فوراً.</p>
         </div>
       )}
 
@@ -5775,7 +5937,7 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd }:
                     </p>
                     <p className="fb-meta">
                       {formatDateTime(feedback.date)}
-                      {feedback.callStatus === 'no-answer' ? ' • لم يرد 📵' : feedback.callStatus === 'called' ? ' • تم الرد ✅' : ''}
+                      {feedback.callStatus === 'no-answer' ? ' • لم يرد ' : feedback.callStatus === 'called' ? ' • تم الرد ' : ''}
                     </p>
                   </div>
                   <button onClick={() => onDelete(feedback.id)} title="حذف هذا الكومنت" className="fb-del">
@@ -5795,12 +5957,12 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd }:
 // ===== لوحة تحليلات الإدارة: قمع المراحل + أداء الفريق + مصادر الليدز =====
 function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }: any) {
   const stages = [
-    { id: 'new', label: 'جديد', color: 'from-blue-500 to-blue-600' },
-    { id: 'contacted', label: 'تم التواصل', color: 'from-purple-500 to-purple-600' },
-    { id: 'meeting', label: 'موعد معاينة', color: 'from-cyan-500 to-cyan-600' },
-    { id: 'negotiation', label: 'تفاوض', color: 'from-amber-500 to-amber-600' },
-    { id: 'closed', label: 'تم البيع', color: 'from-emerald-500 to-emerald-600' },
-    { id: 'lost', label: 'ضائع', color: 'from-red-500 to-red-600' },
+    { id: 'new', label: 'جديد', color: 'stg-new' },
+    { id: 'contacted', label: 'تم التواصل', color: 'stg-contacted' },
+    { id: 'meeting', label: 'موعد معاينة', color: 'stg-meeting' },
+    { id: 'negotiation', label: 'تفاوض', color: 'stg-negotiation' },
+    { id: 'closed', label: 'تم البيع', color: 'stg-closed' },
+    { id: 'lost', label: 'ضائع', color: 'stg-lost' },
   ];
   const total = clients.length;
   const countOf = (id: string) => clients.filter((c: Client) => c.stage === id).length;
@@ -5851,32 +6013,32 @@ function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }
     .sort((a: any, b: any) => b.closed - a.closed || b.total - a.total);
 
   const kpis = [
-    { label: 'إجمالي العملاء', value: total, icon: Users, gradient: 'from-purple-500 to-violet-600' },
-    { label: 'صفقات مغلقة', value: closed, icon: Award, gradient: 'from-emerald-500 to-emerald-600' },
-    { label: 'نسبة التحويل', value: `${conversion}%`, icon: TrendingUp, gradient: 'from-cyan-500 to-blue-600' },
-    { label: 'تذكيرات متأخرة', value: overdue, icon: Bell, gradient: 'from-amber-500 to-orange-600' },
-    { label: 'العقارات', value: (properties || []).length, icon: Building2, gradient: 'from-fuchsia-500 to-pink-600' },
+    { label: 'إجمالي العملاء', value: total, icon: Users },
+    { label: 'صفقات مغلقة', value: closed, icon: Award },
+    { label: 'نسبة التحويل', value: `${conversion}%`, icon: TrendingUp },
+    { label: 'تذكيرات متأخرة', value: overdue, icon: Bell },
+    { label: 'العقارات', value: (properties || []).length, icon: Building2 },
   ];
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-bold gradient-text">لوحة التحليلات</h2>
+      <div className="page-intro"><div><h2>لوحة التحليلات</h2></div></div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         {kpis.map((k) => (
-          <div key={k.label} className="glass-card rounded-2xl p-4">
-            <div className={`w-10 h-10 bg-gradient-to-br ${k.gradient} rounded-xl flex items-center justify-center mb-2`}>
-              <k.icon className="w-5 h-5 text-white" />
+          <div key={k.label} className="panel p-4">
+            <div className="kpi-icon mb-2">
+              <k.icon className="w-5 h-5" />
             </div>
-            <p className="text-2xl font-bold text-white">{k.value}</p>
-            <p className="text-xs text-gray-400 mt-0.5">{k.label}</p>
+            <p className="text-2xl font-bold text-[var(--text-strong)]">{k.value}</p>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">{k.label}</p>
           </div>
         ))}
       </div>
 
-      <div className="glass-card rounded-2xl p-5">
-        <h3 className="font-bold text-white mb-1 flex items-center gap-2"><Target className="w-4 h-4 text-purple-400" /> قمع المراحل</h3>
-        <p className="text-xs text-gray-400 mb-4">عدد العملاء في كل مرحلة ونسبتهم من إجمالي {total} عميل</p>
+      <div className="panel p-5">
+        <h3 className="font-bold text-[var(--text-strong)] mb-1 flex items-center gap-2"><Target className="w-4 h-4 text-[var(--text-muted)]" /> قمع المراحل</h3>
+        <p className="text-xs text-[var(--text-muted)] mb-4">عدد العملاء في كل مرحلة ونسبتهم من إجمالي {total} عميل</p>
         <div className="space-y-3">
           {stages.map((s) => {
             const n = countOf(s.id);
@@ -5884,11 +6046,11 @@ function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }
             return (
               <div key={s.id}>
                 <div className="flex items-center justify-between text-xs mb-1">
-                  <span className="text-gray-300">{s.label}</span>
-                  <span className="text-gray-400">{n} عميل • {pct}%</span>
+                  <span className="text-[var(--text)]">{s.label}</span>
+                  <span className="text-[var(--text-muted)]">{n} عميل • {pct}%</span>
                 </div>
-                <div className="h-2.5 bg-white/5 rounded-full overflow-hidden">
-                  <div className={`h-full bg-gradient-to-r ${s.color} rounded-full`} style={{ width: `${(n / maxStage) * 100}%` }} />
+                <div className="h-2.5 bg-[var(--tint-1)] rounded-full overflow-hidden">
+                  <div className={`h-full ${s.color} rounded-full`} style={{ width: `${(n / maxStage) * 100}%` }} />
                 </div>
               </div>
             );
@@ -5897,20 +6059,20 @@ function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="glass-card rounded-2xl p-5">
-          <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Zap className="w-4 h-4 text-cyan-400" /> مصادر الليدز</h3>
+        <div className="panel p-5">
+          <h3 className="font-bold text-[var(--text-strong)] mb-4 flex items-center gap-2"><Zap className="w-4 h-4 text-[var(--brand)]" /> مصادر الليدز</h3>
           {topSources.length === 0 ? (
-            <p className="text-sm text-gray-500">لا توجد بيانات بعد</p>
+            <p className="text-sm text-[var(--text-dim)]">لا توجد بيانات بعد</p>
           ) : (
             <div className="space-y-3">
               {topSources.map(([name, n]) => (
                 <div key={name}>
                   <div className="flex items-center justify-between text-xs mb-1 gap-2">
-                    <span className="text-gray-300 truncate">{name}</span>
-                    <span className="text-gray-400 shrink-0">{n}</span>
+                    <span className="text-[var(--text)] truncate">{name}</span>
+                    <span className="text-[var(--text-muted)] shrink-0">{n}</span>
                   </div>
-                  <div className="h-2 bg-white/5 rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-600 rounded-full" style={{ width: `${(n / maxSource) * 100}%` }} />
+                  <div className="h-2 bg-[var(--tint-1)] rounded-full overflow-hidden">
+                    <div className="h-full bg-[var(--brand-fill)] rounded-full" style={{ width: `${(n / maxSource) * 100}%` }} />
                   </div>
                 </div>
               ))}
@@ -5918,15 +6080,15 @@ function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }
           )}
         </div>
 
-        <div className="glass-card rounded-2xl p-5">
-          <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Building2 className="w-4 h-4 text-fuchsia-400" /> أنواع العقارات المعروضة</h3>
+        <div className="panel p-5">
+          <h3 className="font-bold text-[var(--text-strong)] mb-4 flex items-center gap-2"><Building2 className="w-4 h-4 text-[var(--text-muted)]" /> أنواع العقارات المعروضة</h3>
           {topTypes.length === 0 ? (
-            <p className="text-sm text-gray-500">لا توجد عقارات بعد</p>
+            <p className="text-sm text-[var(--text-dim)]">لا توجد عقارات بعد</p>
           ) : (
             <div className="flex flex-wrap gap-2">
               {topTypes.map(([name, n]) => (
-                <span key={name} className="text-xs bg-white/5 border border-white/10 text-gray-200 rounded-full px-3 py-1.5">
-                  {name} • <span className="text-purple-300 font-bold">{n}</span>
+                <span key={name} className="text-xs bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] rounded-full px-3 py-1.5">
+                  {name} • <span className="text-[var(--text)] font-bold">{n}</span>
                 </span>
               ))}
             </div>
@@ -5934,15 +6096,15 @@ function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }
         </div>
       </div>
 
-      <div className="glass-card rounded-2xl p-5">
-        <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Users className="w-4 h-4 text-purple-400" /> أداء فريق المبيعات</h3>
+      <div className="panel p-5">
+        <h3 className="font-bold text-[var(--text-strong)] mb-4 flex items-center gap-2"><Users className="w-4 h-4 text-[var(--text-muted)]" /> أداء فريق المبيعات</h3>
         {rows.length === 0 ? (
-          <p className="text-sm text-gray-500">لا يوجد سيلز بعد</p>
+          <p className="text-sm text-[var(--text-dim)]">لا يوجد سيلز بعد</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-gray-400 text-xs">
+                <tr className="text-[var(--text-muted)] text-xs">
                   <th className="text-right font-medium pb-2">السيلز</th>
                   <th className="text-center font-medium pb-2">العملاء</th>
                   <th className="text-center font-medium pb-2">مغلقة</th>
@@ -5955,15 +6117,15 @@ function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }
               </thead>
               <tbody>
                 {rows.map((r: any) => (
-                  <tr key={r.user.id} className="border-t border-white/5">
-                    <td className="py-2.5 text-white font-medium">{r.user.name}</td>
-                    <td className="text-center text-gray-300">{r.total}</td>
+                  <tr key={r.user.id} className="border-t border-[var(--border-soft)]">
+                    <td className="py-2.5 text-[var(--text-strong)] font-medium">{r.user.name}</td>
+                    <td className="text-center text-[var(--text)]">{r.total}</td>
                     <td className="text-center text-emerald-400 font-bold">{r.closed}</td>
                     <td className="text-center text-red-400">{r.lost}</td>
-                    <td className="text-center text-cyan-300 font-bold">{r.conversion}%</td>
-                    <td className="text-center text-gray-300">{r.feedbacks}</td>
-                    <td className={`text-center ${r.overdue ? 'text-amber-400 font-bold' : 'text-gray-500'}`}>{r.overdue}</td>
-                    <td className="text-left text-xs text-gray-400" dir="ltr">{r.lastTouch ? formatDateTime(r.lastTouch) : '—'}</td>
+                    <td className="text-center text-[var(--brand)] font-bold">{r.conversion}%</td>
+                    <td className="text-center text-[var(--text)]">{r.feedbacks}</td>
+                    <td className={`text-center ${r.overdue ? 'text-amber-400 font-bold' : 'text-[var(--text-dim)]'}`}>{r.overdue}</td>
+                    <td className="text-left text-xs text-[var(--text-muted)]" dir="ltr">{r.lastTouch ? formatDateTime(r.lastTouch) : '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -5987,12 +6149,12 @@ function ReportsView({ clients, feedbacks, reminders }: any) {
   const overdue = (reminders || []).filter((r: Reminder) => !r.isCompleted && isReminderDue(r)).length;
 
   const stages = [
-    { id: 'new', label: 'جديد', color: 'from-blue-500 to-blue-600' },
-    { id: 'contacted', label: 'تم التواصل', color: 'from-purple-500 to-purple-600' },
-    { id: 'meeting', label: 'موعد معاينة', color: 'from-cyan-500 to-cyan-600' },
-    { id: 'negotiation', label: 'تفاوض', color: 'from-amber-500 to-amber-600' },
-    { id: 'closed', label: 'تم البيع', color: 'from-emerald-500 to-emerald-600' },
-    { id: 'lost', label: 'ضائع', color: 'from-red-500 to-red-600' },
+    { id: 'new', label: 'جديد', color: 'stg-new' },
+    { id: 'contacted', label: 'تم التواصل', color: 'stg-contacted' },
+    { id: 'meeting', label: 'موعد معاينة', color: 'stg-meeting' },
+    { id: 'negotiation', label: 'تفاوض', color: 'stg-negotiation' },
+    { id: 'closed', label: 'تم البيع', color: 'stg-closed' },
+    { id: 'lost', label: 'ضائع', color: 'stg-lost' },
   ];
   const maxStage = Math.max(1, ...stages.map((s) => mine.filter((c) => c.stage === s.id).length));
 
@@ -6012,47 +6174,47 @@ function ReportsView({ clients, feedbacks, reminders }: any) {
   const weekTotal = days.reduce((sum, d) => sum + d.count, 0);
 
   const kpis = [
-    { label: 'صفقاتي المغلقة', value: closed, icon: Award, gradient: 'from-emerald-500 to-emerald-600' },
-    { label: 'نسبة تحويلي', value: `${conversion}%`, icon: TrendingUp, gradient: 'from-cyan-500 to-blue-600' },
-    { label: 'عملاء تحت المتابعة', value: mine.length - closed - lost, icon: Users, gradient: 'from-purple-500 to-violet-600' },
-    { label: 'مكالماتي المسجلة', value: calls, icon: PhoneCall, gradient: 'from-blue-500 to-indigo-600' },
-    { label: 'لم يُردّ عليها', value: noAnswer, icon: AlertTriangle, gradient: 'from-amber-500 to-orange-600' },
-    { label: 'تذكيرات متأخرة', value: overdue, icon: Bell, gradient: 'from-red-500 to-rose-600' },
+    { label: 'صفقاتي المغلقة', value: closed, icon: Award },
+    { label: 'نسبة تحويلي', value: `${conversion}%`, icon: TrendingUp },
+    { label: 'عملاء تحت المتابعة', value: mine.length - closed - lost, icon: Users },
+    { label: 'مكالماتي المسجلة', value: calls, icon: PhoneCall },
+    { label: 'لم يُردّ عليها', value: noAnswer, icon: AlertTriangle },
+    { label: 'تذكيرات متأخرة', value: overdue, icon: Bell },
   ];
 
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold gradient-text">تقريري الشخصي</h2>
-        <p className="text-xs text-gray-400 mt-1">أداؤك أنت فقط خلال فترة عملك — ليس إحصائيات الفريق.</p>
+        <div className="page-intro"><div><h2>تقريري الشخصي</h2></div></div>
+        <p className="text-xs text-[var(--text-muted)] mt-1">أداؤك أنت فقط خلال فترة عملك — ليس إحصائيات الفريق.</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         {kpis.map((k) => (
-          <div key={k.label} className="glass-card rounded-2xl p-4">
-            <div className={`w-10 h-10 bg-gradient-to-br ${k.gradient} rounded-xl flex items-center justify-center mb-2`}>
-              <k.icon className="w-5 h-5 text-white" />
+          <div key={k.label} className="panel p-4">
+            <div className="kpi-icon mb-2">
+              <k.icon className="w-5 h-5" />
             </div>
-            <p className="text-2xl font-bold text-white">{k.value}</p>
-            <p className="text-xs text-gray-400 mt-0.5">{k.label}</p>
+            <p className="text-2xl font-bold text-[var(--text-strong)]">{k.value}</p>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">{k.label}</p>
           </div>
         ))}
       </div>
 
-      <div className="glass-card rounded-2xl p-5">
-        <h3 className="font-bold text-white mb-1 flex items-center gap-2"><Target className="w-4 h-4 text-purple-400" /> عملائي على المراحل</h3>
-        <p className="text-xs text-gray-400 mb-4">إجمالي عملائك: {mine.length} — مغلقة: {closed} • ضائعة: {lost}</p>
+      <div className="panel p-5">
+        <h3 className="font-bold text-[var(--text-strong)] mb-1 flex items-center gap-2"><Target className="w-4 h-4 text-[var(--text-muted)]" /> عملائي على المراحل</h3>
+        <p className="text-xs text-[var(--text-muted)] mb-4">إجمالي عملائك: {mine.length} — مغلقة: {closed} • ضائعة: {lost}</p>
         <div className="space-y-3">
           {stages.map((s) => {
             const n = mine.filter((c) => c.stage === s.id).length;
             return (
               <div key={s.id}>
                 <div className="flex items-center justify-between text-xs mb-1">
-                  <span className="text-gray-300">{s.label}</span>
-                  <span className="text-gray-400">{n}</span>
+                  <span className="text-[var(--text)]">{s.label}</span>
+                  <span className="text-[var(--text-muted)]">{n}</span>
                 </div>
-                <div className="h-2.5 bg-white/5 rounded-full overflow-hidden">
-                  <div className={`h-full bg-gradient-to-r ${s.color} rounded-full`} style={{ width: `${(n / maxStage) * 100}%` }} />
+                <div className="h-2.5 bg-[var(--tint-1)] rounded-full overflow-hidden">
+                  <div className={`h-full ${s.color} rounded-full`} style={{ width: `${(n / maxStage) * 100}%` }} />
                 </div>
               </div>
             );
@@ -6060,16 +6222,16 @@ function ReportsView({ clients, feedbacks, reminders }: any) {
         </div>
       </div>
 
-      <div className="glass-card rounded-2xl p-5">
-        <h3 className="font-bold text-white mb-1 flex items-center gap-2"><Activity className="w-4 h-4 text-cyan-400" /> نشاطي في آخر ٧ أيام</h3>
-        <p className="text-xs text-gray-400 mb-4">إجمالي الأحداث: {weekTotal} (مكالمات، فيديباك، تغيير مراحل، واتساب)</p>
+      <div className="panel p-5">
+        <h3 className="font-bold text-[var(--text-strong)] mb-1 flex items-center gap-2"><Activity className="w-4 h-4 text-[var(--text-dim)]" /> نشاطي في آخر ٧ أيام</h3>
+        <p className="text-xs text-[var(--text-muted)] mb-4">إجمالي الأحداث: {weekTotal} (مكالمات، فيديباك، تغيير مراحل، واتساب)</p>
         <div className="flex items-end justify-between gap-1.5 h-28">
           {days.map((d) => (
             <div key={d.key} className="flex-1 flex flex-col items-center gap-1.5">
-              <span className="text-[10px] text-gray-400">{d.count || ''}</span>
-              <div className="w-full bg-gradient-to-t from-purple-600 to-fuchsia-500 rounded-md"
+              <span className="text-[10px] text-[var(--text-muted)]">{d.count || ''}</span>
+              <div className="w-full bg-[var(--brand)] rounded-[var(--r-xs)]"
                 style={{ height: `${Math.max(4, (d.count / maxDay) * 80)}px` }} />
-              <span className="text-[10px] text-gray-500">{d.label}</span>
+              <span className="text-[10px] text-[var(--text-dim)]">{d.label}</span>
             </div>
           ))}
         </div>
@@ -6094,10 +6256,10 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, callLogs = [], onSe
         </h2>
         {/* زرار يعرض كل التعليقات وعددهم + زرار تلخيص للـ CEO */}
         <button onClick={() => setShowComments(true)}
-          className="flex items-center gap-2 text-xs font-bold text-amber-300 bg-amber-400/15 border border-amber-400/30 rounded-xl px-3.5 py-2.5 hover:bg-amber-400/25 transition-colors self-start">
+          className="flex items-center gap-2 text-xs font-bold text-amber-300 bg-amber-400/15 border border-amber-400/30 rounded-[var(--r-md)] px-3.5 py-2.5 hover:bg-amber-400/25 transition-colors self-start">
           <MessageSquare className="w-4 h-4" /> كل التعليقات
           <span className="bg-amber-400/25 rounded-full px-2 py-0.5">{totalComments}</span>
-          <span className="text-gray-400 font-normal">+ تلخيص</span>
+          <span className="text-[var(--text-muted)] font-normal">+ تلخيص</span>
         </button>
       </div>
 
@@ -6122,38 +6284,38 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, callLogs = [], onSe
               key={user.id}
               whileHover={{ scale: 1.02, y: -5 }}
               onClick={() => onSelect(user)}
-              className="glass-card rounded-2xl p-5 cursor-pointer"
+              className="panel p-5 cursor-pointer"
             >
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center">
-                  <span className="text-white font-bold">{user.name[0]}</span>
+                  <span className="text-[var(--text-strong)] font-bold">{user.name[0]}</span>
                 </div>
                 <div>
-                  <h4 className="font-bold text-white">{user.name}</h4>
-                  <p className="text-sm text-gray-400">{user.role === 'sales' ? 'سيلز' : 'مشرف'}</p>
+                  <h4 className="font-bold text-[var(--text-strong)]">{user.name}</h4>
+                  <p className="text-sm text-[var(--text-muted)]">{user.role === 'sales' ? 'سيلز' : 'مشرف'}</p>
                 </div>
               </div>
               
               <div className="grid grid-cols-2 gap-2">
-                <div className="bg-purple-500/10 rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-purple-400">{todayFeedbacks.length}</p>
-                  <p className="text-xs text-gray-400">فيدباك اليوم</p>
+                <div className="bg-[var(--brand-primary-softer)] rounded-[var(--r-sm)] p-3 text-center">
+                  <p className="text-2xl font-bold text-[var(--text-muted)]">{todayFeedbacks.length}</p>
+                  <p className="text-xs text-[var(--text-muted)]">فيدباك اليوم</p>
                 </div>
-                <div className="bg-cyan-500/10 rounded-lg p-3 text-center col-span-2">
-                  <p className="text-2xl font-bold text-cyan-300">{nums.length} <span className="text-sm text-gray-400 font-normal">رقم — {withFeedback} فيه فيدباك</span></p>
-                  <p className="text-xs text-gray-400">أرقامه المسجّلة</p>
+                <div className="bg-[var(--brand-primary-softer)] rounded-[var(--r-sm)] p-3 text-center col-span-2">
+                  <p className="text-2xl font-bold text-[var(--brand)]">{nums.length} <span className="text-sm text-[var(--text-muted)] font-normal">رقم — {withFeedback} فيه فيدباك</span></p>
+                  <p className="text-xs text-[var(--text-muted)]">أرقامه المسجّلة</p>
                 </div>
-                <div className="bg-emerald-500/10 rounded-lg p-3 text-center">
+                <div className="bg-emerald-500/10 rounded-[var(--r-sm)] p-3 text-center">
                   <p className="text-2xl font-bold text-emerald-400">{calledToday}</p>
-                  <p className="text-xs text-gray-400">مكالمات اليوم</p>
+                  <p className="text-xs text-[var(--text-muted)]">مكالمات اليوم</p>
                 </div>
-                <div className="bg-blue-500/10 rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-blue-400">{allItems.length}</p>
-                  <p className="text-xs text-gray-400">إجمالي الفيدباك</p>
+                <div className="bg-[var(--brand-primary-softer)] rounded-[var(--r-sm)] p-3 text-center">
+                  <p className="text-2xl font-bold text-[var(--brand)]">{allItems.length}</p>
+                  <p className="text-xs text-[var(--text-muted)]">إجمالي الفيدباك</p>
                 </div>
-                <div className="bg-amber-500/10 rounded-lg p-3 text-center">
+                <div className="bg-amber-500/10 rounded-[var(--r-sm)] p-3 text-center">
                   <p className="text-2xl font-bold text-amber-400">{totalCalls}</p>
-                  <p className="text-xs text-gray-400">إجمالي المكالمات</p>
+                  <p className="text-xs text-[var(--text-muted)]">إجمالي المكالمات</p>
                 </div>
               </div>
 
@@ -6162,8 +6324,8 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, callLogs = [], onSe
                 const userClients = clients.filter((c: Client) => c.userId === user.id || c.assignedTo === user.id);
                 if (!userClients.length) return null;
                 return (
-                  <div className="mt-3 border-t border-white/10 pt-3" onClick={(e) => e.stopPropagation()}>
-                    <p className="text-[11px] text-gray-400 mb-1.5">مراحل عملائه ({userClients.length}):</p>
+                  <div className="mt-3 border-t border-[var(--border)] pt-3" onClick={(e) => e.stopPropagation()}>
+                    <p className="text-[11px] text-[var(--text-muted)] mb-1.5">مراحل عملائه ({userClients.length}):</p>
                     <div className="flex flex-wrap gap-1.5">
                       {Object.entries(STAGE_META).map(([id, meta]) => {
                         const count = userClients.filter((c: Client) => c.stage === id).length;
@@ -6179,7 +6341,7 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, callLogs = [], onSe
                 );
               })()}
               
-              <p className="text-xs text-gray-500 mt-3 text-center">اضغط لفتح صفحة الأرقام والفيدباك</p>
+              <p className="text-xs text-[var(--text-dim)] mt-3 text-center">اضغط لفتح صفحة الأرقام والفيدباك</p>
             </motion.div>
           );
         })}
@@ -6187,8 +6349,8 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, callLogs = [], onSe
 
       {salesUsers.length === 0 && (
         <div className="text-center py-16">
-          <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400">لا يوجد سيلز في الفريق</p>
+          <Users className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
+          <p className="text-[var(--text-muted)]">لا يوجد سيلز في الفريق</p>
         </div>
       )}
     </div>
@@ -6221,25 +6383,26 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold gradient-text">فريق العمل</h2>
+        <div className="page-intro"><div><h2>فريق العمل</h2></div></div>
         {view === 'accounts' && (
-          <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
+          <button onClick={onAdd} className="gradient-primary text-[var(--text-strong)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 glow-primary">
             <Plus className="w-4 h-4" /> إضافة حساب
           </button>
         )}
       </div>
 
-      {/* التبويبات: الحسابات · كامبين فيسبوك · كامبين إنستجرام — كل قناة معزولة بإعدادها */}
+      {/* التبويبات: الحسابات / كامبين فيسبوك / كامبين إنستجرام — كل قناة معزولة بإعدادها.
+          نفس شكل شريط التبديل المستخدم في كل مكان تاني في النظام. */}
       {isAdmin && (
-        <div className="flex flex-wrap items-center gap-2">
-          {([['accounts', '👥 الحسابات'], ['facebook', '📘 فيسبوك'], ['instagram', '📸 إنستجرام']] as Array<['accounts' | LeadChannel, string]>).map(([id, label]) => (
+        <div className="seg-bar" role="tablist" aria-label="فريق العمل والكامبينات">
+          {([['accounts', 'الحسابات'], ['facebook', 'فيسبوك'], ['instagram', 'إنستجرام']] as Array<['accounts' | LeadChannel, string]>).map(([id, label]) => (
             <button
               key={id}
               type="button"
+              role="tab"
+              aria-selected={view === id}
               onClick={() => switchView(id)}
-              className={`px-4 py-2.5 rounded-xl font-bold text-xs border transition-colors ${
-                view === id ? 'bg-purple-500/20 border-purple-400/40 text-purple-200' : 'bg-white/5 border-white/10 text-gray-400 hover:text-gray-200'
-              }`}
+              className={`seg-item${view === id ? ' on' : ''}`}
             >
               {label}
             </button>
@@ -6261,24 +6424,22 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
               exit={{ opacity: 0, scale: 0.85 }}
               whileHover={{ scale: 1.02 }}
               onClick={() => onSelect(user)}
-              className={`glass-card rounded-2xl p-5 cursor-pointer ${user.isActive ? '' : 'opacity-60'}`}
+              className={`panel p-5 cursor-pointer ${user.isActive ? '' : 'opacity-60'}`}
             >
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center">
-                  <span className="text-white font-bold">{user.name[0]}</span>
-                </div>
+                <span className={`avatar-plate rank-${user.role}`} aria-hidden="true">{user.name[0]}</span>
                 <div className="flex-1 min-w-0">
-                  <h4 className="font-bold text-white truncate">{user.name}</h4>
-                  <div className="flex items-center gap-1.5 flex-wrap">
+                  <h4 className="font-bold text-[var(--text-strong)] truncate">{user.name}</h4>
+                  <div className="flex items-center gap-1.5 flex-wrap mt-1">
                     <span className={rankClass(user.role)}>{rankLabel(user.role)}</span>
                     {user.team && <span className="chip">فريق: {user.team}</span>}
-                    {!user.isActive && <span className="text-[10px] text-red-400">• موقوف</span>}
+                    {!user.isActive && <span className="st-chip st-lost">موقوف</span>}
                   </div>
                 </div>
               </div>
-              <div className="flex items-center justify-between mt-4 pt-3 border-t border-white/10">
-                <p className="text-xs text-gray-500 truncate" dir="ltr">{user.username ? `@${user.username}` : '—'}</p>
-                <div className="flex items-center gap-2">
+              <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--border)]">
+                <p className="text-xs text-[var(--text-dim)] truncate" dir="ltr">{user.username ? `@${user.username}` : '—'}</p>
+                <div className="flex items-center gap-1.5">
                   <button
                     onClick={(e) => { e.stopPropagation(); onImpersonate?.(user); }}
                     disabled={!canImpersonate(user)}
@@ -6287,25 +6448,25 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
                         ? `الدخول إلى حساب ${user.name} — ترى النظام بعيونه بدون كلمة مرور`
                         : user.isActive ? 'غير متاح لهذا الحساب' : 'الحساب موقوف — لا يمكن الدخول إليه'
                     }
-                    className="p-2 bg-cyan-500/20 rounded-lg hover:bg-cyan-500/40 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    className="icon-btn is-brand disabled:opacity-30 disabled:cursor-not-allowed"
                   >
-                    <LogIn className="w-4 h-4 text-cyan-300" />
+                    <LogIn />
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); onEdit(user); }}
                     disabled={!canEdit(user)}
                     title={canEdit(user) ? 'تعديل الحساب (الاسم / كلمة المرور / الرتبة)' : 'لا يمكن تعديل حساب الـ CEO'}
-                    className="p-2 bg-purple-500/20 rounded-lg hover:bg-purple-500/40 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    className="icon-btn disabled:opacity-30 disabled:cursor-not-allowed"
                   >
-                    <Edit3 className="w-4 h-4 text-purple-300" />
+                    <Edit3 />
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); onDelete(user); }}
                     disabled={!canDelete(user)}
                     title={canDelete(user) ? 'حذف الحساب' : 'لا يمكن حذف هذا الحساب'}
-                    className="p-2 bg-red-500/20 rounded-lg hover:bg-red-500/40 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    className="icon-btn is-danger disabled:opacity-30 disabled:cursor-not-allowed"
                   >
-                    <Trash2 className="w-4 h-4 text-red-400" />
+                    <Trash2 />
                   </button>
                 </div>
               </div>
@@ -6351,7 +6512,7 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert }: any) {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-bold gradient-text">أرقام جديدة</h2>
+      <div className="page-intro"><div><h2>أرقام جديدة</h2></div></div>
 
       <div className="space-y-3">
         {assignedLeads.map((lead: AssignedLead) => (
@@ -6359,26 +6520,26 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert }: any) {
             key={lead.id} 
             whileHover={{ scale: 1.01 }}
             onClick={() => handleLeadClick(lead)}
-            className={`glass-card rounded-2xl p-4 cursor-pointer ${lead.status === 'new' ? 'border-2 border-blue-500/30 hover:border-blue-500/50' : ''}`}
+            className={`panel p-4 cursor-pointer ${lead.status === 'new' ? 'border-2 border-[var(--brand-primary-soft)] hover:border-[var(--brand)]' : ''}`}
           >
             <div className="flex items-start justify-between">
               <div className="flex-1">
-                <h4 className="font-bold text-white text-lg">{lead.name}</h4>
-                <p className="text-purple-400 text-lg" dir="ltr">{lead.phone}</p>
-                {lead.description && <p className="text-sm text-gray-400 mt-2">{formatLeadDescription(lead.description)}</p>}
-                <p className="text-xs text-gray-500 mt-2">
+                <h4 className="font-bold text-[var(--text-strong)] text-lg">{lead.name}</h4>
+                <p className="text-[var(--text-muted)] text-lg" dir="ltr">{lead.phone}</p>
+                {lead.description && <p className="text-sm text-[var(--text-muted)] mt-2">{formatLeadDescription(lead.description)}</p>}
+                <p className="text-xs text-[var(--text-dim)] mt-2">
                   {formatDateTime(lead.createdAt)}
                 </p>
               </div>
               <div className="flex flex-col gap-2 items-end">
                 {lead.status === 'new' && (
-                  <span className="text-sm px-4 py-2 rounded-full bg-blue-500/20 text-blue-400 font-bold animate-pulse">
+                  <span className="text-sm px-4 py-2 rounded-full bg-[var(--brand-primary-softer)] text-[var(--brand)] font-bold animate-pulse">
                     رقم جديد
                   </span>
                 )}
                 
                 {lead.status === 'viewed' && (
-                  <span className="text-sm px-4 py-2 rounded-full bg-purple-500/20 text-purple-400 font-bold">
+                  <span className="text-sm px-4 py-2 rounded-full bg-[var(--brand-primary-softer)] text-[var(--text-muted)] font-bold">
                     تم العرض
                   </span>
                 )}
@@ -6400,9 +6561,9 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert }: any) {
                   <button
                     onClick={(e) => { e.stopPropagation(); onConvert(lead); }}
                     title="ينشئ عميلاً بهذا الاسم والرقم في «العملاء» ويسجّل الحدث في خطه الزمني"
-                    className="text-xs bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-3 py-2 rounded-lg font-bold hover:bg-emerald-500/30 transition-colors whitespace-nowrap"
+                    className="text-xs bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-3 py-2 rounded-[var(--r-sm)] font-bold hover:bg-emerald-500/30 transition-colors whitespace-nowrap"
                   >
-                    ➕ أضف إلى عملائي
+                     أضف إلى عملائي
                   </button>
                 )}
               </div>
@@ -6413,8 +6574,8 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert }: any) {
 
       {assignedLeads.length === 0 && (
         <div className="text-center py-16">
-          <UserPlus className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400">لا يوجد أرقام جديدة</p>
+          <UserPlus className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
+          <p className="text-[var(--text-muted)]">لا يوجد أرقام جديدة</p>
         </div>
       )}
 
@@ -6425,54 +6586,54 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert }: any) {
             initial={{ opacity: 0 }} 
             animate={{ opacity: 1 }} 
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80"
             onClick={() => setSelectedLead(null)}
           >
             <motion.div 
               initial={{ scale: 0.9 }} 
               animate={{ scale: 1 }} 
               exit={{ scale: 0.9 }}
-              className="glass-card rounded-3xl p-6 w-full max-w-lg border-purple-400/30 glow-primary"
+              className="panel p-6 w-full max-w-lg border-[var(--brand-primary-soft)] glow-primary"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold gradient-text">تفاصيل الرقم</h2>
+                <div className="page-intro"><div><h2>تفاصيل الرقم</h2></div></div>
                 <button 
                   onClick={() => setSelectedLead(null)}
-                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                  className="p-2 hover:bg-[var(--tint-2)] rounded-[var(--r-sm)] transition-colors"
                 >
-                  <X className="w-5 h-5 text-gray-400" />
+                  <X className="w-5 h-5 text-[var(--text-muted)]" />
                 </button>
               </div>
 
               <div className="space-y-4">
-                <div className="bg-white/5 rounded-xl p-4">
-                  <p className="text-xs text-gray-400 mb-1">اسم العميل</p>
-                  <p className="text-white font-bold text-lg">{selectedLead.name}</p>
+                <div className="bg-[var(--tint-1)] rounded-[var(--r-md)] p-4">
+                  <p className="text-xs text-[var(--text-muted)] mb-1">اسم العميل</p>
+                  <p className="text-[var(--text-strong)] font-bold text-lg">{selectedLead.name}</p>
                 </div>
 
-                <div className="bg-white/5 rounded-xl p-4">
-                  <p className="text-xs text-gray-400 mb-1">رقم الهاتف</p>
-                  <p className="text-purple-400 font-bold text-lg" dir="ltr">{selectedLead.phone}</p>
+                <div className="bg-[var(--tint-1)] rounded-[var(--r-md)] p-4">
+                  <p className="text-xs text-[var(--text-muted)] mb-1">رقم الهاتف</p>
+                  <p className="text-[var(--text-muted)] font-bold text-lg" dir="ltr">{selectedLead.phone}</p>
                 </div>
 
                 {selectedLead.description && (
-                  <div className="bg-white/5 rounded-xl p-4">
-                    <p className="text-xs text-gray-400 mb-1">الوصف / الملاحظات</p>
-                    <p className="text-white">{formatLeadDescription(selectedLead.description)}</p>
+                  <div className="bg-[var(--tint-1)] rounded-[var(--r-md)] p-4">
+                    <p className="text-xs text-[var(--text-muted)] mb-1">الوصف / الملاحظات</p>
+                    <p className="text-[var(--text-strong)]">{formatLeadDescription(selectedLead.description)}</p>
                   </div>
                 )}
 
-                <div className="bg-white/5 rounded-xl p-4">
-                  <p className="text-xs text-gray-400 mb-1">تاريخ الإضافة</p>
-                  <p className="text-white">{formatDateTime(selectedLead.createdAt)}</p>
+                <div className="bg-[var(--tint-1)] rounded-[var(--r-md)] p-4">
+                  <p className="text-xs text-[var(--text-muted)] mb-1">تاريخ الإضافة</p>
+                  <p className="text-[var(--text-strong)]">{formatDateTime(selectedLead.createdAt)}</p>
                 </div>
 
-                <div className="bg-white/5 rounded-xl p-4">
-                  <p className="text-xs text-gray-400 mb-1">الحالة</p>
+                <div className="bg-[var(--tint-1)] rounded-[var(--r-md)] p-4">
+                  <p className="text-xs text-[var(--text-muted)] mb-1">الحالة</p>
                   <span className={`text-sm px-4 py-2 rounded-full font-bold ${
-                    selectedLead.status === 'new' ? 'bg-blue-500/20 text-blue-400' :
-                    selectedLead.status === 'viewed' ? 'bg-purple-500/20 text-purple-400' :
+                    selectedLead.status === 'new' ? 'bg-[var(--brand-primary-softer)] text-[var(--brand)]' :
+                    selectedLead.status === 'viewed' ? 'bg-[var(--brand-primary-softer)] text-[var(--text-muted)]' :
                     selectedLead.status === 'contacted' ? 'bg-amber-500/20 text-amber-400' :
                     'bg-emerald-500/20 text-emerald-400'
                   }`}>
@@ -6485,7 +6646,7 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert }: any) {
                 <div className="flex flex-col sm:flex-row gap-3 pt-2">
                   <a 
                     href={`tel:${selectedLead.phone}`}
-                    className="flex-1 bg-emerald-500/20 text-emerald-400 py-3 rounded-xl font-bold text-center hover:bg-emerald-500/30 transition-colors border border-emerald-500/20"
+                    className="flex-1 bg-emerald-500/20 text-emerald-400 py-3 rounded-[var(--r-md)] font-bold text-center hover:bg-emerald-500/30 transition-colors border border-emerald-500/20"
                   >
                     <PhoneCall className="w-4 h-4 inline mr-2" />
                     اتصال
@@ -6493,14 +6654,14 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert }: any) {
                   {onConvert && selectedLead.status !== 'closed' && (
                     <button
                       onClick={() => { onConvert(selectedLead); setSelectedLead(null); }}
-                      className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold"
+                      className="flex-1 gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold"
                     >
-                      ➕ أضف إلى عملائي
+                       أضف إلى عملائي
                     </button>
                   )}
                   <button 
                     onClick={() => setSelectedLead(null)}
-                    className="sm:w-24 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors"
+                    className="sm:w-24 bg-[var(--tint-2)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold hover:bg-[var(--tint-3)] transition-colors"
                   >
                     إغلاق
                   </button>
@@ -6561,30 +6722,30 @@ function SalesShareModal({ leads, users, onClose }: any) {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.96, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96 }} className="glass-card rounded-3xl p-4 sm:p-6 w-full max-w-3xl h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between gap-3 pb-4 border-b border-white/10">
+      <motion.div initial={{ scale: 0.96, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96 }} className="panel p-4 sm:p-6 w-full max-w-3xl h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3 pb-4 border-b border-[var(--border)]">
           <div className="flex items-center gap-3 min-w-0">
             {current ? (
-              <button onClick={() => setOpenId(null)} title="رجوع لكل السيلز" className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-gray-200 shrink-0">
+              <button onClick={() => setOpenId(null)} title="رجوع لكل السيلز" className="p-2 rounded-[var(--r-md)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] text-[var(--text)] shrink-0">
                 <ChevronRight className="w-5 h-5" />
               </button>
             ) : (
               <div className="w-11 h-11 gradient-primary rounded-full flex items-center justify-center shrink-0">
-                <BarChart3 className="w-5 h-5 text-white" />
+                <BarChart3 className="w-5 h-5 text-[var(--text-strong)]" />
               </div>
             )}
             <div className="min-w-0">
               <h2 className="text-lg sm:text-xl font-bold gradient-text truncate">
                 {current ? current.user.name : 'حصة كل سيلز من الأرقام'}
               </h2>
-              <p className="text-xs text-gray-400 truncate">
+              <p className="text-xs text-[var(--text-muted)] truncate">
                 {current
                   ? `${rankLabel(current.user.role)} • اتوزّع له ${current.total} ${current.total === 1 ? 'رقم' : 'أرقام'}`
                   : `الإجمالي ${leads.length} رقم • موزَّعة ${assignedTotal} • غير مخصصة ${unassigned} • ${rows.length} سيلز`}
               </p>
             </div>
           </div>
-          <button onClick={onClose} title="إغلاق" className="p-2 hover:bg-white/10 rounded-lg shrink-0">
+          <button onClick={onClose} title="إغلاق" className="p-2 hover:bg-[var(--tint-2)] rounded-[var(--r-sm)] shrink-0">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -6592,32 +6753,32 @@ function SalesShareModal({ leads, users, onClose }: any) {
         {!current && (
           <div className="flex-1 overflow-y-auto pt-4 space-y-3">
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ابحث باسم السيلز…"
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-2.5 text-white text-sm" />
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-2.5 text-[var(--text-strong)] text-sm" />
 
             {rows.length === 0 && (
-              <div className="text-center py-16 text-gray-400 text-sm">لا يوجد سيلز مطابق</div>
+              <div className="text-center py-16 text-[var(--text-muted)] text-sm">لا يوجد سيلز مطابق</div>
             )}
 
             {rows.map((row: any) => (
               <button key={row.user.id} onClick={() => setOpenId(row.user.id)}
-                className="w-full text-right rounded-2xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] transition-colors p-3.5">
+                className="w-full text-right rounded-[var(--r-xl)] border border-[var(--border)] bg-white/[0.03] hover:bg-white/[0.08] transition-colors p-3.5">
                 <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center font-bold text-white shrink-0">
+                  <div className="w-10 h-10 rounded-full bg-[var(--tint-2)] flex items-center justify-center font-bold text-[var(--text-strong)] shrink-0">
                     {row.user.name?.[0] || '؟'}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-bold text-white text-sm truncate">{row.user.name}</span>
+                      <span className="font-bold text-[var(--text-strong)] text-sm truncate">{row.user.name}</span>
                       <span className="shrink-0 flex items-baseline gap-1">
                         <span className="text-xl font-extrabold gradient-text">{row.total}</span>
-                        <span className="text-[11px] text-gray-400">رقم</span>
+                        <span className="text-[11px] text-[var(--text-muted)]">رقم</span>
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-2 mt-0.5">
-                      <span className="text-[11px] text-gray-500">{rankLabel(row.user.role)}</span>
-                      <span className="text-[11px] text-gray-500">اضغط لعرض أرقامه ›</span>
+                      <span className="text-[11px] text-[var(--text-dim)]">{rankLabel(row.user.role)}</span>
+                      <span className="text-[11px] text-[var(--text-dim)]">اضغط لعرض أرقامه ›</span>
                     </div>
-                    <div className="h-1.5 bg-white/5 rounded-full mt-2 overflow-hidden">
+                    <div className="h-1.5 bg-[var(--tint-1)] rounded-full mt-2 overflow-hidden">
                       <div className="h-full gradient-primary rounded-full" style={{ width: `${Math.round((row.total / top) * 100)}%` }} />
                     </div>
                     <div className="flex items-center gap-1.5 mt-2 flex-wrap">
@@ -6625,7 +6786,7 @@ function SalesShareModal({ leads, users, onClose }: any) {
                       {row.contacted > 0 && <span className="st-chip st-contacted">{row.contacted} تم التواصل</span>}
                       {row.closed > 0 && <span className="st-chip st-closed">{row.closed} مغلق</span>}
                       {row.total > 0 && row.fresh === 0 && row.contacted === 0 && row.closed === 0 && (
-                        <span className="text-[11px] text-gray-500">كل الأرقام لم تُفتح بعد</span>
+                        <span className="text-[11px] text-[var(--text-dim)]">كل الأرقام لم تُفتح بعد</span>
                       )}
                       {row.total === 0 && <span className="text-[11px] text-amber-300/80">لم يُوزَّع له أي رقم بعد</span>}
                     </div>
@@ -6639,17 +6800,17 @@ function SalesShareModal({ leads, users, onClose }: any) {
         {current && (
           <div className="flex-1 overflow-y-auto pt-4 space-y-2.5">
             {current.leads.length === 0 && (
-              <div className="text-center py-16 text-gray-400 text-sm">لم يُوزَّع له أي رقم بعد</div>
+              <div className="text-center py-16 text-[var(--text-muted)] text-sm">لم يُوزَّع له أي رقم بعد</div>
             )}
             {current.leads.map((l: AssignedLead) => (
-              <div key={l.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-3 flex items-center justify-between gap-3">
+              <div key={l.id} className="rounded-[var(--r-md)] border border-[var(--border)] bg-white/[0.03] p-3 flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-bold text-white truncate">{l.name}</p>
-                  <p className="text-xs text-gray-400" dir="ltr">{l.phone || 'بدون رقم'}</p>
+                  <p className="text-sm font-bold text-[var(--text-strong)] truncate">{l.name}</p>
+                  <p className="text-xs text-[var(--text-muted)]" dir="ltr">{l.phone || 'بدون رقم'}</p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {statusChip(l.status)}
-                  <span className="text-[11px] text-gray-500">{shortDate(l.createdAt)}</span>
+                  <span className="text-[11px] text-[var(--text-dim)]">{shortDate(l.createdAt)}</span>
                 </div>
               </div>
             ))}
@@ -6698,40 +6859,40 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-bold gradient-text">توزيع الأرقام</h2>
-          <p className="text-xs text-gray-400 mt-1">
-            إجمالي الأرقام: <span className="text-blue-300 font-bold">{assignedLeads.length}</span>
+          <div className="page-intro"><div><h2>توزيع الأرقام</h2></div></div>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            إجمالي الأرقام: <span className="text-[var(--brand)] font-bold">{assignedLeads.length}</span>
             {' '}• غير مخصصة: <span className="text-amber-300 font-bold">{unassignedCount}</span>
             {' '}• عدد السيلز: {salesUsers.length}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={() => setShowShare(true)} className="bg-purple-500/15 border border-purple-500/30 text-purple-200 px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-purple-500/25 transition-colors">
+          <button onClick={() => setShowShare(true)} className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 hover:bg-[var(--brand-primary-soft)] transition-colors">
             <BarChart3 className="w-4 h-4" /> الأرقام لكل سيلز
           </button>
-          <button onClick={onImport} className="bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-cyan-500/25 transition-colors">
+          <button onClick={onImport} className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--brand)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 hover:bg-[var(--brand-primary-soft)] transition-colors">
             <Upload className="w-4 h-4" /> استيراد ملف أرقام
           </button>
-          <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
+          <button onClick={onAdd} className="gradient-primary text-[var(--text-strong)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 glow-primary">
             <Plus className="w-4 h-4" /> إضافة رقم
           </button>
         </div>
       </div>
 
       {/* أدوات التوزيع: بحث + تصفية + توزيع جماعي */}
-      <div className="glass-card rounded-2xl p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
+      <div className="panel p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
         <div className="relative flex-1">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث بالاسم أو الرقم أو السيلز..."
-            className="w-full bg-white/5 border border-white/10 rounded-xl pr-9 pl-3 py-2.5 text-white text-sm" />
+            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm" />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => setFilter('all')}
-            className={`text-xs font-bold px-3 py-2.5 rounded-xl border transition-colors ${filter === 'all' ? 'bg-blue-500/20 border-blue-400/50 text-blue-200' : 'bg-white/5 border-white/10 text-gray-400'}`}>
+            className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${filter === 'all' ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
             الكل ({assignedLeads.length})
           </button>
           <button onClick={() => setFilter('unassigned')}
-            className={`text-xs font-bold px-3 py-2.5 rounded-xl border transition-colors ${filter === 'unassigned' ? 'bg-amber-500/20 border-amber-400/50 text-amber-200' : 'bg-white/5 border-white/10 text-gray-400'}`}>
+            className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${filter === 'unassigned' ? 'bg-amber-500/20 border-amber-400/50 text-amber-200' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
             غير مخصصة ({unassignedCount})
           </button>
         </div>
@@ -6739,25 +6900,25 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
 
       {/* لا يوجد مندوبون بعد: نوضّح السبب بدل قائمة فارغة صامتة */}
       {salesUsers.length === 0 && (
-        <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 leading-relaxed">
-          ⚠️ لا يوجد أي حساب سيلز (Sales Agent) بعد، ولهذا لا يمكن توزيع أي رقم على أحد.
+        <div className="rounded-[var(--r-md)] border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 leading-relaxed">
+           لا يوجد أي حساب سيلز (Sales Agent) بعد، ولهذا لا يمكن توزيع أي رقم على أحد.
           أنشئ حساب سيلز من تبويب «فريق العمل» ← «إضافة حساب»، واربطه بالفريق إن أردت، ثم عُد إلى هنا.
         </div>
       )}
 
       {flash && (
-        <div className="rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-4 py-3 text-xs font-bold text-emerald-200">
+        <div className="rounded-[var(--r-md)] border border-emerald-400/40 bg-emerald-500/10 px-4 py-3 text-xs font-bold text-emerald-200">
           {flash}
         </div>
       )}
 
       {/* توزيع دفعة: اختر السيلز من القائمة ← اكتب عدد الأرقام ← توزيع فوري */}
       {salesUsers.length > 0 && (
-        <div className="glass-card rounded-2xl p-3.5">
-          <p className="text-xs font-bold text-gray-300 mb-2.5">توزيع دفعة على سيلز ({visible.length} رقم معروض):</p>
+        <div className="panel p-3.5">
+          <p className="text-xs font-bold text-[var(--text)] mb-2.5">توزيع دفعة على سيلز ({visible.length} رقم معروض):</p>
           <div className="flex flex-col sm:flex-row gap-2">
             <select value={batchSalesId} onChange={(e) => setBatchSalesId(e.target.value)}
-              className="flex-1 bg-white/5 border border-purple-500/20 rounded-xl px-3 py-2.5 text-sm text-white">
+              className="flex-1 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm text-[var(--text-strong)]">
               <option value="" className="bg-gray-900">— اختر السيلز —</option>
               {salesUsers.map((u: User) => (
                 <option key={u.id} value={u.id} className="bg-gray-900">
@@ -6768,7 +6929,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
             <input type="number" min={1} max={visible.length} value={batchCount} dir="ltr"
               onChange={(e) => setBatchCount(e.target.value)}
               placeholder="عدد الأرقام"
-              className="w-full sm:w-32 bg-white/5 border border-purple-500/20 rounded-xl px-3 py-2.5 text-sm text-white text-center font-bold" />
+              className="w-full sm:w-32 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm text-[var(--text-strong)] text-center font-bold" />
             <button
               onClick={() => {
                 const n = Math.floor(Number(batchCount) || 0);
@@ -6780,7 +6941,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                 setBatchCount('');
               }}
               disabled={!batchSalesId || !(Number(batchCount) >= 1)}
-              className="gradient-primary text-white px-6 py-2.5 rounded-xl font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+              className="gradient-primary text-[var(--text-strong)] px-6 py-2.5 rounded-[var(--r-md)] font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
               توزيع
             </button>
           </div>
@@ -6792,18 +6953,18 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
           const owner = salesUsers.find((u: User) => u.id === lead.salesId);
           return (
             <motion.div key={lead.id} whileHover={{ scale: 1.005 }}
-              className="glass-card rounded-2xl p-4">
+              className="panel p-4">
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h4 className="font-bold text-white text-base">{lead.name}</h4>
+                    <h4 className="font-bold text-[var(--text-strong)] text-base">{lead.name}</h4>
                     <span className={`st-chip ${lead.status === 'new' ? 'st-new' : lead.status === 'viewed' ? 'st-meeting' : lead.status === 'contacted' ? 'st-contacted' : 'st-closed'}`}>
                       {lead.status === 'new' ? 'رقم جديد' : lead.status === 'viewed' ? 'تم العرض' : lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
                     </span>
                     {!owner && <span className="st-chip st-negotiation">غير مخصص</span>}
                   </div>
-                  <p className="text-sky-300 mt-1" dir="ltr">{lead.phone}</p>
-                  {lead.description && <p className="text-[11.5px] text-gray-400 mt-1.5">{formatLeadDescription(lead.description)}</p>}
+                  <p className="text-[var(--brand)] mt-1" dir="ltr">{lead.phone}</p>
+                  {lead.description && <p className="text-[11.5px] text-[var(--text-muted)] mt-1.5">{formatLeadDescription(lead.description)}</p>}
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
@@ -6815,12 +6976,12 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
               </div>
 
               {/* تخصيص الرقم لمندوب — هذا هو التوزيع المباشر */}
-              <div className="mt-3 pt-3 border-t border-white/10 flex flex-wrap items-center gap-2">
-                <span className="text-[11px] text-gray-400">مخصص لـ:</span>
+              <div className="mt-3 pt-3 border-t border-[var(--border)] flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-[var(--text-muted)]">مخصص لـ:</span>
                 <select
                   value={lead.salesId || ''}
                   onChange={(e) => onAssign?.([lead.id], e.target.value)}
-                  className="bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                  className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-2.5 py-1.5 text-xs text-[var(--text-strong)]">
                   <option value="" className="bg-gray-900">— غير مخصص —</option>
                   {salesUsers.map((u: User) => (
                     <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
@@ -6835,12 +6996,12 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
 
       {assignedLeads.length === 0 && (
         <div className="text-center py-16">
-          <UserPlus className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400">لا يوجد أرقام موزعة</p>
+          <UserPlus className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
+          <p className="text-[var(--text-muted)]">لا يوجد أرقام موزعة</p>
         </div>
       )}
       {assignedLeads.length > 0 && visible.length === 0 && (
-        <p className="text-center text-sm text-gray-500 py-8">لا نتائج مطابقة للبحث أو التصفية</p>
+        <p className="text-center text-sm text-[var(--text-dim)] py-8">لا نتائج مطابقة للبحث أو التصفية</p>
       )}
 
       {/* حصة كل سيلز: كل السيلز وعدد الأرقام لكل واحد، والضغط على الاسم يفتح أرقامه */}
@@ -6855,8 +7016,8 @@ function AdminTeamsView({ teams, users, currentUser, onSelect, onAdd }: any) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold gradient-text">الفرق</h2>
-        <button onClick={onAdd} className="gradient-primary text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg glow-primary">
+        <div className="page-intro"><div><h2>الفرق</h2></div></div>
+        <button onClick={onAdd} className="gradient-primary text-[var(--text-strong)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 glow-primary">
           <Plus className="w-4 h-4" /> إضافة فريق
         </button>
       </div>
@@ -6864,10 +7025,10 @@ function AdminTeamsView({ teams, users, currentUser, onSelect, onAdd }: any) {
       <div className="grid gap-4 md:grid-cols-2">
         {teams.map((team: Team) => (
           <motion.div key={team.id} whileHover={{ scale: 1.02 }} onClick={() => onSelect(team)}
-            className="glass-card rounded-2xl p-5 cursor-pointer">
-            <h4 className="font-bold text-white">{team.name}</h4>
-            <p className="text-sm text-gray-400">المشرف: {team.supervisorName}</p>
-            <p className="text-sm text-gray-400">عدد الأعضاء: {team.memberIds.length}</p>
+            className="panel p-5 cursor-pointer">
+            <h4 className="font-bold text-[var(--text-strong)]">{team.name}</h4>
+            <p className="text-sm text-[var(--text-muted)]">المشرف: {team.supervisorName}</p>
+            <p className="text-sm text-[var(--text-muted)]">عدد الأعضاء: {team.memberIds.length}</p>
           </motion.div>
         ))}
       </div>
@@ -6923,14 +7084,14 @@ function AdminAttendanceView({ users }: any) {
   const checkedToday = persons.filter((p: any) => p.todayRecord).length;
   const outToday = persons.filter((p: any) => p.todayRecord?.checkOutAt).length;
 
-  const locationButton = (lat?: number, lng?: number, accuracy?: number, label = '📍 الموقع') =>
+  const locationButton = (lat?: number, lng?: number, accuracy?: number, label = ' الموقع') =>
     typeof lat === 'number' && typeof lng === 'number' ? (
       <a
         href={mapsLink(lat, lng)}
         target="_blank"
         rel="noreferrer"
         title={accuracy ? `فتح الموقع في خرائط جوجل (دقة ±${accuracy}م)` : 'فتح الموقع في خرائط جوجل'}
-        className="inline-flex items-center gap-1.5 text-xs font-bold text-cyan-300 bg-cyan-500/10 border border-cyan-500/20 px-2.5 py-1 rounded-lg hover:bg-cyan-500/20 transition-colors"
+        className="inline-flex items-center gap-1.5 text-xs font-bold text-[var(--brand)] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] px-2.5 py-1 rounded-[var(--r-sm)] hover:bg-[var(--brand-primary-soft)] transition-colors"
       >
         {label}
         {accuracy ? ` ±${accuracy}م` : ''}
@@ -6942,21 +7103,21 @@ function AdminAttendanceView({ users }: any) {
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
-            <Clock className="w-5 h-5 text-cyan-400" /> الحضور والانصراف
+            <Clock className="w-5 h-5 text-[var(--brand)]" /> الحضور والانصراف
           </h2>
-          <p className="text-xs text-gray-400 mt-1">
+          <p className="text-xs text-[var(--text-muted)] mt-1">
             {formatDayLabel(today)} — حضر اليوم: <span className="text-emerald-400 font-bold">{checkedToday}</span> من {persons.length}
             {' '}• انصرف: <span className="text-amber-400 font-bold">{outToday}</span>
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2">
           <div className="relative">
-            <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث باسم السيلز..."
-              className="w-full sm:w-56 bg-white/5 border border-purple-500/20 rounded-xl pr-9 pl-3 py-2.5 text-white text-sm" />
+              className="w-full sm:w-56 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm" />
           </div>
           <select value={period} onChange={(e) => setPeriod(e.target.value as any)}
-            className="bg-white/5 border border-purple-500/20 rounded-xl px-4 py-2.5 text-white text-sm">
+            className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-2.5 text-[var(--text-strong)] text-sm">
             <option value="today" className="bg-gray-900">اليوم</option>
             <option value="week" className="bg-gray-900">آخر ٧ أيام</option>
             <option value="month" className="bg-gray-900">آخر ٣٠ يوم</option>
@@ -6968,9 +7129,9 @@ function AdminAttendanceView({ users }: any) {
       <AttendanceMonthlyReport users={users} />
 
       {persons.length === 0 && (
-        <div className="glass-card rounded-2xl p-10 text-center">
-          <Users className="w-14 h-14 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400">لا يوجد أعضاء مطابقون للبحث</p>
+        <div className="panel p-10 text-center">
+          <Users className="w-14 h-14 text-[var(--text-dim)] mx-auto mb-3" />
+          <p className="text-[var(--text-muted)]">لا يوجد أعضاء مطابقون للبحث</p>
         </div>
       )}
 
@@ -6984,17 +7145,17 @@ function AdminAttendanceView({ users }: any) {
               key={user.id}
               initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
-              className="glass-card rounded-2xl p-5"
+              className="panel p-5"
             >
               <div className="flex flex-wrap items-center gap-3">
                 <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${
-                  hasOut ? 'bg-gradient-to-br from-amber-500 to-orange-500' : hasToday ? 'gradient-success' : 'bg-white/10'
+                  hasOut ? 'bg-[var(--warn)]' : hasToday ? 'gradient-success' : 'bg-[var(--tint-2)]'
                 }`}>
-                  <span className={`font-bold ${hasToday ? 'text-white' : 'text-gray-400'}`}>{user.name[0]}</span>
+                  <span className={`font-bold ${hasToday ? 'text-[var(--text-strong)]' : 'text-[var(--text-muted)]'}`}>{user.name[0]}</span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h4 className="font-bold text-white truncate">{user.name}</h4>
-                  <p className="text-xs text-gray-400">
+                  <h4 className="font-bold text-[var(--text-strong)] truncate">{user.name}</h4>
+                  <p className="text-xs text-[var(--text-muted)]">
                     {user.role === 'supervisor' ? 'مشرف' : 'سيلز'} • إجمالي أيام الحضور: {total}
                   </p>
                 </div>
@@ -7006,14 +7167,14 @@ function AdminAttendanceView({ users }: any) {
                   </span>
                 )}
                 <span className={`text-xs px-3 py-1.5 rounded-full font-bold whitespace-nowrap ${
-                  hasOut ? 'bg-amber-500/20 text-amber-400' : hasToday ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-500/20 text-gray-400'
+                  hasOut ? 'bg-amber-500/20 text-amber-400' : hasToday ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-500/20 text-[var(--text-muted)]'
                 }`}>
-                  {hasOut ? '🚪 انصرف' : hasToday ? '✅ حاضر' : 'لم يسجل بعد'}
+                  {hasOut ? '🚪 انصرف' : hasToday ? ' حاضر' : 'لم يسجل بعد'}
                 </span>
               </div>
 
               {(todayRecord?.flags?.length || 0) > 0 && (
-                <div className="mt-3 rounded-xl bg-red-500/10 border border-red-500/25 px-3.5 py-2.5">
+                <div className="mt-3 rounded-[var(--r-md)] bg-red-500/10 border border-red-500/25 px-3.5 py-2.5">
                   <p className="text-[11.5px] font-bold text-red-300 flex items-center gap-1.5">
                     <ShieldAlert className="w-3.5 h-3.5" /> مؤشرات اشتباه في موقع الحضور:
                   </p>
@@ -7026,26 +7187,26 @@ function AdminAttendanceView({ users }: any) {
               )}
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <div className={`rounded-xl px-4 py-3 border ${hasToday ? 'bg-emerald-500/10 border-emerald-500/25' : 'bg-white/5 border-white/10'}`}>
-                  <p className="text-xs text-gray-400 mb-1">الحضور</p>
+                <div className={`rounded-[var(--r-md)] px-4 py-3 border ${hasToday ? 'bg-emerald-500/10 border-emerald-500/25' : 'bg-[var(--tint-1)] border-[var(--border)]'}`}>
+                  <p className="text-xs text-[var(--text-muted)] mb-1">الحضور</p>
                   {todayRecord ? (
                     <>
-                      <p className="text-sm text-white font-bold">حضر الساعة {formatTime(todayRecord.checkInAt)}</p>
+                      <p className="text-sm text-[var(--text-strong)] font-bold">حضر الساعة {formatTime(todayRecord.checkInAt)}</p>
                       <div className="mt-2">{locationButton(todayRecord.latitude, todayRecord.longitude, todayRecord.accuracy)}</div>
                     </>
                   ) : (
-                    <p className="text-sm text-gray-500">لا يوجد حضور اليوم</p>
+                    <p className="text-sm text-[var(--text-dim)]">لا يوجد حضور اليوم</p>
                   )}
                 </div>
 
-                <div className={`rounded-xl px-4 py-3 border ${hasOut ? 'bg-amber-500/10 border-amber-500/25' : 'bg-white/5 border-white/10'}`}>
-                  <p className="text-xs text-gray-400 mb-1">الانصراف</p>
+                <div className={`rounded-[var(--r-md)] px-4 py-3 border ${hasOut ? 'bg-amber-500/10 border-amber-500/25' : 'bg-[var(--tint-1)] border-[var(--border)]'}`}>
+                  <p className="text-xs text-[var(--text-muted)] mb-1">الانصراف</p>
                   {todayRecord?.checkOutAt ? (
                     <>
-                      <p className="text-sm text-white font-bold">
+                      <p className="text-sm text-[var(--text-strong)] font-bold">
                         انصرف الساعة {formatTime(todayRecord.checkOutAt)}
                         {workedMinutes(todayRecord) > 0 && (
-                          <span className="text-gray-400 font-normal text-xs"> • {formatDuration(workedMinutes(todayRecord))}</span>
+                          <span className="text-[var(--text-muted)] font-normal text-xs"> • {formatDuration(workedMinutes(todayRecord))}</span>
                         )}
                       </p>
                       <div className="mt-2">
@@ -7053,16 +7214,16 @@ function AdminAttendanceView({ users }: any) {
                       </div>
                     </>
                   ) : (
-                    <p className="text-sm text-gray-500">{hasToday ? 'لم يسجل انصرافه بعد' : 'لا يوجد انصراف اليوم'}</p>
+                    <p className="text-sm text-[var(--text-dim)]">{hasToday ? 'لم يسجل انصرافه بعد' : 'لا يوجد انصراف اليوم'}</p>
                   )}
                 </div>
               </div>
 
               {records.length > 0 && (
-                <div className="mt-4 pt-4 border-t border-white/10">
+                <div className="mt-4 pt-4 border-t border-[var(--border)]">
                   <button
                     onClick={() => setExpandedId(isOpen ? null : user.id)}
-                    className="text-sm font-bold text-purple-300 flex items-center gap-2 hover:text-purple-200 transition-colors"
+                    className="text-sm font-bold text-[var(--text)] flex items-center gap-2 hover:text-[var(--text)] transition-colors"
                   >
                     <Calendar className="w-4 h-4" />
                     {isOpen ? 'إخفاء' : 'عرض'} سجل هذا الحساب ({records.length})
@@ -7077,11 +7238,11 @@ function AdminAttendanceView({ users }: any) {
                       >
                         <div className="space-y-2 mt-3">
                           {records.map((rec: Attendance) => (
-                            <div key={rec.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white/5 rounded-xl px-4 py-3">
-                              <span className="text-sm text-gray-300">{formatDayLabel(rec.date)}</span>
+                            <div key={rec.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[var(--tint-1)] rounded-[var(--r-md)] px-4 py-3">
+                              <span className="text-sm text-[var(--text)]">{formatDayLabel(rec.date)}</span>
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="text-sm font-bold text-emerald-400">حضور {formatTime(rec.checkInAt)}</span>
-                                {locationButton(rec.latitude, rec.longitude, rec.accuracy, '📍')}
+                                {locationButton(rec.latitude, rec.longitude, rec.accuracy, '')}
                                 {(rec.flags?.length || 0) > 0 && (
                                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 font-bold" title={rec.flags?.join(' • ')}>
                                     مشكوك ({rec.flags?.length})
@@ -7090,10 +7251,10 @@ function AdminAttendanceView({ users }: any) {
                                 {rec.checkOutAt ? (
                                   <>
                                     <span className="text-sm font-bold text-amber-400">انصراف {formatTime(rec.checkOutAt)}</span>
-                                    {locationButton(rec.checkOutLatitude, rec.checkOutLongitude, rec.checkOutAccuracy, '📍')}
+                                    {locationButton(rec.checkOutLatitude, rec.checkOutLongitude, rec.checkOutAccuracy, '')}
                                   </>
                                 ) : (
-                                  <span className="text-xs text-gray-500">لم يسجل انصرافاً</span>
+                                  <span className="text-xs text-[var(--text-dim)]">لم يسجل انصرافاً</span>
                                 )}
                               </div>
                             </div>
@@ -7109,7 +7270,7 @@ function AdminAttendanceView({ users }: any) {
         })}
       </div>
 
-      <p className="text-[11px] text-gray-500 text-center">
+      <p className="text-[11px] text-[var(--text-dim)] text-center">
         * كل حساب معروض بشكل منفصل، واضغط «عرض سجل هذا الحساب» لرؤية كل أيامه مع موقع الحضور والانصراف.
       </p>
     </div>
@@ -7482,28 +7643,28 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
   const last = view.lastRun;
 
   return (
-    <div className="glass-card rounded-xl p-6">
+    <div className="glass-card rounded-[var(--r-md)] p-6">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
-        <h3 className="text-lg font-bold text-white flex items-center gap-2">
+        <h3 className="text-lg font-bold text-[var(--text-strong)] flex items-center gap-2">
           <Zap className="w-5 h-5 text-amber-400" /> سحب أرقام كامبين {meta.ar}
         </h3>
         <button
           onClick={() => save({ enabled: !view.enabled }, view.enabled ? 'تم إيقاف السحب التلقائي لهذه القناة' : 'تم تشغيل السحب التلقائي لهذه القناة ✓')}
           disabled={busy === 'save'}
-          className={`px-4 py-2 rounded-xl font-bold text-xs border transition-colors ${
-            view.enabled ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300' : 'bg-white/5 border-white/10 text-gray-400'
+          className={`px-4 py-2 rounded-[var(--r-md)] font-bold text-xs border transition-colors ${
+            view.enabled ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
           }`}
         >
           {view.enabled ? '● مُشغّل — اضغط للإيقاف' : 'متوقف — اضغط للتشغيل'}
         </button>
       </div>
-      <p className="text-xs text-gray-400 leading-relaxed mb-2">
+      <p className="text-xs text-[var(--text-muted)] leading-relaxed mb-2">
         يقرأ النظام الأرقام من مصدر هذه القناة من نفسه كل بضع دقائق، ينظّفها ويحذف المكرر ويوزّعها على السيلز — بلا أي ضغطة زر.
       </p>
-      <p className="text-[11px] text-gray-500 leading-relaxed mb-4">{meta.hint}</p>
+      <p className="text-[11px] text-[var(--text-dim)] leading-relaxed mb-4">{meta.hint}</p>
 
       {remote === false && (
-        <p className="text-[11px] text-amber-300/90 leading-relaxed mb-4 bg-amber-500/10 border border-amber-400/20 rounded-xl px-3 py-2">
+        <p className="text-[11px] text-amber-300/90 leading-relaxed mb-4 bg-amber-500/10 border border-amber-400/20 rounded-[var(--r-md)] px-3 py-2">
           على هذه الاستضافة لا توجد قاعدة بيانات مركزية: الإعدادات والأرقام تُحفظ في متصفح هذا الجهاز، والسحب التلقائي يعمل ما دام
           الموقع مفتوحاً. على سيرفر الشركة يعمل السحب في الخلفية وتظهر الأرقام على كل الأجهزة.
         </p>
@@ -7517,8 +7678,8 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
           <button
             key={option.id}
             onClick={() => save({ type: option.id }, '')}
-            className={`flex-1 py-2.5 rounded-xl font-bold text-xs border transition-colors ${
-              view.type === option.id ? 'bg-purple-500/20 border-purple-400/40 text-purple-200' : 'bg-white/5 border-white/10 text-gray-400'
+            className={`flex-1 py-2.5 rounded-[var(--r-md)] font-bold text-xs border transition-colors ${
+              view.type === option.id ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--text)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
             }`}
           >
             {option.label}
@@ -7529,15 +7690,15 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       {view.type === 'sheet' ? (
         <div className="space-y-3">
           <div>
-            <label className="block text-xs text-gray-300 mb-1">رابط الملف المنشور (CSV)</label>
+            <label className="block text-xs text-[var(--text)] mb-1">رابط الملف المنشور (CSV)</label>
             <input
               dir="ltr"
               value={form.sheetUrl}
               onChange={(e) => setForm({ ...form, sheetUrl: e.target.value })}
               placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white text-sm"
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] text-sm"
             />
-            <p className="text-[11px] text-gray-500 mt-1">
+            <p className="text-[11px] text-[var(--text-dim)] mt-1">
               في Google Sheets: ملف ← مشاركة ← نشر على الويب ← اختر (قيم مفصولة بفواصل .csv) ← انسخ الرابط والصقه هنا.
             </p>
           </div>
@@ -7545,7 +7706,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       ) : (
         <div className="space-y-3">
           <div>
-            <label className="block text-xs text-gray-300 mb-1">توكن المستخدم (User Access Token)</label>
+            <label className="block text-xs text-[var(--text)] mb-1">توكن المستخدم (User Access Token)</label>
             <div className="flex flex-col sm:flex-row gap-2">
               <input
                 dir="ltr"
@@ -7553,41 +7714,41 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
                 value={form.token}
                 onChange={(e) => setForm({ ...form, token: e.target.value })}
                 placeholder={view.hasToken ? 'توكن محفوظ ✓ — ألصق توكن جديداً لتغييره' : 'EAAG...'}
-                className="flex-1 bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white text-sm"
+                className="flex-1 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] text-sm"
               />
               <button
                 onClick={discover}
                 disabled={busy !== '' || (!form.token.trim() && !view.hasToken)}
-                className="gradient-primary text-white px-5 py-3 rounded-xl font-bold text-xs disabled:opacity-50 whitespace-nowrap"
+                className="gradient-primary text-[var(--text-strong)] px-5 py-3 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-50 whitespace-nowrap"
               >
                 {busy === 'discover' ? 'جارٍ الاستكشاف...' : 'استكشف صفحاتي'}
               </button>
             </div>
-            <p className="text-[11px] text-gray-500 mt-1">
+            <p className="text-[11px] text-[var(--text-dim)] mt-1">
               ولّد التوكن من Graph API Explorer على developers.facebook.com وامنحه هذه الصلاحيات الخمس معاً:{' '}
               <span dir="ltr">leads_retrieval + pages_manage_ads + pages_show_list + pages_read_engagement + pages_manage_metadata</span>، ثم الصقه واضغط «استكشف صفحاتي».
               <span className="block mt-1 text-amber-400/80">
                 لو ظهر خطأ <span dir="ltr">Requires pages_manage_ads permission (#200)</span> فمعناه أن التوكن ناقص هذه الصلاحية — أعد توليده وأضفها ثم أعد المحاولة.
               </span>
               <span className="block mt-1 text-emerald-400/80">
-                ⚠ توكن Graph API Explorer يعيش ساعتين فقط. لتجنّب انتهائه: بعد توليده اضغط <span dir="ltr">Open in Access Token Debugger</span> ثم <span dir="ltr">Extend Access Token</span> — فيصبح صالحاً ٦٠ يوماً.
+                 توكن Graph API Explorer يعيش ساعتين فقط. لتجنّب انتهائه: بعد توليده اضغط <span dir="ltr">Open in Access Token Debugger</span> ثم <span dir="ltr">Extend Access Token</span> — فيصبح صالحاً ٦٠ يوماً.
               </span>
             </p>
           </div>
 
           {pageOptions.length > 0 && (
             <div>
-              <label className="block text-xs text-gray-300 mb-1">صفحاتك — اضغط الصفحة لعرض نماذجها</label>
+              <label className="block text-xs text-[var(--text)] mb-1">صفحاتك — اضغط الصفحة لعرض نماذجها</label>
               <div className="space-y-1.5">
                 {pageOptions.map((page: any) => (
                   <button
                     key={page.id}
                     onClick={() => loadForms(page.id)}
                     disabled={busy !== ''}
-                    className="w-full text-right bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors disabled:opacity-60"
+                    className="w-full text-right bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-2.5 text-sm text-[var(--text-strong)] hover:bg-[var(--tint-2)] transition-colors disabled:opacity-60"
                   >
                     <span className="font-bold">{page.name}</span>
-                    <span className="block text-[10px] text-gray-500" dir="ltr">ID: {page.id}</span>
+                    <span className="block text-[10px] text-[var(--text-dim)]" dir="ltr">ID: {page.id}</span>
                   </button>
                 ))}
               </div>
@@ -7596,7 +7757,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
 
           {forms.length > 0 && (
             <div>
-              <label className="block text-xs text-gray-300 mb-1">النماذج التي تُسحب منها الأرقام (اضغط للاختيار)</label>
+              <label className="block text-xs text-[var(--text)] mb-1">النماذج التي تُسحب منها الأرقام (اضغط للاختيار)</label>
               <div className="space-y-1.5">
                 {forms.map((f: any) => {
                   const checked = !!selected[f.id];
@@ -7604,12 +7765,12 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
                     <button
                       key={f.id}
                       onClick={() => setSelected({ ...selected, [f.id]: !checked })}
-                      className={`w-full text-right rounded-xl px-4 py-2.5 text-sm border transition-colors ${
-                        checked ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-200' : 'bg-white/5 border-white/10 text-gray-300'
+                      className={`w-full text-right rounded-[var(--r-md)] px-4 py-2.5 text-sm border transition-colors ${
+                        checked ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-200' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text)]'
                       }`}
                     >
                       <span className="font-bold">{checked ? '✓ ' : ''}{f.name}</span>
-                      <span className="block text-[10px] text-gray-500">
+                      <span className="block text-[10px] text-[var(--text-dim)]">
                         {Number.isFinite(f.leadsCount) ? `${f.leadsCount} رقم مسجل حتى الآن` : 'نموذج مضاف يدوياً'}
                       </span>
                     </button>
@@ -7620,9 +7781,9 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
           )}
 
           {/* إضافة نموذج بمعرّفه: يعمل حتى لو منع فيسبوك عرض قائمة النماذج */}
-          <div className="border border-white/10 rounded-xl p-3 space-y-2">
-            <label className="block text-xs text-gray-300">أو أضف النموذج بمعرّفه يدوياً</label>
-            <p className="text-[11px] text-gray-500">
+          <div className="border border-[var(--border)] rounded-[var(--r-md)] p-3 space-y-2">
+            <label className="block text-xs text-[var(--text)]">أو أضف النموذج بمعرّفه يدوياً</label>
+            <p className="text-[11px] text-[var(--text-dim)]">
               يُستخدم لو رد فيسبوك بخطأ صلاحية عند عرض النماذج. افتح الفورم في Meta Business Suite وانسخ رقمه من الرابط (id أو asset_id).
             </p>
             <div className="flex flex-col sm:flex-row gap-2">
@@ -7631,13 +7792,13 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
                 value={manual.formId}
                 onChange={(e) => setManual({ ...manual, formId: e.target.value })}
                 placeholder="Form ID — مثال 123456789012345"
-                className="flex-1 bg-white/5 border border-purple-500/20 rounded-xl px-4 py-2.5 text-white text-sm"
+                className="flex-1 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-2.5 text-[var(--text-strong)] text-sm"
               />
               {pageOptions.length > 1 && (
                 <select
                   value={manual.pageId || pageOptions[0]?.id || ''}
                   onChange={(e) => setManual({ ...manual, pageId: e.target.value })}
-                  className="bg-white/5 border border-purple-500/20 rounded-xl px-3 py-2.5 text-white text-xs"
+                  className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-[var(--text-strong)] text-xs"
                 >
                   {pageOptions.map((p: any) => (
                     <option key={p.id} value={p.id} className="bg-slate-900">
@@ -7649,7 +7810,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
               <button
                 onClick={addManualForm}
                 disabled={busy !== ''}
-                className="gradient-primary text-white px-4 py-2.5 rounded-xl font-bold text-xs disabled:opacity-50 whitespace-nowrap"
+                className="gradient-primary text-[var(--text-strong)] px-4 py-2.5 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-50 whitespace-nowrap"
               >
                 أضف النموذج
               </button>
@@ -7660,23 +7821,23 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
 
       <div className="grid sm:grid-cols-2 gap-3 mt-4">
         <div>
-          <label className="block text-xs text-gray-300 mb-1">كل كم دقيقة يسحب؟</label>
+          <label className="block text-xs text-[var(--text)] mb-1">كل كم دقيقة يسحب؟</label>
           <input
             type="number"
             min={1}
             max={1440}
             value={form.intervalMinutes}
             onChange={(e) => setForm({ ...form, intervalMinutes: Number(e.target.value) })}
-            className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white text-sm"
+            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] text-sm"
           />
         </div>
-        <div className="rounded-xl bg-white/5 border border-white/10 p-3 text-xs">
-          <p className="text-gray-400 mb-1">آخر عملية سحب:</p>
-          {!last && <p className="text-gray-500">لم تحدث بعد</p>}
+        <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] p-3 text-xs">
+          <p className="text-[var(--text-muted)] mb-1">آخر عملية سحب:</p>
+          {!last && <p className="text-[var(--text-dim)]">لم تحدث بعد</p>}
           {last?.ok && (
             <p className="text-emerald-300">
               دخل {last.added} رقم — مكرر {last.duplicates} — غير صالح {last.invalid}
-              <span className="block text-gray-500 mt-0.5">{formatDateTime(last.at)}</span>
+              <span className="block text-[var(--text-dim)] mt-0.5">{formatDateTime(last.at)}</span>
             </p>
           )}
           {last && !last.ok && <p className="text-red-400">{last.error}</p>}
@@ -7686,21 +7847,21 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       <button
         onClick={() => save({ acceptTestLeads: config.acceptTestLeads === false }, config.acceptTestLeads === false ? 'سيقبل النظام الأرقام التجريبية ✓' : 'سيتم تجاهل الأرقام التجريبية')}
         disabled={busy !== ''}
-        className={`w-full mt-4 text-right rounded-xl px-4 py-3 text-xs border transition-colors ${
-          config.acceptTestLeads !== false ? 'bg-emerald-500/10 border-emerald-400/30 text-emerald-200' : 'bg-white/5 border-white/10 text-gray-400'
+        className={`w-full mt-4 text-right rounded-[var(--r-md)] px-4 py-3 text-xs border transition-colors ${
+          config.acceptTestLeads !== false ? 'bg-emerald-500/10 border-emerald-400/30 text-emerald-200' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
         }`}
       >
         <span className="font-bold">{config.acceptTestLeads !== false ? '☑' : '☐'} قبول الأرقام التجريبية من أداة اختبار ميتا</span>
-        <span className="block text-[11px] text-gray-500 mt-0.5">
+        <span className="block text-[11px] text-[var(--text-dim)] mt-0.5">
           أداة «Create test lead» في ميتا تُنشئ أرقاماً وهمية للتجربة. عند التفعيل يدخلها النظام برقم صالح موسوم «🧪 تجريبي» — وعند الإيقاف تُتجاهل.
         </span>
       </button>
 
       <div className="flex flex-col sm:flex-row gap-3 mt-4">
-        <button onClick={saveSettings} disabled={busy !== ''} className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold text-sm disabled:opacity-60">
+        <button onClick={saveSettings} disabled={busy !== ''} className="flex-1 gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold text-sm disabled:opacity-60">
           حفظ الإعدادات
         </button>
-        <button onClick={runNow} disabled={busy !== ''} className="flex-1 bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 py-3 rounded-xl font-bold text-sm hover:bg-cyan-500/25 transition-colors disabled:opacity-60">
+        <button onClick={runNow} disabled={busy !== ''} className="flex-1 bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--brand)] py-3 rounded-[var(--r-md)] font-bold text-sm hover:bg-[var(--brand-primary-soft)] transition-colors disabled:opacity-60">
           {busy === 'run' ? 'جارٍ السحب...' : 'جلب الأرقام الآن (تجربة)'}
         </button>
       </div>
@@ -7788,8 +7949,8 @@ function ModeIconButton() {
       whileHover={{ scale: 1.08 }}
       whileTap={{ scale: 0.92 }}
       onClick={() => changeMode(next)}
-      className="icon-btn"
-      title={next === 'light' ? 'التحويل للوضع النهاري ☀️' : 'التحويل للوضع الليلي 🌙'}
+      className="icon-btn mode-icon-btn"
+      title={next === 'light' ? 'التحويل للوضع النهاري ' : 'التحويل للوضع الليلي '}
       aria-label={next === 'light' ? 'الوضع النهاري' : 'الوضع الليلي'}
     >
       {mode === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
@@ -7811,18 +7972,18 @@ function AppearanceSettings() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-4">
         <ModeToggle />
-        <p className="text-xs text-gray-400 leading-relaxed">
+        <p className="text-xs text-[var(--text-muted)] leading-relaxed">
           الوضع الحالي:{' '}
-          <span className="font-bold text-purple-300">{mode === 'dark' ? 'ليلي 🌙' : 'نهاري ☀️'}</span>
+          <span className="font-bold text-[var(--text)]">{mode === 'dark' ? 'ليلي ' : 'نهاري '}</span>
           {' '}— لكل موظف أن يختار ما يريح عينه، والاختيار يُحفظ على جهازه وحده.
         </p>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
         {swatches.map((swatch) => (
-          <div key={swatch.label} className="rounded-xl border border-white/10 bg-white/5 p-3">
-            <span className="block h-10 rounded-lg mb-2 border border-white/10" style={{ background: swatch.value }} />
-            <span className="text-[11px] text-gray-400">{swatch.label}</span>
+          <div key={swatch.label} className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3">
+            <span className="block h-10 rounded-[var(--r-sm)] mb-2 border border-[var(--border)]" style={{ background: swatch.value }} />
+            <span className="text-[11px] text-[var(--text-muted)]">{swatch.label}</span>
           </div>
         ))}
       </div>
@@ -7854,49 +8015,49 @@ function AdminSettingsView(_props: any) {
   
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-bold gradient-text">الإعدادات</h2>
+      <div className="page-intro"><div><h2>الإعدادات</h2></div></div>
 
       {/* سحب الأرقام من كامبينات فيسبوك وإنستجرام انتقل إلى «فريق العمل»:
           تبويبان مستقلان لكل قناة (توكنها ونماذجها ومؤشرها) بجوار حسابات الفريق. */}
-      <div className="glass-card rounded-2xl p-5">
-        <h3 className="text-sm font-bold text-white mb-1 flex items-center gap-2">
+      <div className="panel p-5">
+        <h3 className="text-sm font-bold text-[var(--text-strong)] mb-1 flex items-center gap-2">
           <Zap className="w-4 h-4 text-amber-400" /> سحب أرقام الكامبينات
         </h3>
-        <p className="text-xs text-gray-400 leading-relaxed">
+        <p className="text-xs text-[var(--text-muted)] leading-relaxed">
           إعداد كامبينات فيسبوك وإنستجرام انتقل إلى تبويب «فريق العمل» ← تبويب «فيسبوك» أو «إنستجرام».
           من هناك تضع التوكن، تختار النماذج، وتشغّل السحب التلقائي لكل قناة على حدة.
         </p>
       </div>
 
       {/* المظهر: الوضع الليلي / النهاري */}
-      <div className="glass-card rounded-2xl p-6">
-        <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
-          <Moon className="w-5 h-5 text-purple-400" /> مظهر الموقع
+      <div className="panel p-6">
+        <h3 className="text-lg font-bold text-[var(--text-strong)] mb-1 flex items-center gap-2">
+          <Moon className="w-5 h-5 text-[var(--text-muted)]" /> مظهر الموقع
         </h3>
-        <p className="text-xs text-gray-400 mb-4">
+        <p className="text-xs text-[var(--text-muted)] mb-4">
           اختر الوضع الذي يريحك: ليلي هادئ للإضاءة المنخفضة، أو نهاري مريح للضوء القوي. التغيير فوري ويُحفظ على هذا الجهاز.
         </p>
         <AppearanceSettings />
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="glass-card rounded-xl p-6">
-          <h3 className="text-lg font-bold text-white mb-2">النسخ الاحتياطي</h3>
-          <p className="text-xs text-gray-400 mb-4">نزّل نسخة من كل البيانات (عملاء، عقارات، حسابات، حضور).</p>
-          <button onClick={handleExportData} className="w-full gradient-primary text-white py-3 rounded-xl font-bold">
+        <div className="glass-card rounded-[var(--r-md)] p-6">
+          <h3 className="text-lg font-bold text-[var(--text-strong)] mb-2">النسخ الاحتياطي</h3>
+          <p className="text-xs text-[var(--text-muted)] mb-4">نزّل نسخة من كل البيانات (عملاء، عقارات، حسابات، حضور).</p>
+          <button onClick={handleExportData} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">
             تصدير البيانات
           </button>
         </div>
 
-        <div className="glass-card rounded-xl p-6">
-          <h3 className="text-lg font-bold text-white mb-2">البيانات المشتركة</h3>
-          <p className="text-xs text-gray-400 leading-relaxed">
-            كل البيانات تُحفظ في ملف <span className="text-purple-300 font-bold" dir="ltr">data/db.json</span> على جهاز
+        <div className="glass-card rounded-[var(--r-md)] p-6">
+          <h3 className="text-lg font-bold text-[var(--text-strong)] mb-2">البيانات المشتركة</h3>
+          <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+            كل البيانات تُحفظ في ملف <span className="text-[var(--text)] font-bold" dir="ltr">data/db.json</span> على جهاز
             السيرفر، وتتزامن تلقائياً بين كل الأجهزة المتصلة بنفس الشبكة كل ثانيتين — بلا إنترنت ولا اشتراك.
           </p>
-          <p className="text-[11px] text-gray-500 mt-3">
+          <p className="text-[11px] text-[var(--text-dim)] mt-3">
             * تأكد أن جهاز السيرفر يعمل وأن شارة «مشترك» في الأعلى خضراء. لمتابعة حالة الاتصال من أي جهاز افتح
-            <span className="text-cyan-300" dir="ltr"> /api/store (only if Redis is connected)</span>.
+            <span className="text-[var(--brand)]" dir="ltr"> /api/store (only if Redis is connected)</span>.
           </p>
         </div>
       </div>
@@ -7907,8 +8068,8 @@ function AdminSettingsView(_props: any) {
 // Status Badge
 function StatusBadge({ status }: { status: Client['status'] }) {
   const config = {
-    campaign: { label: 'كامبين', className: 'bg-purple-500/20 text-purple-400' },
-    facebook: { label: 'فيسبوك', className: 'bg-blue-500/20 text-blue-400' },
+    campaign: { label: 'كامبين', className: 'bg-[var(--brand-primary-softer)] text-[var(--text-muted)]' },
+    facebook: { label: 'فيسبوك', className: 'bg-[var(--brand-primary-softer)] text-[var(--brand)]' },
     external: { label: 'خارجي', className: 'bg-emerald-500/20 text-emerald-400' },
   };
   
@@ -7956,40 +8117,40 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
   
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-6">
-          <h2 className="text-xl font-bold gradient-text">إضافة عميل جديد</h2>
+          <div className="page-intro"><div><h2>إضافة عميل جديد</h2></div></div>
           <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-300" />
+            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+            <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           {isAdmin && (
             <select value={form.ownerId} onChange={(e) => setForm({ ...form, ownerId: e.target.value })}
-              className="w-full bg-white/5 border border-cyan-500/30 rounded-xl px-4 py-3 text-white" required>
+              className="w-full bg-[var(--tint-1)] border border-[var(--brand-primary-soft)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required>
               <option value="" className="bg-gray-900">👤 السيلز المسؤول عن العميل</option>
               {reps.map((u: User) => (
                 <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
               ))}
             </select>
           )}
-          <input type="text" placeholder="الاسم *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
-          <input type="tel" placeholder="رقم الهاتف الرئيسي *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
+          <input type="text" placeholder="الاسم *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
+          <input type="tel" placeholder="رقم الهاتف الرئيسي *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
           
           <div>
-            <label className="block text-sm text-gray-300 mb-2">أرقام إضافية</label>
+            <label className="block text-sm text-[var(--text)] mb-2">أرقام إضافية</label>
             <div className="flex gap-2">
-              <input type="tel" placeholder="رقم إضافي" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} className="flex-1 bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" />
-              <button type="button" onClick={addPhone} className="gradient-primary text-white px-4 py-3 rounded-xl font-bold">
+              <input type="tel" placeholder="رقم إضافي" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} className="flex-1 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" />
+              <button type="button" onClick={addPhone} className="gradient-primary text-[var(--text-strong)] px-4 py-3 rounded-[var(--r-md)] font-bold">
                 <Plus className="w-5 h-5" />
               </button>
             </div>
             {form.phones.length > 0 && (
               <div className="mt-2 space-y-2">
                 {form.phones.map((phone, index) => (
-                  <div key={index} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
-                    <span className="text-white text-sm" dir="ltr">{phone}</span>
+                  <div key={index} className="flex items-center justify-between bg-[var(--tint-1)] rounded-[var(--r-sm)] px-3 py-2">
+                    <span className="text-[var(--text-strong)] text-sm" dir="ltr">{phone}</span>
                     <button type="button" onClick={() => removePhone(phone)} className="p-1 hover:bg-red-500/20 rounded">
                       <X className="w-4 h-4 text-red-400" />
                     </button>
@@ -7999,19 +8160,19 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
             )}
           </div>
           
-          <input type="text" placeholder="العقار" value={form.property} onChange={(e) => setForm({ ...form, property: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
-          <input type="text" placeholder="الميزانية (مثال: 2 مليون أو 2,000,000)" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
+          <input type="text" placeholder="العقار" value={form.property} onChange={(e) => setForm({ ...form, property: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
+          <input type="text" placeholder="الميزانية (مثال: 2 مليون أو 2,000,000)" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
           {form.budget && parsePrice(form.budget) > 0 && (
-            <p className="text-xs text-purple-300 -mt-2">= {formatPrice(form.budget)} ج.م</p>
+            <p className="text-xs text-[var(--text)] -mt-2">= {formatPrice(form.budget)} ج.م</p>
           )}
-          <input type="text" placeholder="القسط الشهري" value={form.monthlyInstallment} onChange={(e) => setForm({ ...form, monthlyInstallment: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
-          <input type="text" placeholder="مدة الاستلام" value={form.deliveryPeriod} onChange={(e) => setForm({ ...form, deliveryPeriod: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
-          <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white">
+          <input type="text" placeholder="القسط الشهري" value={form.monthlyInstallment} onChange={(e) => setForm({ ...form, monthlyInstallment: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
+          <input type="text" placeholder="مدة الاستلام" value={form.deliveryPeriod} onChange={(e) => setForm({ ...form, deliveryPeriod: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
+          <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]">
             <option value="campaign" className="bg-gray-900">كامبين</option>
             <option value="facebook" className="bg-gray-900">فيسبوك</option>
             <option value="external" className="bg-gray-900">خارجي</option>
           </select>
-          <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white">
+          <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]">
             <option value="new" className="bg-gray-900">جديد</option>
             <option value="contacted" className="bg-gray-900">تم التواصل</option>
             <option value="meeting" className="bg-gray-900">موعد معاينة</option>
@@ -8019,8 +8180,8 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
             <option value="closed" className="bg-gray-900">تم البيع</option>
             <option value="lost" className="bg-gray-900">ضائع</option>
           </select>
-          <textarea placeholder="ملاحظات" value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white resize-none h-24" />
-          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إضافة</button>
+          <textarea placeholder="ملاحظات" value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-24" />
+          <button type="submit" className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إضافة</button>
         </form>
       </motion.div>
     </motion.div>
@@ -8044,12 +8205,12 @@ function AddReminderModal({ clients, currentUser, onClose, onSuccess }: any) {
   
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-6">
-          <h2 className="text-xl font-bold gradient-text">إضافة تذكير</h2>
+          <div className="page-intro"><div><h2>إضافة تذكير</h2></div></div>
           <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-300" />
+            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+            <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -8062,20 +8223,20 @@ function AddReminderModal({ clients, currentUser, onClose, onSuccess }: any) {
                 ? { ...form, clientId: picked.id, clientName: picked.name, clientPhone: picked.phone }
                 : { ...form, clientId: '', clientName: '', clientPhone: '' });
             }}
-            className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white"
+            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]"
           >
-            <option value="" className="bg-gray-900">📋 اختر العميل من قائمة عملائك (اختياري)</option>
+            <option value="" className="bg-gray-900"> اختر العميل من قائمة عملائك (اختياري)</option>
             {clients.map((c: Client) => (
               <option key={c.id} value={c.id} className="bg-gray-900">
                 {c.name} — {c.phone}
               </option>
             ))}
           </select>
-          <input type="text" placeholder="اسم العميل *" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value, clientId: '' })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
-          <input type="tel" placeholder="رقم الهاتف *" value={form.clientPhone} onChange={(e) => setForm({ ...form, clientPhone: e.target.value, clientId: '' })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
-          <input type="datetime-local" value={form.dateTime} onChange={(e) => setForm({ ...form, dateTime: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
-          <textarea placeholder="ملاحظة" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white resize-none h-20" />
-          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إضافة</button>
+          <input type="text" placeholder="اسم العميل *" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value, clientId: '' })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
+          <input type="tel" placeholder="رقم الهاتف *" value={form.clientPhone} onChange={(e) => setForm({ ...form, clientPhone: e.target.value, clientId: '' })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
+          <input type="datetime-local" value={form.dateTime} onChange={(e) => setForm({ ...form, dateTime: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
+          <textarea placeholder="ملاحظة" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-20" />
+          <button type="submit" className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إضافة</button>
         </form>
       </motion.div>
     </motion.div>
@@ -8083,7 +8244,7 @@ function AddReminderModal({ clients, currentUser, onClose, onSuccess }: any) {
 }
 
 function AddPropertyModal({ clients, currentUser, onClose, onSuccess }: any) {
-  const [form, setForm] = useState({ name: '', type: '', area: '', price: '', priceNumeric: 0, location: '', description: '', images: [] as string[], latitude: 0, longitude: 0, clientPhone: '', clientPhone2: '', clientName: '', project: '', compound: '', floor: '', rooms: '', bathrooms: '', finishing: 'fully-finished', delivery: 'immediate' });
+  const [form, setForm] = useState({ name: '', type: '', area: '', price: '', priceNumeric: 0, location: '', description: '', images: [] as string[], latitude: 0, longitude: 0, clientPhone: '', clientPhone2: '', clientName: '', project: '', compound: '', floor: '', rooms: '', bathrooms: '', finishing: 'fully-finished', delivery: 'immediate', scope: 'team' as 'team' | 'private' });
   const [imgBusy, setImgBusy] = useState(false);
   const [geoMsg, setGeoMsg] = useState('');
   
@@ -8106,38 +8267,58 @@ function AddPropertyModal({ clients, currentUser, onClose, onSuccess }: any) {
   
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }}        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }}        className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-6">
-          <h2 className="text-xl font-bold gradient-text">إضافة عقار</h2>
+          <div className="page-intro"><div><h2>إضافة عقار</h2></div></div>
           <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-300" />
+            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+            <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input type="text" placeholder="اسم العقار *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
-          <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required>
+          <input type="text" placeholder="اسم العقار *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
+
+          {/* بند ٣: نطاق العقار — لكل الفريق ولا خاص بيك */}
+          <div>
+            <label className="block text-xs font-bold text-[var(--text)] mb-1.5">مين يشوف العقار؟</label>
+            <div className="seg-bar">
+              <button type="button" className={`seg-item${form.scope === 'team' ? ' on' : ''}`}
+                onClick={() => setForm({ ...form, scope: 'team' })}>
+                <Globe className="w-4 h-4" /> عقار الفريق
+              </button>
+              <button type="button" className={`seg-item${form.scope === 'private' ? ' on' : ''}`}
+                onClick={() => setForm({ ...form, scope: 'private' })}>
+                <Shield className="w-4 h-4" /> خاص بيك
+              </button>
+            </div>
+            <p className="text-[11px] text-[var(--text-dim)] mt-1.5">
+              {form.scope === 'private'
+                ? 'يظهر لك وحدك، والإدارة تشوفه للمتابعة — مش بيظهر لباقي المناديب.'
+                : 'يظهر لكل مناديب الفريق في تبويب عقارات الفريق.'}
+            </p>
+          </div>
+          <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required>
             <option value="" className="bg-gray-900">اختر النوع</option>
             <option value="شقة" className="bg-gray-900">شقة</option>
             <option value="فيلا" className="bg-gray-900">فيلا</option>
             <option value="أرض" className="bg-gray-900">أرض</option>
           </select>
-          <input type="text" placeholder="المساحة" value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
-          <input type="text" placeholder="السعر (مثال: مليون أو 1.5 مليون أو 1,500,000)" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
+          <input type="text" placeholder="المساحة" value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
+          <input type="text" placeholder="السعر (مثال: مليون أو 1.5 مليون أو 1,500,000)" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
           {form.price && (
-            <p className="text-xs text-purple-300 -mt-2">
+            <p className="text-xs text-[var(--text)] -mt-2">
               {parsePrice(form.price) > 0
                 ? `= ${formatPrice(form.price)} ج.م`
                 : 'اكتب رقماً (1,500,000) أو كلمة (مليون / نص مليون)'}
             </p>
           )}
-          <input type="text" placeholder="الموقع" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
-          <textarea placeholder="ملاحظات العقار (اختياري) — مثال: الدور الثالث، المصعد شغال، المالك عايز يبيع بسرعة، القبضة متبقية…" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white resize-y min-h-20" />
+          <input type="text" placeholder="الموقع" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
+          <textarea placeholder="ملاحظات العقار (اختياري) — مثال: الدور الثالث، المصعد شغال، المالك عايز يبيع بسرعة، القبضة متبقية…" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-y min-h-20" />
           {/* صور الوحدة — تُضغط داخل المتصفح وتُحفظ مع العقار نفسه */}
-          <div className="bg-white/5 border border-purple-500/20 rounded-xl p-3">
+          <div className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] p-3">
             <div className="flex items-center justify-between gap-2 mb-2">
-              <p className="text-sm text-gray-300">🖼 صور الوحدة (اختياري — حتى ٦ صور)</p>
-              <label className={`text-xs px-3 py-1.5 rounded-lg font-bold whitespace-nowrap ${form.images.length >= 6 ? 'bg-white/5 text-gray-500' : 'gradient-primary text-white cursor-pointer'}`}>
+              <p className="text-sm text-[var(--text)]"> صور الوحدة (اختياري — حتى ٦ صور)</p>
+              <label className={`text-xs px-3 py-1.5 rounded-[var(--r-sm)] font-bold whitespace-nowrap ${form.images.length >= 6 ? 'bg-[var(--tint-1)] text-[var(--text-dim)]' : 'gradient-primary text-[var(--text-strong)] cursor-pointer'}`}>
                 {imgBusy ? 'جارٍ الضغط…' : '+ أضف صور'}
                 <input type="file" accept="image/*" multiple className="hidden" disabled={imgBusy || form.images.length >= 6}
                   onChange={async (e) => {
@@ -8158,15 +8339,15 @@ function AddPropertyModal({ clients, currentUser, onClose, onSuccess }: any) {
               </label>
             </div>
             {form.images.length === 0 ? (
-              <p className="text-[11px] text-gray-500">اختر صور الشقة/الفيلا من هاتفك أو جهازك — تُضغط تلقائياً وتُحفظ داخل بيانات الشركة.</p>
+              <p className="text-[11px] text-[var(--text-dim)]">اختر صور الشقة/الفيلا من هاتفك أو جهازك — تُضغط تلقائياً وتُحفظ داخل بيانات الشركة.</p>
             ) : (
               <div className="grid grid-cols-3 gap-2">
                 {form.images.map((src, i) => (
                   <div key={i} className="relative">
-                    <img src={src} alt={`صورة ${i + 1}`} className="w-full h-20 object-cover rounded-lg" />
+                    <img src={src} alt={`صورة ${i + 1}`} className="w-full h-20 object-cover rounded-[var(--r-sm)]" />
                     <button type="button" onClick={() => setForm((prev) => ({ ...prev, images: prev.images.filter((_, idx) => idx !== i) }))}
                       className="absolute top-1 left-1 bg-black/70 hover:bg-red-500/80 rounded-full p-1" title="حذف الصورة">
-                      <X className="w-3 h-3 text-white" />
+                      <X className="w-3 h-3 text-[var(--text-strong)]" />
                     </button>
                   </div>
                 ))}
@@ -8175,9 +8356,9 @@ function AddPropertyModal({ clients, currentUser, onClose, onSuccess }: any) {
           </div>
 
           {/* موقع الوحدة على الخريطة */}
-          <div className="bg-white/5 border border-purple-500/20 rounded-xl p-3">
+          <div className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] p-3">
             <div className="flex items-center justify-between gap-2 mb-1">
-              <p className="text-sm text-gray-300">🗺 موقع الوحدة على الخريطة (اختياري)</p>
+              <p className="text-sm text-[var(--text)]"> موقع الوحدة على الخريطة (اختياري)</p>
               <button type="button"
                 onClick={() => {
                   setGeoMsg('');
@@ -8185,27 +8366,27 @@ function AddPropertyModal({ clients, currentUser, onClose, onSuccess }: any) {
                   navigator.geolocation.getCurrentPosition(
                     (pos) => {
                       setForm((prev) => ({ ...prev, latitude: Number(pos.coords.latitude.toFixed(6)), longitude: Number(pos.coords.longitude.toFixed(6)) }));
-                      setGeoMsg('✅ تم التقاط الموقع');
+                      setGeoMsg(' تم التقاط الموقع');
                     },
-                    () => setGeoMsg('⚠️ لم نتمكن من قراءة الموقع — اسمح بالوصول للموقع من المتصفح'),
+                    () => setGeoMsg(' لم نتمكن من قراءة الموقع — اسمح بالوصول للموقع من المتصفح'),
                     { enableHighAccuracy: true, timeout: 15000 }
                   );
                 }}
-                className="text-xs bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 text-purple-200 px-3 py-1.5 rounded-lg font-bold whitespace-nowrap">
-                📍 التقط موقع الوحدة
+                className="text-xs bg-[var(--brand-primary-softer)] hover:bg-[var(--brand-primary-soft)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-3 py-1.5 rounded-[var(--r-sm)] font-bold whitespace-nowrap">
+                 التقط موقع الوحدة
               </button>
             </div>
             {form.latitude && form.longitude ? (
               <p className="text-[11px] text-emerald-300" dir="ltr">{form.latitude}, {form.longitude}</p>
             ) : (
-              <p className="text-[11px] text-gray-500">قف في موقع الوحدة واضغط الزر لتُسجَّل الإحداثيات ويظهر العقار على الخريطة لكل الفريق.</p>
+              <p className="text-[11px] text-[var(--text-dim)]">قف في موقع الوحدة واضغط الزر لتُسجَّل الإحداثيات ويظهر العقار على الخريطة لكل الفريق.</p>
             )}
             {geoMsg && <p className="text-[11px] text-amber-300 mt-1">{geoMsg}</p>}
           </div>
-          <input type="tel" placeholder="رقم العميل (اختياري)" value={form.clientPhone} onChange={(e) => setForm({ ...form, clientPhone: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" />
-          <input type="tel" placeholder="رقم تاني (اختياري) — رقم المالك أو رقم إضافي للعميل" value={form.clientPhone2} onChange={(e) => setForm({ ...form, clientPhone2: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" />
-          <input type="text" placeholder="اسم العميل" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
-          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إضافة</button>
+          <input type="tel" placeholder="رقم العميل (اختياري)" value={form.clientPhone} onChange={(e) => setForm({ ...form, clientPhone: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" />
+          <input type="tel" placeholder="رقم تاني (اختياري) — رقم المالك أو رقم إضافي للعميل" value={form.clientPhone2} onChange={(e) => setForm({ ...form, clientPhone2: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" />
+          <input type="text" placeholder="اسم العميل" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
+          <button type="submit" className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إضافة</button>
         </form>
       </motion.div>
     </motion.div>
@@ -8237,12 +8418,12 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
   
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-6">
-          <h2 className="text-xl font-bold gradient-text">إضافة فيدباك</h2>
+          <div className="page-intro"><div><h2>إضافة فيدباك</h2></div></div>
           <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-300" />
+            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+            <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -8255,19 +8436,19 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
                 ? { ...form, clientId: picked.id, clientName: picked.name, clientPhone: picked.phone }
                 : { ...form, clientId: '', clientName: '', clientPhone: '' });
             }}
-            className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white"
+            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]"
           >
-            <option value="" className="bg-gray-900">📋 اختر العميل من قائمة عملائك (اختياري)</option>
+            <option value="" className="bg-gray-900"> اختر العميل من قائمة عملائك (اختياري)</option>
             {clients.map((c: Client) => (
               <option key={c.id} value={c.id} className="bg-gray-900">
                 {c.name} — {c.phone}
               </option>
             ))}
           </select>
-          <input type="tel" placeholder="رقم العميل *" value={form.clientPhone} onChange={(e) => setForm({ ...form, clientPhone: e.target.value, clientId: '' })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
-          <input type="text" placeholder="اسم العميل *" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value, clientId: '' })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
-          <input type="datetime-local" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
-          <select value={form.callStatus} onChange={(e) => setForm({ ...form, callStatus: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white">
+          <input type="tel" placeholder="رقم العميل *" value={form.clientPhone} onChange={(e) => setForm({ ...form, clientPhone: e.target.value, clientId: '' })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
+          <input type="text" placeholder="اسم العميل *" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value, clientId: '' })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
+          <input type="datetime-local" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
+          <select value={form.callStatus} onChange={(e) => setForm({ ...form, callStatus: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]">
             <option value="called" className="bg-gray-900">تم الاتصال</option>
             <option value="no-answer" className="bg-gray-900">لا رد</option>
             <option value="busy" className="bg-gray-900">مشغول</option>
@@ -8275,7 +8456,7 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
           </select>
           {/* حالة الفيدباك — إلزامية مع الكومنت (نفس شرائط شريط الفيدباك) */}
           <div>
-            <label className="block text-xs font-bold text-gray-300 mb-1.5">حالة الفيدباك *</label>
+            <label className="block text-xs font-bold text-[var(--text)] mb-1.5">حالة الفيدباك *</label>
             <StatusMenu
               value={form.status}
               label="اختر حالة الفيدباك"
@@ -8291,8 +8472,8 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
               }
             />
           </div>
-          <textarea placeholder="الفيدباك * (لا يُحفظ بلا كومنت)" value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white resize-none h-24" required />
-          <button type="submit" disabled={!form.status || !form.feedback.trim()} className="w-full gradient-primary text-white py-3 rounded-xl font-bold disabled:opacity-50">إضافة</button>
+          <textarea placeholder="الفيدباك * (لا يُحفظ بلا كومنت)" value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-24" required />
+          <button type="submit" disabled={!form.status || !form.feedback.trim()} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-50">إضافة</button>
         </form>
       </motion.div>
     </motion.div>
@@ -8300,8 +8481,11 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
 }
 
 // Edit User Modal - تعديل بيانات حساب (سيلز / مشرف)
+// ملاحظة أمنية: **لا يوجد أي حقل لكلمة المرور هنا ولا في أي شاشة**،
+// ولا يرسل المتصفح أي كلمة مرور لحساب موجود. تغيير كلمات المرور يتم على السيرفر فقط
+// (node scripts/set-password.mjs) فلا يمكن لأي أحد — ولا حتى عبر Inspect — أن يغيّر
+// كلمة مرور حساب ويسيطر عليه.
 function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
-  // كلمة المرور لا تُعرض أبداً بعد تشفيرها — تُستبدل بحقل «تعيين كلمة مرور جديدة»
   const [form, setForm] = useState({
     name: user.name,
     username: user.username,
@@ -8310,8 +8494,6 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
     team: user.team || '',
     isActive: user.isActive,
   });
-  const [newPassword, setNewPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
 
@@ -8329,10 +8511,6 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
       setError('يرجى تعبئة الاسم واسم المستخدم');
       return;
     }
-    if (newPassword && newPassword.length < 6) {
-      setError('كلمة المرور الجديدة ٦ أحرف على الأقل');
-      return;
-    }
 
     const allUsers: User[] = JSON.parse(localStorage.getItem('crm_users') || '[]');
     const usernameTaken = allUsers.some(
@@ -8344,7 +8522,7 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
       return;
     }
 
-    const hashed = newPassword ? await hashPassword(newPassword) : undefined;
+    // لا تُرسل أي كلمة مرور لحساب موجود: البيانات فقط (الاسم/الرقم/الرتبة/الفريق)
     const updated = allUsers.map((u: User) =>
       u.id === user.id
         ? {
@@ -8352,7 +8530,6 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
             ...form,
             name: form.name.trim(),
             username: form.username.trim(),
-            ...(hashed ? { password: hashed } : {}),
           }
         : u
     );
@@ -8365,78 +8542,69 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={onClose}>
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div
         initial={{ scale: 0.9, y: 20 }}
         animate={{ scale: 1, y: 0 }}
         exit={{ scale: 0.9, opacity: 0 }}
         transition={{ type: 'spring', stiffness: 220, damping: 20 }}
-        className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-purple-400/30"
+        className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto border-[var(--brand-primary-soft)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center">
-              <Edit3 className="w-6 h-6 text-white" />
+              <Edit3 className="w-6 h-6 text-[var(--text-strong)]" />
             </div>
             <div>
-              <h2 className="text-xl font-bold gradient-text">تعديل الحساب</h2>
-              <p className="text-sm text-gray-400">{user.name} • @{user.username}</p>
+              <div className="page-intro"><div><h2>تعديل الحساب</h2></div></div>
+              <p className="text-sm text-[var(--text-muted)]">{user.name} • @{user.username}</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
-            <X className="w-5 h-5 text-gray-400" />
+          <button onClick={onClose} className="p-2 hover:bg-[var(--tint-2)] rounded-[var(--r-sm)] transition-colors">
+            <X className="w-5 h-5 text-[var(--text-muted)]" />
           </button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm text-gray-300 mb-1">الاسم الكامل *</label>
+            <label className="block text-sm text-[var(--text)] mb-1">الاسم الكامل *</label>
             <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
           </div>
 
           <div>
-            <label className="block text-sm text-gray-300 mb-1">اسم المستخدم *</label>
+            <label className="block text-sm text-[var(--text)] mb-1">اسم المستخدم *</label>
             <input type="text" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
+          </div>
+
+          <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] px-4 py-3">
+            <p className="text-[12px] text-[var(--text)] leading-6">
+               <span className="font-bold">كلمات المرور لا تُعدَّل من المتصفح إطلاقاً.</span>
+              <br />
+              لتغيير كلمة مرور أي حساب شغّل على جهاز المكتب:
+              <code className="block mt-1 text-[11px] text-[var(--text)]" dir="ltr">node scripts/set-password.mjs --user {user.username}</code>
+              كلمات المرور محفوظة مشفّرة (SHA-256 + ملح) ولا يمكن عرضها.
+            </p>
           </div>
 
           <div>
-            <label className="block text-sm text-gray-300 mb-1">تعيين كلمة مرور جديدة</label>
-            <div className="relative">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="اتركها فارغة للإبقاء على كلمة المرور الحالية"
-                className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 pl-12 text-white"
-                dir="ltr"
-              />
-              <button type="button" onClick={() => setShowPassword(!showPassword)}
-                className="absolute left-3 top-1/2 -translate-y-1/2 p-1 hover:bg-white/10 rounded-lg">
-                {showPassword ? <EyeOff className="w-4 h-4 text-gray-400" /> : <Eye className="w-4 h-4 text-gray-400" />}
-              </button>
-            </div>
-            <p className="text-[11px] text-gray-500 mt-1">🔒 كلمات المرور محفوظة مشفّرة (SHA-256) ولا يمكن عرضها بعد الآن</p>
-          </div>
-
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">رقم الهاتف</label>
+            <label className="block text-sm text-[var(--text)] mb-1">رقم الهاتف</label>
             <input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" placeholder="لا يوجد رقم" />
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" placeholder="لا يوجد رقم" />
           </div>
 
           <div>
-            <label className="block text-sm text-gray-300 mb-1">الرتبة</label>
+            <label className="block text-sm text-[var(--text)] mb-1">الرتبة</label>
             <select value={form.role} disabled={roleLocked}
               onChange={(e) => setForm({ ...form, role: e.target.value as User['role'] })}
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white disabled:opacity-50 disabled:cursor-not-allowed">
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] disabled:opacity-50 disabled:cursor-not-allowed">
               <option value="sales" className="bg-gray-900">Sales Agent — سيلز</option>
               <option value="supervisor" className="bg-gray-900">Team Leader — قائد فريق</option>
               {canAssignCeo && <option value="admin" className="bg-gray-900">CEO — المدير التنفيذي</option>}
             </select>
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-[var(--text-dim)] mt-1">
               {isSelf
                 ? 'لا يمكنك تغيير رتبتك الحالية'
                 : roleLocked
@@ -8444,14 +8612,14 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
                 : 'قائد الفريق يرى ويوزّع على أعضاء فريقه فقط'}
             </p>
             <input type="text" value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })}
-              placeholder="اسم الفريق (اختياري)" className="mt-2 w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
+              placeholder="اسم الفريق (اختياري)" className="mt-2 w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
           </div>
 
           <button type="button" disabled={activeLocked} onClick={() => setForm({ ...form, isActive: !form.isActive })}
-            className={`w-full flex items-center justify-between rounded-xl px-4 py-3 border transition-colors ${
+            className={`w-full flex items-center justify-between rounded-[var(--r-md)] px-4 py-3 border transition-colors ${
               form.isActive ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-red-500/10 border-red-500/30'
             } disabled:opacity-50 disabled:cursor-not-allowed`}>
-            <span className="text-sm text-gray-300">حالة الحساب</span>
+            <span className="text-sm text-[var(--text)]">حالة الحساب</span>
             <span className={`text-sm font-bold ${form.isActive ? 'text-emerald-400' : 'text-red-400'}`}>
               {form.isActive ? 'مفعّل - يمكنه تسجيل الدخول' : 'موقوف - لا يمكنه تسجيل الدخول'}
             </span>
@@ -8460,7 +8628,7 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
           <AnimatePresence>
             {error && (
               <motion.p initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                className="text-red-400 text-sm text-center bg-red-500/10 border border-red-500/20 rounded-xl py-2 px-3 flex items-center justify-center gap-2">
+                className="text-red-400 text-sm text-center bg-red-500/10 border border-red-500/20 rounded-[var(--r-md)] py-2 px-3 flex items-center justify-center gap-2">
                 <AlertTriangle className="w-4 h-4" /> {error}
               </motion.p>
             )}
@@ -8468,11 +8636,11 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
 
           <div className="flex gap-3 pt-2">
             <motion.button type="submit" whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-              className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg glow-primary">
+              className="flex-1 gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold flex items-center justify-center gap-2 glow-primary">
               {saved ? (<><Check className="w-5 h-5" /> تم الحفظ</>) : (<><Check className="w-5 h-5" /> حفظ التعديلات</>)}
             </motion.button>
             <button type="button" onClick={onClose}
-              className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors">
+              className="flex-1 bg-[var(--tint-2)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold hover:bg-[var(--tint-3)] transition-colors">
               إلغاء
             </button>
           </div>
@@ -8498,13 +8666,13 @@ function ConfirmDeleteUserModal({ user, currentUser, onClose, onConfirm }: any) 
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={onClose}>
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div
         initial={{ scale: 0.9, y: 20 }}
         animate={{ scale: 1, y: 0 }}
         exit={{ scale: 0.9, opacity: 0 }}
         transition={{ type: 'spring', stiffness: 220, damping: 20 }}
-        className="glass-card rounded-3xl p-6 w-full max-w-md border-red-500/30 glow-primary"
+        className="panel p-6 w-full max-w-md border-red-500/30 glow-primary"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="text-center mb-6">
@@ -8516,14 +8684,14 @@ function ConfirmDeleteUserModal({ user, currentUser, onClose, onConfirm }: any) 
           >
             <AlertTriangle className="w-8 h-8 text-red-400" />
           </motion.div>
-          <h2 className="text-xl font-bold text-white mb-2">تأكيد حذف الحساب</h2>
-          <p className="text-sm text-gray-400">
+          <h2 className="text-xl font-bold text-[var(--text-strong)] mb-2">تأكيد حذف الحساب</h2>
+          <p className="text-sm text-[var(--text-muted)]">
             سيتم حذف حساب <span className="text-red-400 font-bold">{user.name}</span> (@{user.username}) نهائياً
             ولن يستطيع تسجيل الدخول بعد ذلك.
           </p>
         </div>
 
-        <div className="bg-white/5 rounded-xl p-4 mb-4 space-y-2">
+        <div className="bg-[var(--tint-1)] rounded-[var(--r-md)] p-4 mb-4 space-y-2">
           {[
             { label: 'عملاء مرتبطون', value: relatedClients },
             { label: 'أرقام موزعة', value: relatedLeads },
@@ -8531,22 +8699,22 @@ function ConfirmDeleteUserModal({ user, currentUser, onClose, onConfirm }: any) 
             { label: 'تذكيرات', value: relatedReminders },
           ].map((row) => (
             <div key={row.label} className="flex items-center justify-between text-sm">
-              <span className="text-gray-400">{row.label}</span>
-              <span className="text-white font-bold">{row.value}</span>
+              <span className="text-[var(--text-muted)]">{row.label}</span>
+              <span className="text-[var(--text-strong)] font-bold">{row.value}</span>
             </div>
           ))}
         </div>
 
         <button type="button" onClick={() => setDeleteRelatedData(!deleteRelatedData)}
-          className={`w-full flex items-center gap-3 rounded-xl px-4 py-3 mb-4 border transition-colors text-right ${
-            deleteRelatedData ? 'bg-red-500/15 border-red-500/40' : 'bg-white/5 border-white/10'
+          className={`w-full flex items-center gap-3 rounded-[var(--r-md)] px-4 py-3 mb-4 border transition-colors text-right ${
+            deleteRelatedData ? 'bg-red-500/15 border-red-500/40' : 'bg-[var(--tint-1)] border-[var(--border)]'
           }`}>
-          <span className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${
+          <span className={`w-5 h-5 rounded-[var(--r-xs)] border flex items-center justify-center shrink-0 ${
             deleteRelatedData ? 'bg-red-500 border-red-500' : 'border-gray-500'
           }`}>
-            {deleteRelatedData && <Check className="w-3.5 h-3.5 text-white" />}
+            {deleteRelatedData && <Check className="w-3.5 h-3.5 text-[var(--text-strong)]" />}
           </span>
-          <span className="text-sm text-gray-200">
+          <span className="text-sm text-[var(--text)]">
             حذف بياناته أيضاً (العملاء، الأرقام، الفيدباك، التذكيرات)
           </span>
         </button>
@@ -8554,11 +8722,11 @@ function ConfirmDeleteUserModal({ user, currentUser, onClose, onConfirm }: any) 
         <div className="flex gap-3">
           <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
             onClick={() => onConfirm(deleteRelatedData)}
-            className="flex-1 bg-gradient-to-r from-red-600 to-red-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg">
+            className="flex-1 bg-[var(--danger)] text-white py-3 rounded-[var(--r-md)] font-bold flex items-center justify-center gap-2">
             <Trash2 className="w-4 h-4" /> حذف نهائي
           </motion.button>
           <button onClick={onClose}
-            className="flex-1 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors">
+            className="flex-1 bg-[var(--tint-2)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold hover:bg-[var(--tint-3)] transition-colors">
             إلغاء
           </button>
         </div>
@@ -8617,17 +8785,17 @@ function AddUserModal({ currentUser, users = [], onClose, onSuccess }: any) {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-6">
-          <h2 className="text-xl font-bold gradient-text">إنشاء حساب جديد</h2>
+          <div className="page-intro"><div><h2>إنشاء حساب جديد</h2></div></div>
           <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-300" />
+            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+            <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs text-gray-400 mb-1.5 font-bold">الرتبة</label>
+            <label className="block text-xs text-[var(--text-muted)] mb-1.5 font-bold">الرتبة</label>
             <div className="grid grid-cols-3 gap-2">
               {([
                 { id: 'admin', label: 'CEO', sub: 'مدير تنفيذي' },
@@ -8635,28 +8803,28 @@ function AddUserModal({ currentUser, users = [], onClose, onSuccess }: any) {
                 { id: 'sales', label: 'Sales Agent', sub: 'سيلز' },
               ] as const).filter((r) => r.id !== 'admin' || canCreateCeo).map((r) => (
                 <button key={r.id} type="button" onClick={() => setForm({ ...form, role: r.id })}
-                  className={`rounded-xl px-2 py-3 border text-center transition-colors ${
-                    form.role === r.id ? 'bg-blue-500/20 border-blue-400/60' : 'bg-white/5 border-white/10 hover:bg-white/10'
+                  className={`rounded-[var(--r-md)] px-2 py-3 border text-center transition-colors ${
+                    form.role === r.id ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)]' : 'bg-[var(--tint-1)] border-[var(--border)] hover:bg-[var(--tint-2)]'
                   }`}>
-                  <span className="block text-[11px] font-bold text-white">{r.label}</span>
-                  <span className="block text-[9.5px] text-gray-400">{r.sub}</span>
+                  <span className="block text-[11px] font-bold text-[var(--text-strong)]">{r.label}</span>
+                  <span className="block text-[9.5px] text-[var(--text-muted)]">{r.sub}</span>
                 </button>
               ))}
             </div>
           </div>
-          <input type="text" placeholder="الاسم الكامل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
-          <input type="text" placeholder="اسم المستخدم *" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
-          <input type="password" placeholder="كلمة المرور * (٦ أحرف على الأقل)" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
-          <input type="tel" placeholder="رقم الهاتف" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" />
+          <input type="text" placeholder="الاسم الكامل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
+          <input type="text" placeholder="اسم المستخدم *" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
+          <input type="password" placeholder="كلمة المرور * (٦ أحرف على الأقل)" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
+          <input type="tel" placeholder="رقم الهاتف" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" />
           <div>
-            <label className="block text-xs text-gray-400 mb-1.5 font-bold">الفريق</label>
-            <input type="text" list="team-options" placeholder="اسم الفريق (اختياري)" value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" />
+            <label className="block text-xs text-[var(--text-muted)] mb-1.5 font-bold">الفريق</label>
+            <input type="text" list="team-options" placeholder="اسم الفريق (اختياري)" value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
             <datalist id="team-options">
               {teamNames.map((t) => <option key={t} value={t} />)}
             </datalist>
           </div>
-          {error && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">{error}</p>}
-          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إنشاء الحساب</button>
+          {error && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-[var(--r-md)] px-3 py-2">{error}</p>}
+          <button type="submit" className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إنشاء الحساب</button>
         </form>
       </motion.div>
     </motion.div>
@@ -8678,23 +8846,23 @@ function AddTeamModal({ users, currentUser, onClose, onSuccess }: any) {
   
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-6">
-          <h2 className="text-xl font-bold gradient-text">إضافة فريق</h2>
+          <div className="page-intro"><div><h2>إضافة فريق</h2></div></div>
           <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-300" />
+            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+            <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input type="text" placeholder="اسم الفريق *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
-          <select value={form.supervisorId} onChange={(e) => setForm({ ...form, supervisorId: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required>
+          <input type="text" placeholder="اسم الفريق *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
+          <select value={form.supervisorId} onChange={(e) => setForm({ ...form, supervisorId: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required>
             <option value="" className="bg-gray-900">اختر المشرف</option>
             {users.filter((u: User) => u.role === 'supervisor' || u.role === 'admin').map((u: User) => (
               <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
             ))}
           </select>
-          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">إضافة</button>
+          <button type="submit" className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إضافة</button>
         </form>
       </motion.div>
     </motion.div>
@@ -8824,7 +8992,7 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
 
   const summary = preview
     ? [
-        { label: 'إجمالي الصفوف', value: preview.total, className: 'text-white' },
+        { label: 'إجمالي الصفوف', value: preview.total, className: 'text-[var(--text-strong)]' },
         { label: 'أرقام جديدة', value: preview.fresh, className: 'text-emerald-400' },
         { label: 'مكررة (تُتجاهل)', value: preview.duplicates, className: 'text-amber-400' },
         { label: 'غير صالحة', value: preview.invalid, className: 'text-red-400' },
@@ -8833,24 +9001,24 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={onClose}>
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div
         initial={{ scale: 0.94, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0 }}
         transition={{ type: 'spring', stiffness: 220, damping: 22 }}
-        className="glass-card rounded-3xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto border-cyan-400/30"
+        className="panel p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-gradient-to-br from-cyan-500 to-emerald-500 rounded-full flex items-center justify-center">
-              <Upload className="w-6 h-6 text-white" />
+            <div className="w-12 h-12 bg-[var(--brand-fill)] rounded-full flex items-center justify-center">
+              <Upload className="w-6 h-6 text-[var(--text-strong)]" />
             </div>
             <div>
-              <h2 className="text-xl font-bold gradient-text">استيراد أرقام من ملف</h2>
-              <p className="text-xs text-gray-400">من فيسبوك (Leads Center) أو من إنجاز (تصدير Excel ثم CSV)</p>
+              <div className="page-intro"><div><h2>استيراد أرقام من ملف</h2></div></div>
+              <p className="text-xs text-[var(--text-muted)]">من فيسبوك (Leads Center) أو من إنجاز (تصدير Excel ثم CSV)</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
-            <X className="w-5 h-5 text-gray-400" />
+          <button onClick={onClose} className="p-2 hover:bg-[var(--tint-2)] rounded-[var(--r-sm)] transition-colors">
+            <X className="w-5 h-5 text-[var(--text-muted)]" />
           </button>
         </div>
 
@@ -8866,12 +9034,12 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
                 const file = e.dataTransfer.files?.[0];
                 if (file) void readFile(file);
               }}
-              className={`rounded-2xl border-2 border-dashed p-8 text-center transition-colors ${dragging ? 'border-cyan-400 bg-cyan-500/10' : 'border-purple-500/30 bg-white/5'}`}
+              className={`rounded-[var(--r-xl)] border-2 border-dashed p-8 text-center transition-colors ${dragging ? 'border-[var(--brand)] bg-[var(--brand-primary-softer)]' : 'border-[var(--brand-primary-soft)] bg-[var(--tint-1)]'}`}
             >
-              <Upload className="w-12 h-12 text-cyan-400 mx-auto mb-3" />
-              <p className="text-white font-bold mb-1">اسحب ملف الأرقام هنا أو اختره من جهازك</p>
-              <p className="text-xs text-gray-400 mb-4">مدعوم: CSV / TXT — يدعم الأرقام المكتوبة عربية (+20 و 010 و ٠١٠)</p>
-              <label className="inline-block cursor-pointer gradient-primary text-white px-6 py-3 rounded-xl font-bold">
+              <Upload className="w-12 h-12 text-[var(--brand)] mx-auto mb-3" />
+              <p className="text-[var(--text-strong)] font-bold mb-1">اسحب ملف الأرقام هنا أو اختره من جهازك</p>
+              <p className="text-xs text-[var(--text-muted)] mb-4">مدعوم: CSV / TXT — يدعم الأرقام المكتوبة عربية (+20 و 010 و ٠١٠)</p>
+              <label className="inline-block cursor-pointer gradient-primary text-[var(--text-strong)] px-6 py-3 rounded-[var(--r-md)] font-bold">
                 اختر ملفاً
                 <input type="file" accept=".csv,.txt,text/csv" className="hidden"
                   onChange={(e) => { const file = e.target.files?.[0]; if (file) void readFile(file); }} />
@@ -8879,32 +9047,32 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-xl bg-white/5 border border-white/10 p-4">
-                <p className="text-sm font-bold text-cyan-300 mb-1">من فيسبوك</p>
-                <p className="text-xs text-gray-400 leading-relaxed">
+              <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] p-4">
+                <p className="text-sm font-bold text-[var(--brand)] mb-1">من فيسبوك</p>
+                <p className="text-xs text-[var(--text-muted)] leading-relaxed">
                   Ads Manager ← Leads Center ← اختر الفورم ← تنزيل الملف، ثم ارفعه هنا.
                 </p>
               </div>
-              <div className="rounded-xl bg-white/5 border border-white/10 p-4">
-                <p className="text-sm font-bold text-purple-300 mb-1">من إنجاز</p>
-                <p className="text-xs text-gray-400 leading-relaxed">
+              <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] p-4">
+                <p className="text-sm font-bold text-[var(--text)] mb-1">من إنجاز</p>
+                <p className="text-xs text-[var(--text-muted)] leading-relaxed">
                   صدّر العملاء من إنجاز بصيغة Excel، ثم احفظه في إكسل كـ CSV UTF-8.
                 </p>
               </div>
             </div>
 
-            <button onClick={downloadSample} className="w-full flex items-center justify-center gap-2 bg-white/5 border border-white/10 text-gray-300 py-3 rounded-xl font-bold hover:bg-white/10 transition-colors">
+            <button onClick={downloadSample} className="w-full flex items-center justify-center gap-2 bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] py-3 rounded-[var(--r-md)] font-bold hover:bg-[var(--tint-2)] transition-colors">
               <Download className="w-4 h-4" /> نزّل ملفاً تجريبياً صغيراً (٩ أرقام بمشاكل مقصودة)
             </button>
 
-            <div className="rounded-xl bg-white/5 border border-white/10 p-4">
-              <p className="text-xs text-gray-400 mb-3">
-                أو ولّد <span className="text-cyan-300 font-bold">كامبين وهمية</span> بعدد أرقام أكبر لتجرّب التوزيع على الفريق (بها مكرر وصفوف بلا رقم مثل فيسبوك الحقيقي):
+            <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] p-4">
+              <p className="text-xs text-[var(--text-muted)] mb-3">
+                أو ولّد <span className="text-[var(--brand)] font-bold">كامبين وهمية</span> بعدد أرقام أكبر لتجرّب التوزيع على الفريق (بها مكرر وصفوف بلا رقم مثل فيسبوك الحقيقي):
               </p>
               <div className="flex flex-wrap gap-2">
                 {[50, 100, 200].map((count) => (
                   <button key={count} onClick={() => downloadFakeCampaign(count)}
-                    className="flex-1 min-w-[110px] bg-cyan-500/10 border border-cyan-500/25 text-cyan-300 py-2.5 rounded-xl font-bold text-sm hover:bg-cyan-500/20 transition-colors">
+                    className="flex-1 min-w-[110px] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--brand)] py-2.5 rounded-[var(--r-md)] font-bold text-sm hover:bg-[var(--brand-primary-soft)] transition-colors">
                     توليد {count} رقم
                   </button>
                 ))}
@@ -8914,7 +9082,7 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
             <AnimatePresence>
               {error && (
                 <motion.p initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                  className="text-amber-400 text-sm bg-amber-500/10 border border-amber-500/20 rounded-xl py-2 px-3 flex items-center gap-2">
+                  className="text-amber-400 text-sm bg-amber-500/10 border border-amber-500/20 rounded-[var(--r-md)] py-2 px-3 flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
                 </motion.p>
               )}
@@ -8926,35 +9094,35 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
         {stage === 'preview' && preview && (
           <div className="space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-sm text-gray-300">
-                <FileText className="w-4 h-4 inline ml-1 text-purple-400" />
-                الملف: <span className="text-white font-bold">{fileName}</span>
+              <p className="text-sm text-[var(--text)]">
+                <FileText className="w-4 h-4 inline ml-1 text-[var(--text-muted)]" />
+                الملف: <span className="text-[var(--text-strong)] font-bold">{fileName}</span>
               </p>
               <button onClick={() => { setPreview(null); setError(''); setStage('pick'); }}
-                className="text-xs text-cyan-300 hover:text-cyan-200 font-bold">اختيار ملف آخر</button>
+                className="text-xs text-[var(--brand)] hover:text-[var(--brand)] font-bold">اختيار ملف آخر</button>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {summary.map((item) => (
-                <div key={item.label} className="rounded-xl bg-white/5 border border-white/10 p-3 text-center">
+                <div key={item.label} className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] p-3 text-center">
                   <p className={`text-2xl font-bold ${item.className}`}>{item.value}</p>
-                  <p className="text-[11px] text-gray-400 mt-1">{item.label}</p>
+                  <p className="text-[11px] text-[var(--text-muted)] mt-1">{item.label}</p>
                 </div>
               ))}
             </div>
 
-            <p className="text-xs text-gray-400 bg-white/5 rounded-xl px-4 py-2">
+            <p className="text-xs text-[var(--text-muted)] bg-[var(--tint-1)] rounded-[var(--r-md)] px-4 py-2">
               الأعمدة التي تم التعرّف عليها تلقائياً:{' '}
               {preview.mapping.phone && <span className="text-emerald-300">الرقم: {preview.mapping.phone} </span>}
-              {preview.mapping.name && <span className="text-cyan-300">• الاسم: {preview.mapping.name} </span>}
-              {preview.mapping.source && <span className="text-purple-300">• المصدر: {preview.mapping.source} </span>}
+              {preview.mapping.name && <span className="text-[var(--brand)]">• الاسم: {preview.mapping.name} </span>}
+              {preview.mapping.source && <span className="text-[var(--text)]">• المصدر: {preview.mapping.source} </span>}
               {!preview.mapping.phone && <span className="text-amber-400">لم يتم العثور على عمود أرقام واضح</span>}
             </p>
 
-            <div className="max-h-64 overflow-y-auto rounded-xl border border-white/10">
+            <div className="max-h-64 overflow-y-auto rounded-[var(--r-md)] border border-[var(--border)]">
               <table className="w-full text-sm">
-                <thead className="bg-white/5 sticky top-0">
-                  <tr className="text-gray-400 text-xs">
+                <thead className="bg-[var(--tint-1)] sticky top-0">
+                  <tr className="text-[var(--text-muted)] text-xs">
                     <th className="py-2 px-3 text-right font-bold">الاسم</th>
                     <th className="py-2 px-3 text-right font-bold">الرقم بعد التنظيف</th>
                     <th className="py-2 px-3 text-right font-bold">المصدر</th>
@@ -8963,10 +9131,10 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
                 </thead>
                 <tbody>
                   {preview.rows.slice(0, 50).map((row, index) => (
-                    <tr key={index} className="border-t border-white/5">
-                      <td className="py-2 px-3 text-white">{row.name || <span className="text-gray-500">بدون اسم</span>}</td>
-                      <td className="py-2 px-3 text-purple-300" dir="ltr">{row.phone || row.rawPhone}</td>
-                      <td className="py-2 px-3 text-gray-400 text-xs">{row.source || '—'}</td>
+                    <tr key={index} className="border-t border-[var(--border-soft)]">
+                      <td className="py-2 px-3 text-[var(--text-strong)]">{row.name || <span className="text-[var(--text-dim)]">بدون اسم</span>}</td>
+                      <td className="py-2 px-3 text-[var(--text)]" dir="ltr">{row.phone || row.rawPhone}</td>
+                      <td className="py-2 px-3 text-[var(--text-muted)] text-xs">{row.source || '—'}</td>
                       <td className="py-2 px-3">
                         {row.invalid ? (
                           <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/20 text-red-400">رقم غير صالح</span>
@@ -8982,18 +9150,18 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
               </table>
             </div>
             {preview.rows.length > 50 && (
-              <p className="text-[11px] text-gray-500 text-center">معروض أول ٥٠ صفاً من إجمالي {preview.rows.length}</p>
+              <p className="text-[11px] text-[var(--text-dim)] text-center">معروض أول ٥٠ صفاً من إجمالي {preview.rows.length}</p>
             )}
 
-            <div className="rounded-xl bg-white/5 border border-white/10 p-4 space-y-3">
-              <p className="text-sm font-bold text-white">توزيع الأرقام الجديدة</p>
+            <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] p-4 space-y-3">
+              <p className="text-sm font-bold text-[var(--text-strong)]">توزيع الأرقام الجديدة</p>
               <div className="flex flex-col sm:flex-row gap-2">
                 <button onClick={() => setMode('even')}
-                  className={`flex-1 py-2.5 rounded-xl font-bold text-sm border transition-colors ${mode === 'even' ? 'bg-purple-500/20 border-purple-400/40 text-purple-200' : 'bg-white/5 border-white/10 text-gray-400'}`}>
+                  className={`flex-1 py-2.5 rounded-[var(--r-md)] font-bold text-sm border transition-colors ${mode === 'even' ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--text)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
                   بالمناوبة على السيلز المختارين
                 </button>
                 <button onClick={() => setMode('single')}
-                  className={`flex-1 py-2.5 rounded-xl font-bold text-sm border transition-colors ${mode === 'single' ? 'bg-purple-500/20 border-purple-400/40 text-purple-200' : 'bg-white/5 border-white/10 text-gray-400'}`}>
+                  className={`flex-1 py-2.5 rounded-[var(--r-md)] font-bold text-sm border transition-colors ${mode === 'single' ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--text)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
                   كل الأرقام لشخص واحد
                 </button>
               </div>
@@ -9004,7 +9172,7 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
                     {salesUsers.map((user: User) => (
                       <button key={user.id}
                         onClick={() => setSelectedIds((ids) => ids.includes(user.id) ? ids.filter((id) => id !== user.id) : [...ids, user.id])}
-                        className={`px-3 py-2 rounded-lg text-xs font-bold border transition-colors ${selectedIds.includes(user.id) ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300' : 'bg-white/5 border-white/10 text-gray-400'}`}>
+                        className={`px-3 py-2 rounded-[var(--r-sm)] text-xs font-bold border transition-colors ${selectedIds.includes(user.id) ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
                         {selectedIds.includes(user.id) ? '✓ ' : '+ '}{user.name}
                       </button>
                     ))}
@@ -9012,19 +9180,19 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
                   </div>
 
                   {/* عدد الأرقام لكل سيلز — يحدده المدير بنفسه */}
-                  <label className="flex items-center gap-2 text-xs font-bold text-gray-300 cursor-pointer">
+                  <label className="flex items-center gap-2 text-xs font-bold text-[var(--text)] cursor-pointer">
                     <input type="checkbox" checked={useQuota} onChange={(e) => setUseQuota(e.target.checked)}
                       className="accent-blue-500 w-4 h-4" />
                     تحديد عدد الأرقام لكل سيلز بنفسي (بدل التوزيع بالتساوي)
                   </label>
 
                   {useQuota && (
-                    <div className="rounded-xl bg-white/5 border border-white/10 p-3 space-y-2">
+                    <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] p-3 space-y-2">
                       <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <p className="text-[11px] text-gray-400">اكتب عدد الأرقام أمام كل سيلز — المتبقي لا يُوزَّع</p>
+                        <p className="text-[11px] text-[var(--text-muted)]">اكتب عدد الأرقام أمام كل سيلز — المتبقي لا يُوزَّع</p>
                         <div className="flex gap-1.5">
                           <button type="button" onClick={() => setQuotas({})}
-                            className="text-[11px] px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10">تصفير</button>
+                            className="text-[11px] px-2.5 py-1 rounded-[var(--r-sm)] bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] hover:bg-[var(--tint-2)]">تصفير</button>
                           <button type="button"
                             onClick={() => {
                               // توزيع بالتساوي على المختارين فقط، على حسب الأرقام المتاحة
@@ -9034,22 +9202,22 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
                               ids.forEach((id) => { next[id] = each; });
                               setQuotas(next);
                             }}
-                            className="text-[11px] px-2.5 py-1 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-200 hover:bg-blue-500/25">
+                            className="text-[11px] px-2.5 py-1 rounded-[var(--r-sm)] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--brand)] hover:bg-[var(--brand-primary-soft)]">
                             توزيع متساوٍ ({preview.fresh} رقم)
                           </button>
                         </div>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {salesUsers.filter((u: User) => selectedIds.includes(u.id)).map((user: User) => (
-                          <div key={user.id} className="flex items-center gap-2 bg-white/5 rounded-lg px-2.5 py-1.5">
-                            <span className="text-xs text-gray-300 flex-1 truncate">{user.name}</span>
+                          <div key={user.id} className="flex items-center gap-2 bg-[var(--tint-1)] rounded-[var(--r-sm)] px-2.5 py-1.5">
+                            <span className="text-xs text-[var(--text)] flex-1 truncate">{user.name}</span>
                             <button type="button" onClick={() => setQuota(user.id, (quotas[user.id] || 0) - 5)}
-                              className="w-6 h-6 rounded-md bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10">−</button>
+                              className="w-6 h-6 rounded-[var(--r-xs)] bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] hover:bg-[var(--tint-2)]">−</button>
                             <input type="number" min={0} value={quotas[user.id] ?? 0}
                               onChange={(e) => setQuota(user.id, Number(e.target.value))}
-                              className="w-16 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white text-center" dir="ltr" />
+                              className="w-16 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-xs)] px-2 py-1 text-xs text-[var(--text-strong)] text-center" dir="ltr" />
                             <button type="button" onClick={() => setQuota(user.id, (quotas[user.id] || 0) + 5)}
-                              className="w-6 h-6 rounded-md bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10">+</button>
+                              className="w-6 h-6 rounded-[var(--r-xs)] bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] hover:bg-[var(--tint-2)]">+</button>
                           </div>
                         ))}
                       </div>
@@ -9061,7 +9229,7 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
                 </div>
               ) : (
                 <select value={singleId} onChange={(e) => setSingleId(e.target.value)}
-                  className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white">
+                  className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]">
                   {salesUsers.map((user: User) => (
                     <option key={user.id} value={user.id} className="bg-gray-900">{user.name}</option>
                   ))}
@@ -9072,7 +9240,7 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
             <AnimatePresence>
               {error && (
                 <motion.p initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                  className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-xl py-2 px-3 flex items-center gap-2">
+                  className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-[var(--r-md)] py-2 px-3 flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
                 </motion.p>
               )}
@@ -9080,10 +9248,10 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
 
             <div className="flex gap-3">
               <button onClick={handleImport} disabled={preview.fresh === 0}
-                className="flex-1 gradient-primary text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg glow-primary disabled:opacity-50 disabled:cursor-not-allowed">
+                className="flex-1 gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold flex items-center justify-center gap-2 glow-primary disabled:opacity-50 disabled:cursor-not-allowed">
                 <Check className="w-5 h-5" /> استيراد {preview.fresh} رقم وتوزيعها
               </button>
-              <button onClick={onClose} className="px-6 bg-white/10 text-white py-3 rounded-xl font-bold hover:bg-white/20 transition-colors">
+              <button onClick={onClose} className="px-6 bg-[var(--tint-2)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold hover:bg-[var(--tint-3)] transition-colors">
                 إلغاء
               </button>
             </div>
@@ -9095,21 +9263,21 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
           <div className="space-y-5 text-center">
             <motion.div initial={{ scale: 0.7, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
               className="w-20 h-20 mx-auto gradient-success rounded-full flex items-center justify-center">
-              <Check className="w-10 h-10 text-white" />
+              <Check className="w-10 h-10 text-[var(--text-strong)]" />
             </motion.div>
             <div>
-              <h3 className="text-xl font-bold text-white mb-1">تم استيراد {result.imported} رقم</h3>
-              <p className="text-sm text-gray-400">
+              <h3 className="text-xl font-bold text-[var(--text-strong)] mb-1">تم استيراد {result.imported} رقم</h3>
+              <p className="text-sm text-[var(--text-muted)]">
                 تم تجاهل {result.duplicates} رقم مكرر و{result.invalid} رقم غير صالح
               </p>
             </div>
 
             {result.perUser.length > 0 && (
-              <div className="rounded-xl bg-white/5 border border-white/10 p-4 text-right">
-                <p className="text-xs text-gray-400 mb-2">التوزيع:</p>
+              <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] p-4 text-right">
+                <p className="text-xs text-[var(--text-muted)] mb-2">التوزيع:</p>
                 <div className="flex flex-wrap gap-2">
                   {result.perUser.map((item) => (
-                    <span key={item.name} className="text-xs bg-purple-500/20 text-purple-300 px-3 py-1 rounded-full">
+                    <span key={item.name} className="text-xs bg-[var(--brand-primary-softer)] text-[var(--text)] px-3 py-1 rounded-full">
                       {item.name}: {item.count}
                     </span>
                   ))}
@@ -9117,11 +9285,11 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
               </div>
             )}
 
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-[var(--text-muted)]">
               الأرقام ظهرت الآن في تبويب «أرقام جديدة» لكل سيلز، وستصل لكل الأجهزة تلقائياً خلال ثانيتين.
             </p>
 
-            <button onClick={onClose} className="w-full gradient-primary text-white py-3 rounded-xl font-bold">
+            <button onClick={onClose} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">
               تم
             </button>
           </div>
@@ -9155,25 +9323,25 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
   
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-6">
-          <h2 className="text-xl font-bold gradient-text">توزيع رقم جديد</h2>
+          <div className="page-intro"><div><h2>توزيع رقم جديد</h2></div></div>
           <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/15 transition-colors shrink-0">
-            <X className="w-4 h-4 text-gray-300" />
+            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
+            <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input type="text" placeholder="اسم العميل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required />
-          <input type="tel" placeholder="رقم الهاتف *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" dir="ltr" required />
-          <textarea placeholder="وصف/ملاحظات" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white resize-none h-20" />
-          <select value={form.salesId} onChange={(e) => setForm({ ...form, salesId: e.target.value })} className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-3 text-white" required>
+          <input type="text" placeholder="اسم العميل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
+          <input type="tel" placeholder="رقم الهاتف *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
+          <textarea placeholder="وصف/ملاحظات" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-20" />
+          <select value={form.salesId} onChange={(e) => setForm({ ...form, salesId: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required>
             <option value="" className="bg-gray-900">اختر السيلز</option>
             {salesUsers.map((u: User) => (
               <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
             ))}
           </select>
-          <button type="submit" className="w-full gradient-primary text-white py-3 rounded-xl font-bold">توزيع الرقم</button>
+          <button type="submit" className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">توزيع الرقم</button>
         </form>
       </motion.div>
     </motion.div>
@@ -9237,7 +9405,7 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
       text: log.comment,
       at: log.createdAt,
       kind: 'مكالمة',
-      status: log.result === 'answered' ? 'تم الرد ✅' : 'لم يرد 📵',
+      status: log.result === 'answered' ? 'تم الرد ' : 'لم يرد ',
     });
   }
 
@@ -9289,32 +9457,32 @@ function UserFeedbackModal({ user, clients, leads = [], callLogs = [], onClose }
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.96, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96 }} className="glass-card rounded-3xl p-4 sm:p-6 w-full max-w-4xl h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <motion.div initial={{ scale: 0.96, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96 }} className="panel p-4 sm:p-6 w-full max-w-4xl h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         {/* رأس الصفحة: اسم السيلز أو الرقم المفتوح */}
-        <div className="flex items-center justify-between gap-3 pb-4 border-b border-white/10">
+        <div className="flex items-center justify-between gap-3 pb-4 border-b border-[var(--border)]">
           <div className="flex items-center gap-3 min-w-0">
             {current ? (
               <button onClick={() => setOpenNumber(null)} title="رجوع للأرقام"
-                className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-gray-200 shrink-0">
+                className="p-2 rounded-[var(--r-md)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] text-[var(--text)] shrink-0">
                 <ChevronRight className="w-5 h-5" />
               </button>
             ) : (
               <div className="w-11 h-11 gradient-primary rounded-full flex items-center justify-center shrink-0">
-                <span className="text-white font-bold">{user.name[0]}</span>
+                <span className="text-[var(--text-strong)] font-bold">{user.name[0]}</span>
               </div>
             )}
             <div className="min-w-0">
               <h2 className="text-lg sm:text-xl font-bold gradient-text truncate">
                 {current ? current.name : user.name}
               </h2>
-              <p className="text-xs text-gray-400 truncate" dir={current ? 'ltr' : 'rtl'}>
+              <p className="text-xs text-[var(--text-muted)] truncate" dir={current ? 'ltr' : 'rtl'}>
                 {current
                   ? current.phone || 'بدون رقم'
                   : `${numbers.length} رقم • ${withComments} رقم فيه فيدباك • ${totalComments} كومنت`}
               </p>
             </div>
           </div>
-          <button onClick={onClose} title="إغلاق" className="p-2 hover:bg-white/10 rounded-lg shrink-0">
+          <button onClick={onClose} title="إغلاق" className="p-2 hover:bg-[var(--tint-2)] rounded-[var(--r-sm)] shrink-0">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -9323,11 +9491,11 @@ function UserFeedbackModal({ user, clients, leads = [], callLogs = [], onClose }
         {!current && (
           <div className="flex-1 overflow-y-auto pt-4 space-y-3">
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ابحث بالاسم أو الرقم…"
-              className="w-full bg-white/5 border border-purple-500/20 rounded-xl px-4 py-2.5 text-white text-sm" />
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-2.5 text-[var(--text-strong)] text-sm" />
             {filtered.length === 0 && (
               <div className="text-center py-16">
-                <Users className="w-14 h-14 text-gray-600 mx-auto mb-3" />
-                <p className="text-gray-400 text-sm">لا توجد أرقام لهذا الحساب بعد</p>
+                <Users className="w-14 h-14 text-[var(--text-dim)] mx-auto mb-3" />
+                <p className="text-[var(--text-muted)] text-sm">لا توجد أرقام لهذا الحساب بعد</p>
               </div>
             )}
             {filtered.map((n) => (
@@ -9342,15 +9510,15 @@ function UserFeedbackModal({ user, clients, leads = [], callLogs = [], onClose }
                       <span className={STAGE_META[n.stage].cls}>{STAGE_META[n.stage].icon} {STAGE_META[n.stage].label}</span>
                     )}
                   </span>
-                  <span className="block text-[11.5px] text-purple-400 mt-0.5" dir="ltr">{n.phone || '—'}</span>
+                  <span className="block text-[11.5px] text-[var(--text-muted)] mt-0.5" dir="ltr">{n.phone || '—'}</span>
                   {n.items[0] && (
-                    <span className="block text-[11px] text-gray-400 mt-1 truncate">
+                    <span className="block text-[11px] text-[var(--text-muted)] mt-1 truncate">
                       آخر فيدباك: {String(n.items[0].text).replace(/^(فيدباك:|من المكالمة:)\s*/, '')}
                     </span>
                   )}
                 </span>
                 <span className={`fb-count ${n.items.length ? '' : 'opacity-50'}`}>{n.items.length} كومنت</span>
-                <ChevronLeft className="w-4 h-4 text-gray-500 shrink-0" />
+                <ChevronLeft className="w-4 h-4 text-[var(--text-dim)] shrink-0" />
               </button>
             ))}
           </div>
@@ -9361,14 +9529,14 @@ function UserFeedbackModal({ user, clients, leads = [], callLogs = [], onClose }
           <div className="flex-1 overflow-y-auto pt-4">
             <div className="flex flex-wrap items-center gap-2 mb-4">
               {current.source && <span className="st-chip">{current.source}</span>}
-              <span className="st-chip">💬 {current.items.length} كومنت</span>
-              {current.phone && <a href={`tel:${current.phone}`} className="st-chip text-emerald-300">📞 اتصال</a>}
+              <span className="st-chip"> {current.items.length} كومنت</span>
+              {current.phone && <a href={`tel:${current.phone}`} className="st-chip text-emerald-300"> اتصال</a>}
               <WhatsAppButton name={current.name} label="واتساب" phones={[current.phone]} />
             </div>
             {current.items.length === 0 ? (
               <div className="text-center py-12">
-                <MessageSquare className="w-14 h-14 text-gray-600 mx-auto mb-3" />
-                <p className="text-gray-400 text-sm">لا يوجد فيدباك على هذا الرقم بعد</p>
+                <MessageSquare className="w-14 h-14 text-[var(--text-dim)] mx-auto mb-3" />
+                <p className="text-[var(--text-muted)] text-sm">لا يوجد فيدباك على هذا الرقم بعد</p>
               </div>
             ) : (
               <div className="fb-card">
@@ -9403,8 +9571,8 @@ function UserFeedbackModal({ user, clients, leads = [], callLogs = [], onClose }
 
 // أيقونة كل نوع حدث في الخط الزمني
 const ACTIVITY_ICONS: Record<string, string> = {
-  created: '🆕', stage: '🎯', reminder: '⏰', feedback: '📞',
-  whatsapp: '💬', call: '☎️', public: '🔗', note: '📝',
+  created: '🆕', stage: '🎯', reminder: '', feedback: '',
+  whatsapp: '', call: '', public: '🔗', note: '',
 };
 
 function ClientDetailModal({ client, onClose, onSuccess, onCall }: any) {
@@ -9415,48 +9583,48 @@ function ClientDetailModal({ client, onClose, onSuccess, onCall }: any) {
   };
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-xl font-bold gradient-text mb-6">{client.name}</h2>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="page-intro"><div><h2>{client.name}</h2></div></div>
         <div className="space-y-3">
-          <p className="text-gray-300" dir="ltr">{client.phone}</p>
-          {client.property && <p className="text-gray-300">{client.property}</p>}
-          <p className="text-gray-300">
+          <p className="text-[var(--text)]" dir="ltr">{client.phone}</p>
+          {client.property && <p className="text-[var(--text)]">{client.property}</p>}
+          <p className="text-[var(--text)]">
             الميزانية: <span className="text-emerald-400 font-bold">{displayPrice(client.budget)}</span>
           </p>
           {client.monthlyInstallment && (
-            <p className="text-gray-300">
-              القسط الشهري: <span className="text-purple-400 font-bold">{displayPrice(client.monthlyInstallment)}</span>
+            <p className="text-[var(--text)]">
+              القسط الشهري: <span className="text-[var(--text-muted)] font-bold">{displayPrice(client.monthlyInstallment)}</span>
             </p>
           )}
-          {client.source && <p className="text-xs text-gray-400">المصدر: {client.source}</p>}
+          {client.source && <p className="text-xs text-[var(--text-muted)]">المصدر: {client.source}</p>}
         </div>
         <div className="flex flex-col sm:flex-row gap-2 mt-5">
           <button type="button"
             onClick={() => { logActivity('call', 'تم فتح الاتصال بالعميل'); onCall?.(); }}
-            className="flex-1 bg-white/10 hover:bg-white/15 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2">
+            className="flex-1 bg-[var(--tint-2)] hover:bg-[var(--tint-3)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold flex items-center justify-center gap-2">
             <PhoneCall className="w-4 h-4" /> الاتصال بالعميل
           </button>
           <WhatsAppButton name={client.name} label="واتساب"
-            className="flex-1 justify-center py-3 text-sm rounded-xl"
+            className="flex-1 justify-center py-3 text-sm rounded-[var(--r-md)]"
             phones={[client.phone, ...(client.phones || [])]}
             onOpened={() => logActivity('whatsapp', 'تم فتح واتساب وإرسال رسالة للعميل')} />
         </div>
 
         {/* الخط الزمني الكامل للعميل */}
         <div className="mt-6">
-          <p className="text-sm font-bold text-white mb-3 flex items-center gap-2">
-            <Activity className="w-4 h-4 text-purple-400" /> الخط الزمني <span className="text-gray-500 font-normal">({activities.length})</span>
+          <p className="text-sm font-bold text-[var(--text-strong)] mb-3 flex items-center gap-2">
+            <Activity className="w-4 h-4 text-[var(--text-muted)]" /> الخط الزمني <span className="text-[var(--text-dim)] font-normal">({activities.length})</span>
           </p>
           {activities.length === 0 ? (
-            <p className="text-xs text-gray-500">لا توجد أحداث مسجلة بعد — كل تغيير مرحلة أو فيدباك أو واتساب سيُسجَّل هنا تلقائياً.</p>
+            <p className="text-xs text-[var(--text-dim)]">لا توجد أحداث مسجلة بعد — كل تغيير مرحلة أو فيدباك أو واتساب سيُسجَّل هنا تلقائياً.</p>
           ) : (
             <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
               {activities.map((a) => (
-                <div key={a.id} className="flex gap-3 bg-white/5 rounded-xl px-3 py-2">
+                <div key={a.id} className="flex gap-3 bg-[var(--tint-1)] rounded-[var(--r-md)] px-3 py-2">
                   <span className="text-base shrink-0">{ACTIVITY_ICONS[a.type] || '•'}</span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-gray-200"><FeedbackChip status={a.status} /> {a.text}</p>
-                    <p className="text-[11px] text-gray-500 mt-0.5">
+                    <p className="text-sm text-[var(--text)]"><FeedbackChip status={a.status} /> {a.text}</p>
+                    <p className="text-[11px] text-[var(--text-dim)] mt-0.5">
                       {formatDateTime(a.at)}{a.by ? ` • ${a.by}` : ''}
                     </p>
                   </div>
@@ -9465,7 +9633,7 @@ function ClientDetailModal({ client, onClose, onSuccess, onCall }: any) {
             </div>
           )}
         </div>
-        <button onClick={onClose} className="w-full mt-4 bg-white/10 text-white py-3 rounded-xl font-bold">إغلاق</button>
+        <button onClick={onClose} className="w-full mt-4 bg-[var(--tint-2)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إغلاق</button>
       </motion.div>
     </motion.div>
   );
@@ -9480,17 +9648,17 @@ function PropertyDetailModal({ property, users, onClose, onSuccess }: any) {
   const mapQuery = property.latitude && property.longitude ? `${property.latitude},${property.longitude}` : property.location;
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-xl font-bold gradient-text mb-6">{property.name}</h2>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="page-intro"><div><h2>{property.name}</h2></div></div>
         <div className="space-y-3">
           {images.length > 0 && (
             <div>
-              <img src={images[Math.min(active, images.length - 1)]} alt={property.name} className="w-full h-56 object-cover rounded-2xl" />
+              <img src={images[Math.min(active, images.length - 1)]} alt={property.name} className="w-full h-56 object-cover rounded-[var(--r-xl)]" />
               {images.length > 1 && (
                 <div className="flex gap-2 mt-2 overflow-x-auto pb-1">
                   {images.map((src, i) => (
                     <button key={i} type="button" onClick={() => setActive(i)}
-                      className={`shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 ${i === active ? 'border-purple-400' : 'border-transparent opacity-70 hover:opacity-100'}`}>
+                      className={`shrink-0 w-16 h-16 rounded-[var(--r-sm)] overflow-hidden border-2 ${i === active ? 'border-[var(--brand)]' : 'border-transparent opacity-70 hover:opacity-100'}`}>
                       <img src={src} alt={`صورة ${i + 1}`} className="w-full h-full object-cover" />
                     </button>
                   ))}
@@ -9498,19 +9666,19 @@ function PropertyDetailModal({ property, users, onClose, onSuccess }: any) {
               )}
             </div>
           )}
-          <p className="text-gray-300">{property.type}{property.area ? ` • ${property.area}م` : ''}</p>
-          {property.location && <p className="text-gray-300">📍 {property.location}</p>}
-          <p className="text-purple-400 font-bold">السعر: {displayPrice(property.price)} ج.م</p>
-          <p className="text-gray-300">
-            أضافه: <span className="text-cyan-300 font-bold">{owner?.name || 'عضو محذوف'}</span>
-            {property.createdAt && <span className="text-xs text-gray-500"> • {formatDateTime(property.createdAt)}</span>}
+          <p className="text-[var(--text)]">{property.type}{property.area ? ` • ${property.area}م` : ''}</p>
+          {property.location && <p className="text-[var(--text)]"> {property.location}</p>}
+          <p className="text-[var(--text-muted)] font-bold">السعر: {displayPrice(property.price)} ج.م</p>
+          <p className="text-[var(--text)]">
+            أضافه: <span className="text-[var(--brand)] font-bold">{owner?.name || 'عضو محذوف'}</span>
+            {property.createdAt && <span className="text-xs text-[var(--text-dim)]"> • {formatDateTime(property.createdAt)}</span>}
           </p>
-          {property.clientName && <p className="text-gray-300">العميل: {property.clientName}</p>}
-          {property.clientPhone && <p className="text-gray-300" dir="ltr">{property.clientPhone}</p>}
+          {property.clientName && <p className="text-[var(--text)]">العميل: {property.clientName}</p>}
+          {property.clientPhone && <p className="text-[var(--text)]" dir="ltr">{property.clientPhone}</p>}
           {property.clientPhone2 && (
-            <p className="text-gray-300" dir="ltr">
+            <p className="text-[var(--text)]" dir="ltr">
               {property.clientPhone2}
-              <span className="text-[11px] text-gray-500 mr-2">رقم إضافي</span>
+              <span className="text-[11px] text-[var(--text-dim)] mr-2">رقم إضافي</span>
             </p>
           )}
           {(property.clientPhone || property.clientPhone2) && (
@@ -9521,22 +9689,22 @@ function PropertyDetailModal({ property, users, onClose, onSuccess }: any) {
             </div>
           )}
           {property.description && (
-            <div className="bg-white/5 rounded-xl px-3 py-2.5">
-              <p className="text-xs text-gray-500 mb-1">📝 ملاحظات العقار</p>
-              <p className="text-gray-300 text-sm whitespace-pre-line">{property.description}</p>
+            <div className="bg-[var(--tint-1)] rounded-[var(--r-md)] px-3 py-2.5">
+              <p className="text-xs text-[var(--text-dim)] mb-1"> ملاحظات العقار</p>
+              <p className="text-[var(--text)] text-sm whitespace-pre-line">{property.description}</p>
             </div>
           )}
           {mapQuery && (
-            <div className="rounded-xl overflow-hidden border border-white/10">
+            <div className="rounded-[var(--r-md)] overflow-hidden border border-[var(--border)]">
               <iframe title="خريطة العقار" className="w-full h-48" loading="lazy"
                 src={`https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&z=15&output=embed`} />
               <a href={`https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}`} target="_blank" rel="noopener noreferrer"
-                className="block text-center text-xs text-cyan-300 bg-white/5 py-2">📍 افتح في خرائط جوجل</a>
+                className="block text-center text-xs text-[var(--brand)] bg-[var(--tint-1)] py-2"> افتح في خرائط جوجل</a>
             </div>
           )}
-          <div className="bg-white/5 rounded-xl px-3 py-2.5">
-            <p className="text-xs text-gray-500 mb-1">🔗 رابط عام للعقار — شاركه مع أي عميل، يسجّل رقمه ويصل عندك كـ ليد</p>
-            <p className="text-[11px] text-gray-400 break-all" dir="ltr">{shareUrl}</p>
+          <div className="bg-[var(--tint-1)] rounded-[var(--r-md)] px-3 py-2.5">
+            <p className="text-xs text-[var(--text-dim)] mb-1">🔗 رابط عام للعقار — شاركه مع أي عميل، يسجّل رقمه ويصل عندك كـ ليد</p>
+            <p className="text-[11px] text-[var(--text-muted)] break-all" dir="ltr">{shareUrl}</p>
             <div className="flex flex-col sm:flex-row gap-2 mt-2">
               <button type="button"
                 onClick={async () => {
@@ -9544,18 +9712,18 @@ function PropertyDetailModal({ property, users, onClose, onSuccess }: any) {
                   setCopied(ok ? 'ok' : 'fail');
                   setTimeout(() => setCopied('idle'), 2200);
                 }}
-                className="flex-1 bg-white/10 hover:bg-white/15 text-white py-2.5 rounded-lg font-bold text-sm">
-                {copied === 'ok' ? '✅ تم نسخ الرابط' : copied === 'fail' ? 'انسخه يدوياً من الأعلى' : '📋 نسخ الرابط'}
+                className="flex-1 bg-[var(--tint-2)] hover:bg-[var(--tint-3)] text-[var(--text-strong)] py-2.5 rounded-[var(--r-sm)] font-bold text-sm">
+                {copied === 'ok' ? ' تم نسخ الرابط' : copied === 'fail' ? 'انسخه يدوياً من الأعلى' : ' نسخ الرابط'}
               </button>
               <a href={`https://wa.me/?text=${encodeURIComponent(`${property.name} — ${property.type}${property.area ? ` • ${property.area}م` : ''}\n${property.price ? `السعر: ${property.price}\n` : ''}${shareUrl}`)}`}
                 target="_blank" rel="noopener noreferrer"
-                className="flex-1 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 py-2.5 rounded-lg font-bold text-sm text-center">
-                💬 مشاركة واتساب
+                className="flex-1 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 py-2.5 rounded-[var(--r-sm)] font-bold text-sm text-center">
+                 مشاركة واتساب
               </a>
             </div>
           </div>
         </div>
-        <button onClick={onClose} className="w-full mt-6 bg-white/10 text-white py-3 rounded-xl font-bold">إغلاق</button>
+        <button onClick={onClose} className="w-full mt-6 bg-[var(--tint-2)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إغلاق</button>
       </motion.div>
     </motion.div>
   );
@@ -9564,13 +9732,13 @@ function PropertyDetailModal({ property, users, onClose, onSuccess }: any) {
 function UserDetailModal({ user, currentUser, onClose, onSuccess }: any) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-xl font-bold gradient-text mb-6">{user.name}</h2>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="page-intro"><div><h2>{user.name}</h2></div></div>
         <div className="space-y-3">
-          <p className="text-gray-300">@{user.username}</p>
-          <p className="text-gray-300">{user.role}</p>
+          <p className="text-[var(--text)]">@{user.username}</p>
+          <p className="text-[var(--text)]">{user.role}</p>
         </div>
-        <button onClick={onClose} className="w-full mt-6 bg-white/10 text-white py-3 rounded-xl font-bold">إغلاق</button>
+        <button onClick={onClose} className="w-full mt-6 bg-[var(--tint-2)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إغلاق</button>
       </motion.div>
     </motion.div>
   );
@@ -9579,13 +9747,13 @@ function UserDetailModal({ user, currentUser, onClose, onSuccess }: any) {
 function TeamDetailModal({ team, users, currentUser, onClose, onSuccess }: any) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card rounded-3xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-xl font-bold gradient-text mb-6">{team.name}</h2>
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="page-intro"><div><h2>{team.name}</h2></div></div>
         <div className="space-y-3">
-          <p className="text-gray-300">المشرف: {team.supervisorName}</p>
-          <p className="text-gray-300">عدد الأعضاء: {team.memberIds.length}</p>
+          <p className="text-[var(--text)]">المشرف: {team.supervisorName}</p>
+          <p className="text-[var(--text)]">عدد الأعضاء: {team.memberIds.length}</p>
         </div>
-        <button onClick={onClose} className="w-full mt-6 bg-white/10 text-white py-3 rounded-xl font-bold">إغلاق</button>
+        <button onClick={onClose} className="w-full mt-6 bg-[var(--tint-2)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إغلاق</button>
       </motion.div>
     </motion.div>
   );

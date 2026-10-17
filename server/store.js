@@ -10,6 +10,13 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  authConfigured,
+  preserveUserPasswords,
+  sessionFromRequest,
+  sessionMatchesUsers,
+  stripUserSecrets,
+} from './auth.js';
 
 const KEY_PATTERN = /^crm_[a-z_]+$/;
 // صور العقارات تُخزَّن داخل نفس قاعدة البيانات (base64)، فحجم الطلب الواحد يهم:
@@ -105,24 +112,51 @@ export const safeEqual = (a, b) => {
   return diff === 0;
 };
 
-// createStoreHandler({ load, save, loadVersion, token })
+// createStoreHandler({ load, save, loadVersion, token, auth })
 // loadVersion اختياري: يقرأ رقم الإصدار وحده. مهم جداً على القاعدة المدفوعة بالأوامر:
 // الفحص الدوري للنسخة هو **أكثر طلب يتكرر** في النظام، فقراءة مفتاح واحد بدل مفتاحين
 // تنصّف فاتورة/سقف قاعدة البيانات فوراً.
-// token اختياري: لو مضبوطاً يُطلب من كل طلب أن يحمل الترويسة x-store-token
-// (يمنع أي زاحف أو ماسح آلي من سحب بيانات العملاء بالكامل من رابط الموقع).
-export function createStoreHandler({ load, save, loadVersion, token = '' }) {
+// token اختياري: طبقة إضافية قديمة (x-store-token) — لا تُغني عن الجلسة.
+//
+// auth (الأهم): متغيّرات البيئة التي فيها AUTH_SECRET. عند تمريرها:
+//   **لا يُقدَّم أي شيء — لا قراءة ولا كتابة — إلا لمن يحمل جلسة موقّعة صحيحة**.
+//   أي طلب آخر يرجع 401، فتظل بيانات العملاء مغلقة أمام أي شخص يعرف رابط الموقع.
+//   ولو لم يُضبط AUTH_SECRET نرفض العمل (503) بدل أن ننفتح بالخطأ.
+export function createStoreHandler({ load, save, loadVersion, token = '', auth = null }) {
   return async function handle(req, res) {
     try {
       const [url, query] = (req.url || '').split('?');
       if (url !== '/api/store') return send(res, 404, { error: 'not found' });
       const meta = new URLSearchParams(query || '').get('meta');
 
-      // بوابة اختيارية: تُغلق تماماً لو لم يُضبط STORE_TOKEN على الاستضافة
+      // بوابة اختيارية قديمة: تُغلق تماماً لو لم يُضبط STORE_TOKEN على الاستضافة
       if (token) {
         const provided = req.headers?.['x-store-token'] || '';
         if (!safeEqual(provided, token)) return send(res, 401, { error: 'unauthorized' });
       }
+
+      // ===== بوابة الجلسة: قلب الحماية =====
+      let session = null;
+      if (auth) {
+        if (!authConfigured(auth)) {
+          return send(res, 503, {
+            error: 'auth not configured',
+            hint: 'أضف متغيّر البيئة AUTH_SECRET (نص عشوائي ٣٢ حرفاً على الأقل) على Vercel ثم أعد النشر. بدونها يبقى الوصول للبيانات مغلقاً.',
+          });
+        }
+        session = sessionFromRequest(auth, req);
+        if (!session) {
+          return send(res, 401, { error: 'unauthorized', hint: 'سجّل الدخول أولاً — بيانات العملاء لا تُقدَّم إلا لحساب مسجَّل.' });
+        }
+      }
+
+      // الجلسة صالحة فقط إذا كان الحساب موجوداً ونشطاً وإصدار جلسته مطابقاً:
+      // فيسقط الكوكي فوراً بعد الخروج أو تغيير كلمة المرور من أي جهاز.
+      const isStaleSession = (db) => {
+        if (!auth || !session) return false;
+        return !sessionMatchesUsers(session, db?.data);
+      };
+      const endStaleSession = () => send(res, 401, { error: 'unauthorized', hint: 'انتهت الجلسة — سجّل الدخول مرة أخرى.' });
 
       // حماية من الإغراق (Brute force / DoS)
       if (rateLimited(req, req.method === 'POST')) {
@@ -137,10 +171,12 @@ export function createStoreHandler({ load, save, loadVersion, token = '' }) {
           return send(res, 200, { version });
         }
         const db = await load();
+        if (isStaleSession(db)) return endStaleSession();
         return send(res, 200, {
           version: db.version,
           isEmpty: Object.keys(db.data || {}).length === 0,
-          data: db.data || {},
+          // كلمات المرور وإصدار الجلسات لا تغادر السيرفر إطلاقاً — حتى للجهاز المسجَّل دخوله
+          data: stripUserSecrets(db.data || {}),
         });
       }
 
@@ -149,16 +185,21 @@ export function createStoreHandler({ load, save, loadVersion, token = '' }) {
         if (!body) return send(res, 400, { error: 'bad request' });
 
         const db = await load();
+        if (isStaleSession(db)) return endStaleSession();
         const data = db.data || {};
+
+        // كلمات المرور: لا تُقبل نصاً صريحاً أبداً، ولا تُمسح لسجل موجود
+        const accept = (key, value) =>
+          key === 'crm_users' ? preserveUserPasswords(value, data.crm_users) : value;
 
         if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
           const entries = Object.entries(body.data);
           if (entries.length > 40) return send(res, 400, { error: 'too many keys' });
           for (const [key, value] of entries) {
-            if (isValidKey(key) && isValidRecords(value)) data[key] = value;
+            if (isValidKey(key) && isValidRecords(value)) data[key] = accept(key, value);
           }
         } else if (isValidKey(body.key) && isValidRecords(body.value)) {
-          data[body.key] = body.value;
+          data[body.key] = accept(body.key, body.value);
         } else {
           return send(res, 400, { error: 'bad request' });
         }
@@ -190,6 +231,9 @@ export function fileStorage(dbFile) {
   };
 
   return {
+    // المخزن المحلي مضبوط دائماً (ملف على القرص) — نفس الواجهة كي يعمل
+    // نفس منطق المصادقة في المكانين بلا أي تفريع
+    configured: true,
     load,
     // قراءة ملف محلي مجانية — نُبقي نفس الواجهة حتى يعمل نفس الكود في المكانين
     async loadVersion() {

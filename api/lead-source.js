@@ -28,6 +28,7 @@ import {
 } from '../server/leadSource.js';
 import { redisJsonStore, redisStorage } from '../server/store.js';
 import { supabaseJsonStore, supabaseStorage } from '../server/supabase.js';
+import { authConfigured, isManagerRole, sessionFromRequest } from '../server/auth.js';
 
 const CONFIG_KEY = 'crm:lead-source:config';
 
@@ -110,6 +111,21 @@ const statelessView = (config = {}) => ({
 export default async function handler(req, res) {
   try {
     const url = (req.url || '').split('?')[0];
+
+    // ===== لا يُكشف شيء بلا جلسة =====
+    // هنا توكن فيسبوك والصفحات والنماذج، ومن يستطيع تشغيل السحب يوزّع أرقام العملاء.
+    // فالبوابة هنا **قبل** أي شيء آخر: بلا جلسة صحيحة يرجع 401 ولا يُقرأ ولا يُكتب شيء.
+    if (!authConfigured(process.env)) {
+      return reply(res, 503, {
+        ok: false,
+        error: 'auth not configured',
+        hint: 'أضف متغيّر البيئة AUTH_SECRET على Vercel ثم أعد النشر.',
+      });
+    }
+    const session = sessionFromRequest(process.env, req);
+    if (!session) return reply(res, 401, { ok: false, error: 'unauthorized' });
+    // إعدادات سحب الأرقام للإدارة فقط (CEO / Team Leader)
+    if (!isManagerRole(session.r)) return reply(res, 403, { ok: false, error: 'forbidden' });
 
     // بدون قاعدة بيانات: نفس السلوك القديم «بلا ذاكرة» حتى لا تتعطّل الميزة
     if (!hasDatabase) return statelessHandler(req, res, url);

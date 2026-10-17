@@ -7,7 +7,13 @@
 //   ٢) Upstash Redis / Vercel KV: KV_REST_API_URL + KV_REST_API_TOKEN
 //      (أو UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN)
 //
-// بدون أي منهما ترجع الوظيفة 503 ويعمل النظام محلياً على كل جهاز كما كان
+// ===== الأمان (الأهم) =====
+// هذه النقطة **مغلقة تماماً**: لا يُقدَّم أي شيء إلا لمن يحمل كوكي جلسة موقّعاً
+// بـ AUTH_SECRET وصادر من /api/auth بعد تسجيل دخول صحيح.
+// أي طلب آخر — حتى لو كان يعرف رابط الموقع بالحرف — يرجع 401 ولا يرى شيئاً.
+// وكلمات المرور تُحذف من كل رد، فلا تصل للمتصفح إطلاقاً.
+//
+// بدون أي من المخزنين ترجع الوظيفة 503 ويعمل النظام محلياً على كل جهاز كما كان
 // — لا يتعطّل الموقع، يفقد فقط المزامنة المشتركة.
 
 import { createStoreHandler, redisStorage } from '../server/store.js';
@@ -17,9 +23,8 @@ import { supabaseStorage } from '../server/supabase.js';
 const supa = supabaseStorage(process.env);
 const redis = redisStorage(process.env);
 const storage = supa.configured ? supa : redis;
-// STORE_TOKEN اختياري: لو أضفته على Vercel يقفل نقطة البيانات، ولازم تضيف نفس
-// القيمة في VITE_STORE_TOKEN وقت البناء حتى يتصل التطبيق. راجع .env.example
-const handler = createStoreHandler({ ...storage, token: process.env.STORE_TOKEN || '' });
+// auth: متغيّرات البيئة التي فيها AUTH_SECRET => بوابة الجلسة إلزامية
+const handler = createStoreHandler({ ...storage, auth: process.env });
 
 export default async function (req, res) {
   if (!storage.configured) {

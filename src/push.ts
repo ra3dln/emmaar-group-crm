@@ -72,7 +72,8 @@ export async function enablePush(user: { id: string; name?: string }): Promise<P
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') {
     // نشرح السبب والحل بدقة لأن كل حالة لها طريق مختلف:
-    const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const isAndroid = /Android/i.test(navigator.userAgent);
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true;
     if (permission === 'denied') {
       return {
@@ -81,7 +82,14 @@ export async function enablePush(user: { id: string; name?: string }): Promise<P
         message: 'الإشعارات محظورة لهذا الموقع من إعدادات المتصفح. الحل: اضغط أيقونة 🔒 بجانب رابط الموقع ← «الإشعارات» ← «السماح» ← أعد تحميل الصفحة واضغط تفعيل من جديد',
       };
     }
-    if (isMobile && !isStandalone) {
+    if (isIOS && !isStandalone) {
+      return {
+        ok: false,
+        state: 'default',
+        message: 'آيفون لا يسمح بإشعارات الويب إلا للتطبيق المثبّت على الشاشة الرئيسية (iOS 16.4 وأحدث). الحل: زر المشاركة ⬆ ← «إضافة إلى الشاشة الرئيسية» ← افتح التطبيق من أيقونته ← فعّل الإشعارات من جديد',
+      };
+    }
+    if (isAndroid && !isStandalone) {
       return {
         ok: false,
         state: 'default',
@@ -179,18 +187,43 @@ export async function sendTestPush(user: { id: string }): Promise<PushResult> {
   }
 }
 
-// إشعار محلي فوري (يعمل والموقع مفتوح)
-export async function localNotification(title: string, body: string, tag?: string): Promise<boolean> {
+// إشعار محلي فوري (يعمل والموقع مفتوح) — يمر دائماً عبر Service Worker.
+// آيفون لا يدعم new Notification أبداً، لذلك ننتظر جاهزية العامل ونستخدمه هو.
+export async function localNotification(title: string, body: string, tag?: string, url = '/'): Promise<boolean> {
   if (!pushSupported() || Notification.permission !== 'granted') return false;
-  const registration = await registerWorker();
-  if (registration?.active) {
-    registration.active.postMessage({ type: 'notify', title, body, tag: tag || `local-${Date.now()}` });
-    return true;
-  }
   try {
-    new Notification(title, { body, dir: 'rtl', lang: 'ar', tag });
+    const registration = await navigator.serviceWorker.ready;
+    registration.active?.postMessage({ type: 'notify', title, body, tag: tag || `local-${Date.now()}`, url });
     return true;
   } catch {
     return false;
+  }
+}
+
+// إعادة تسجيل هذا الجهاز على السيرفر بلا طلب صلاحية جديدة.
+// مهم لآيفون: الاشتراك قد يتجدّد بعد تحديث التطبيق، وللقاعدة لو تغيّرت،
+// فلا نريد أن يجلس المستخدم بلا إشعارات وهو فاكرها مفعّلة.
+export async function resyncPush(user: { id: string; name?: string }): Promise<PushState> {
+  if (!pushSupported()) return 'unsupported';
+  if (Notification.permission !== 'granted') return pushState();
+  try {
+    // نسجّل العامل أولاً (لو المتصفح مسحه) وبننتظر جاهزيته بحد أقصى ٤ ثوانٍ
+    // حتى لا يعلّق التطبيق لو الإشعارات مش مسجّلة في هذا المتصفح أصلاً.
+    await registerWorker();
+    const registration = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
+    ]);
+    if (!registration) return await pushState();
+    const subscription = await registration.pushManager.getSubscription();
+    if (!subscription) return 'default';
+    const res = await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: user.id, userName: user.name || '', subscription }),
+    });
+    return res.ok ? 'subscribed' : 'default';
+  } catch {
+    return 'default';
   }
 }
