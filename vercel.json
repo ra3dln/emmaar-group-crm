@@ -4,6 +4,10 @@
   "buildCommand": "npm run build",
   "installCommand": "npm install",
   "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/p", "destination": "/api/public-page" },
+    { "source": "/p/:id", "destination": "/api/public-page" }
+  ],
   "headers": [
     {
       "source": "/api/(.*)",

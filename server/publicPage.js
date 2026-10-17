@@ -86,8 +86,10 @@ const companyName = (data) => {
   return (row && row.name) || (data?.crm_company_settings && data.crm_company_settings.name) || 'إعمار جروب';
 };
 
-export function createPublicHandler({ storeFile }) {
-  const storage = fileStorage(storeFile);
+// التخزين يُمرَّر جاهزاً (ملف محلي على سيرفر الشركة، أو قاعدة مشتركة على الاستضافة)
+// بنفس واجهة load/save — فالمنطق واحد في المكانين بلا أي تفريع.
+export function createPublicHandler({ storeFile, storage: injectedStorage }) {
+  const storage = injectedStorage || fileStorage(storeFile);
 
   return async function handle(req, res) {
     try {
@@ -104,11 +106,11 @@ export function createPublicHandler({ storeFile }) {
         const db = await storage.load();
         const property = (db.data?.crm_properties || []).find((p) => p && p.id === id);
         if (!property) return send(res, 404, { ok: false, error: 'الوحدة غير متاحة أو تم حذفها' });
-        const owner = (db.data?.crm_users || []).find((u) => u && u.id === property.userId);
+        // ملاحظة خصوصية: لا نُرسل اسم المندوب صاحب العقار ولا أي بيانات داخلية —
+        // الرابط مفتوح لأي شخص، والصفحة ما بتستخدمش غير بيانات الوحدة واسم الشركة.
         return send(res, 200, {
           ok: true,
           company: companyName(db.data),
-          owner: owner?.name || '',
           property: publicProperty(property),
         });
       }
@@ -154,7 +156,7 @@ export function createPublicHandler({ storeFile }) {
               : c
           );
           await storage.save({ version: (Number(db.version) || 0) + 1, data: { ...data, crm_clients: nextClients } });
-          return send(res, 200, { ok: true, duplicate: true, owner: owner?.name || '' });
+          return send(res, 200, { ok: true, duplicate: true });
         }
 
         const client = {
@@ -178,7 +180,7 @@ export function createPublicHandler({ storeFile }) {
         };
 
         await storage.save({ version: (Number(db.version) || 0) + 1, data: { ...data, crm_clients: [client, ...clients] } });
-        return send(res, 200, { ok: true, owner: owner?.name || '' });
+        return send(res, 200, { ok: true });
       }
 
       return send(res, 404, { ok: false, error: 'not found' });
@@ -189,6 +191,11 @@ export function createPublicHandler({ storeFile }) {
 }
 
 // ===== صفحة العرض: عربية بالكامل، خفيفة، تعمل على أي موبايل =====
+// تُصدَّر كذلك لتستخدمها دالة الاستضافة التي تخدم /p/<id> بعد إعادة التوجيه الداخلي.
+export function renderPublicPageHtml() {
+  return renderPage();
+}
+
 function renderPage() {
   return `<!doctype html>
 <html lang="ar" dir="rtl">
