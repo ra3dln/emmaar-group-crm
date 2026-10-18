@@ -102,6 +102,65 @@ const readBody = (req) =>
     req.on('error', () => resolve(null));
   });
 
+// ===== دمج القوائم بدل استبدالها (الأهم لثبات الحسابات) =====
+// كل جهاز يرفع "القائمة كاملة" للمفتاح (مثلاً crm_users كلها). ولو رفع جهاز نسخة قديمة
+// لم تصله بعدُ الحسابات التي أُنشئت على جهاز آخر، فالاستبدال المباشر يمسحها من القاعدة:
+// فيعمل الحساب الجديد قليلاً ثم "يختفي" ويقول السيرفر «اسم المستخدم أو كلمة المرور
+// غير صحيحة» — وهو بالضبط عطل "الحسابات أوقات مش بتشتغل".
+//
+// لذلك: عند الكتابة نبقي كل سجل موجود في النسختين (دمج بالمعرّف)، ولا يُحذف أي سجل
+// إلا بشاهد حذف صريح يرفعه العميل نفسه (crm_tombstones) وهو أحدث من السجل —
+// فالحذف المقصود يعمل كما هو، ولا يمسح جهاز قديم شيئاً لم يره بعد.
+const TOMBSTONE_DATA_KEY = 'crm_tombstones';
+const hasIds = (list) =>
+  Array.isArray(list) && list.every((row) => row && typeof row === 'object' && row.id !== undefined && row.id !== null);
+// آخر تعديل معروف للسجل — يُقارن بوقت شاهد الحذف (نفس قاعدة العميل في src/sync.ts)
+const recordStamp = (record) =>
+  Math.max(Date.parse(record?.updatedAt || '') || 0, Date.parse(record?.createdAt || '') || 0);
+
+export function mergeKeepingRecords(key, incoming, stored, tombstones = []) {
+  // شواهد الحذف نفسها تُستبدل كما هي (دمجها بالمعرّف كان سيضيّع شواهد حذف)
+  if (key === TOMBSTONE_DATA_KEY) return incoming;
+  if (!hasIds(incoming)) return incoming;
+  const storedRows = hasIds(stored) ? stored : [];
+  const byId = new Map();
+  for (const row of storedRows) byId.set(String(row.id), row);
+  // نسخة المُرسل تكسب عند نفس المعرّف (أحدث تعديل)
+  for (const row of incoming) byId.set(String(row.id), row);
+
+  const deletedAt = new Map();
+  for (const tomb of Array.isArray(tombstones) ? tombstones : []) {
+    if (tomb && String(tomb.key) === key && tomb.id !== undefined && tomb.id !== null) {
+      deletedAt.set(String(tomb.id), Number(tomb.at) || 0);
+    }
+  }
+  return [...byId.values()].filter((row) => {
+    const at = deletedAt.get(String(row.id));
+    if (at === undefined) return true; // لا شاهد حذف لهذا السجل
+    if (!at) return false; // شاهد بلا وقت (شكل قديم) = حذف مباشر
+    // سجل أُنشئ/عُدّل بعد الحذف = إعادة إنشاء حقيقية => يعيش (وإلا كنا منعنا إعادة إنشائه)
+    return recordStamp(row) > at;
+  });
+}
+
+// شواهد الحذف لا تُستبدل: جهاز قديم يرفع شواهده الناقصة مايقدرش يلغي حذفاً تمّ.
+// نُبقي الاتحاد (الشاهد الأحدث وقتاً يفوز) حتى لا يعود سجل محذوف للحياة من نسخة قديمة.
+export function mergeTombstones(stored, incoming) {
+  const out = new Map();
+  const take = (list) => {
+    for (const tomb of Array.isArray(list) ? list : []) {
+      if (!tomb || typeof tomb.key !== 'string' || typeof tomb.id !== 'string') continue;
+      const id = `${tomb.key}:${tomb.id}`;
+      const at = Number(tomb.at) || 0;
+      const previous = out.get(id);
+      if (!previous || at > (Number(previous.at) || 0)) out.set(id, { ...tomb, at });
+    }
+  };
+  take(stored);
+  take(incoming);
+  return [...out.values()];
+}
+
 // مقارنة بزمن ثابت: تمنع استنتاج المفتاح من فرق زمن الرد
 export const safeEqual = (a, b) => {
   const x = String(a || '');
@@ -189,16 +248,29 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
         if (isStaleSession(db)) return endStaleSession();
         const data = db.data || {};
 
-        // كلمات المرور: الإدارة (رتبة admin) وحدها تستطيع تغييرها، ولا تُمسح لسجل موجود
-        const accept = (key, value) =>
-          key === 'crm_users'
-            ? preserveUserPasswords(value, data.crm_users, { canManage: session?.r === 'admin' })
-            : value;
+        // شواهد الحذف تُطبَّق أولاً (وبالدمج لا الاستبدال) حتى تُحترم في نفس الطلب
+        // وحتى لا يمحوها جهاز قديم فتعود السجلات المحذوفة للحياة
+        const tombstonesIn = body?.data?.[TOMBSTONE_DATA_KEY];
+        if (isValidKey(TOMBSTONE_DATA_KEY) && isValidRecords(tombstonesIn)) {
+          data[TOMBSTONE_DATA_KEY] = mergeTombstones(data[TOMBSTONE_DATA_KEY], tombstonesIn);
+        }
+        const tombstones = () => (Array.isArray(data[TOMBSTONE_DATA_KEY]) ? data[TOMBSTONE_DATA_KEY] : []);
+
+        // الدمج أولاً ثم كلمات المرور: الإدارة (رتبة admin) وحدها تستطيع تغييرها،
+        // ولا تُمسح كلمة مرور سجل موجود (server/auth.js: preserveUserPasswords)
+        const accept = (key, value) => {
+          if (key === TOMBSTONE_DATA_KEY) return mergeTombstones(data[TOMBSTONE_DATA_KEY], value);
+          const merged = mergeKeepingRecords(key, value, data[key], tombstones());
+          return key === 'crm_users'
+            ? preserveUserPasswords(merged, data.crm_users, { canManage: session?.r === 'admin' })
+            : merged;
+        };
 
         if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
           const entries = Object.entries(body.data);
           if (entries.length > 40) return send(res, 400, { error: 'too many keys' });
           for (const [key, value] of entries) {
+            if (key === TOMBSTONE_DATA_KEY) continue; // عولجت قبل الدمج
             if (isValidKey(key) && isValidRecords(value)) data[key] = accept(key, value);
           }
         } else if (isValidKey(body.key) && isValidRecords(body.value)) {

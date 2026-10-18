@@ -287,7 +287,8 @@ const tick = async (): Promise<void> => {
       const now = idSet(current[key]);
       for (const id of before) {
         if (!now.has(id) && !isDeleted(tombstones, key, id)) {
-          tombstones.push({ key, id });
+          // الوقت مهم: به يفرّق السيرفر بين «محذوف» و«أُعيد إنشاؤه لاحقاً»
+          tombstones.push({ key, id, at: Date.now() });
           added = true;
         }
       }
@@ -395,18 +396,25 @@ const recordDeletions = async (key: string, removedIds: string[]): Promise<void>
   await pushOne(TOMBSTONE_KEY); // الشواهد أولاً حتى لا تُحيي القائمة الجديدة السجل المحذوف
 };
 
-export async function pushKey(key: string): Promise<void> {
+// القيمة الراجعة: true لو وصل التغيير لقاعدة البيانات فعلاً.
+// الشاشات التي تُنشئ حساباً أو عميلاً تحتاج هذه الإجابة، لأن الحفظ المحلي وحده
+// يجعل السجل موجوداً على هذا الجهاز فقط — فيبدو لمن يجرّب الدخول من جهازه «مش شغّال».
+export async function pushKey(key: string): Promise<boolean> {
   try {
     const raw = localStorage.getItem(key);
-    if (raw === null) return;
+    if (raw === null) return false;
     // أي معرّف اختفى عن القائمة منذ آخر مزامنة = حذف حقيقي، وله شاهد حذف يسبق الرفع
     const before = idSet(snapshot[key]);
     const removed = [...before].filter((id) => !idSet(raw).has(id));
     await recordDeletions(key, removed);
-    snapshot[key] = raw;
     await pushOne(key);
+    // تُسجَّل "مرفوعة" فقط بعد نجاح الرفع: لو فشل (انقطاع الشبكة أو خطأ في القاعدة)
+    // يظل المفتاح "مُعدَّلاً" في العين التالية للمزامنة فيُعاد رفعه تلقائياً،
+    // بدل أن يضيع التغيير (وهو ما يجعل حساباً منشأً لا يصل للقاعدة أبداً).
+    snapshot[key] = raw;
+    return true;
   } catch {
-    /* لا شيء */
+    return false;
   }
 }
 

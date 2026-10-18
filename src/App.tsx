@@ -364,34 +364,9 @@ const parsePrice = (price: string): number => {
   return isNaN(num) ? 0 : num;
 };
 
-// ===== واتساب: فتح محادثة برقم العميل مع رسالة عربية جاهزة =====
-const WA_TEMPLATE_KEY = 'crm_whatsapp_template';
-const DEFAULT_WA_TEMPLATE =
-  'السلام عليكم{الاسم} 👋\nمعك {الموظف} من شركة إعمار جروب العقارية.\nبخصوص استفسارك عن العقارات، تحب أحدد لك موعد معاينة يناسبك؟';
-
-const getWaTemplate = (): string => {
-  try {
-    const saved = localStorage.getItem(WA_TEMPLATE_KEY);
-    return saved && saved.trim() ? saved : DEFAULT_WA_TEMPLATE;
-  } catch {
-    return DEFAULT_WA_TEMPLATE;
-  }
-};
-
-const saveWaTemplate = (value: string): void => {
-  try {
-    localStorage.setItem(WA_TEMPLATE_KEY, value);
-  } catch {
-    /* لا شيء */
-  }
-};
-
-// {الاسم} => اسم العميل | {الموظف} => اسم مندوب المبيعات
-const fillWaTemplate = (template: string, vars: { name?: string; employee?: string }): string =>
-  String(template || '')
-    .replace(/\{الاسم\}/g, vars.name ? ` ${vars.name}` : '')
-    .replace(/\{الموظف\}/g, vars.employee || 'فريق المبيعات');
-
+// ===== واتساب: فتح محادثة على رقم العميل مباشرة =====
+// بلا أي رسالة مكتوبة مسبقاً: النظام يفتح واتساب على الرقم فقط،
+// والمندوب يكتب بنفسه ما يناسب العميل. (لا يوجد قالب ولا نص يُحقن في المحادثة.)
 // الصيغة الدولية التي يقبلها واتساب (مصر 20 هي الافتراضية)
 const waPhone = (raw: string): string => {
   let digits = normalizeDigits(String(raw ?? '')).replace(/\D/g, '');
@@ -403,8 +378,7 @@ const waPhone = (raw: string): string => {
   return digits;
 };
 
-const waLink = (phone: string, message: string): string =>
-  `https://wa.me/${waPhone(phone)}?text=${encodeURIComponent(message)}`;
+const waLink = (phone: string): string => `https://wa.me/${waPhone(phone)}`;
 
 // ===== رابط المشاركة العامة لصفحة العقار (تُفتح لأي عميل بلا تسجيل دخول) =====
 const publicPropertyUrl = (id: string): string => {
@@ -558,6 +532,17 @@ const scheduleFollowUp = (client: Client, stageLabel: string, ownerId?: string):
   } catch {
     return false;
   }
+};
+
+// قيمة حقل <input type="datetime-local"> الافتراضية عند إضافة عميل:
+// اليوم السادسة مساءً، وإذا فات الوقت فبكرة — فيبقى الحقل صالحاً دائماً
+// بدون أن يحتاج أحد لكتابة تاريخ يدوياً (مع إمكانية تفريغه).
+const nextReminderInput = (): string => {
+  const at = new Date();
+  at.setHours(18, 0, 0, 0);
+  if (at.getTime() <= Date.now()) at.setDate(at.getDate() + 1);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`;
 };
 
 // ===== البحث الذكي: فهم احتياجات العميل من نص عربي حر =====
@@ -1895,7 +1880,7 @@ function App() {
   const inTeam = (id?: string) => !teamMemberIds || !!id && teamMemberIds.has(id);
   const scopedUsers = teamMemberIds ? users.filter((u) => teamMemberIds.has(u.id)) : users;
   const scopedClients = teamMemberIds ? clients.filter((c) => inTeam(c.userId) || inTeam(c.assignedTo)) : clients;
-  const scopedLeads = teamMemberIds ? assignedLeads.filter((l) => inTeam(l.salesId)) : assignedLeads;
+  const scopedLeads = teamMemberIds ? assignedLeads.filter((l) => inTeam(l.salesId) || !l.salesId) : assignedLeads;
   const scopedCallLogs = teamMemberIds ? callLogs.filter((l) => inTeam(l.salesId)) : callLogs;
   const scopedFeedbacks = teamMemberIds ? dailyFeedbacks.filter((f) => inTeam(f.userId)) : dailyFeedbacks;
   const scopedReminders = teamMemberIds ? reminders.filter((r) => inTeam(r.userId)) : reminders;
@@ -2070,43 +2055,41 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* شريط «أنت داخل حساب سيلز» — يظل ظاهراً في أعلى الشاشة حتى ترجع للإدارة */}
-      {impersonator && (
-        <div className="sticky top-0 z-50 bg-amber-400/10 border-b-2 border-amber-400/60">
-          <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2 sm:py-2.5 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs sm:text-sm min-w-0">
-              <UserCog className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300 shrink-0" />
-              <span className="text-[var(--text-strong)] font-bold truncate">
-                أنت الآن داخل حساب <span className="text-amber-300">{currentUser.name}</span>
-              </span>
-              <span className="hidden lg:inline text-[11px] text-[var(--text)]/80">
-                — ما تراه الآن هو ما يراه هذا الحساب بالضبط
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <motion.button
-                whileHover={{ scale: 1.03 }}
-                whileTap={{ scale: 0.97 }}
-                onClick={handleReturnToAdmin}
-                className="bg-amber-400 text-slate-900 px-3 sm:px-4 py-1.5 sm:py-2 rounded-[var(--r-md)] font-bold text-[11px] sm:text-xs flex items-center gap-1.5 sm:gap-2 hover:bg-amber-300 transition-colors shadow"
-              >
-                <Undo2 className="w-4 h-4" />
-                <span className="sm:hidden">الرجوع للإدارة</span>
-                <span className="hidden sm:inline">الرجوع لحساب: {impersonator.name}</span>
-              </motion.button>
-              <button
-                onClick={handleLogout}
-                title="خروج نهائي من النظام"
-                className="p-1.5 sm:p-2 bg-black/30 text-[var(--text)] rounded-[var(--r-md)] hover:bg-black/50 transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-            </div>
+      {/* شريط «أنت داخل حساب سيلز» — يُرسم عبر Portal خارج شجرة التطبيق.
+          السبب: جذر التطبيق يتحرك بحركة دخول (transform)، وأي عنصر `fixed` داخل
+          عنصر متحرك يصبح مثبتاً بالنسبة له لا بالنسبة للشاشة — فيتحرك مع التمرير
+          ويتداخل مع العنوان. الـ Portal يضعه في `body` مباشرة فيثبت على الشاشة. */}
+      {impersonator && createPortal(
+        <div className="imp-bar">
+          <UserCog className="w-4 h-4 imp-bar-icon" aria-hidden="true" />
+          <span className="imp-bar-text">
+            أنت الآن داخل حساب <span className="imp-bar-who">{currentUser.name}</span>
+            <span className="imp-bar-note">— ما تراه الآن هو ما يراه هذا الحساب بالضبط</span>
+          </span>
+          <div className="imp-bar-actions">
+            <motion.button
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={handleReturnToAdmin}
+              className="imp-bar-back"
+            >
+              <Undo2 className="w-4 h-4" aria-hidden="true" />
+              <span className="sm:hidden">الرجوع للإدارة</span>
+              <span className="hidden sm:inline">الرجوع لحساب: {impersonator.name}</span>
+            </motion.button>
+            <button
+              onClick={handleLogout}
+              title="خروج نهائي من النظام"
+              className="p-1.5 bg-black/30 text-[var(--text)] rounded-[var(--r-md)] hover:bg-black/50 transition-colors"
+            >
+              <LogOut className="w-4 h-4" aria-hidden="true" />
+            </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      <div className="app-shell">
+      <div className={`app-shell ${impersonator ? 'has-impersonator' : ''}`}>
         {/* القائمة الجانبية — على يمين الشاشة */}
         <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''} ${desktopNavHidden ? 'rail' : ''}`}>
           <div className="sidebar-brand">
@@ -2184,7 +2167,7 @@ function App() {
 
         {/* المنطقة الرئيسية */}
         <div className="app-main">
-          <header className="app-topbar">
+          <header className={`app-topbar ${impersonator ? 'topbar-offset' : ''}`}>
             <button
               onClick={() => {
                 // موبايل: فتح/إغلاق الدرج — كمبيوتر: طي القائمة إلى أيقونات فقط
@@ -3285,6 +3268,14 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
           {loginType === 'admin' ? 'دخول الإدارة' : 'دخول المندوبين'}
         </h1>
 
+        {/* توضيح يمنع أشهر سبب لتدويس «الحساب مش شغّال»: حساب قائد الفريق حساب
+            إدارة فيدخل من بوابة الإدارة، وبوابة المندوبين تقبل حساب Sales فقط. */}
+        <p className="text-[11px] leading-relaxed text-[var(--text-muted)] mb-3">
+          {loginType === 'admin'
+            ? 'هنا يدخل حساب الإدارة (CEO) وقادة الفرق (Team Leader).'
+            : 'هنا يدخل حساب المندوب (Sales Agent) فقط — أما قائد الفريق فيدخل من بوابة «الإدارة».'}
+        </p>
+
         <div className="login-card">
           <motion.form
             onSubmit={handleLogin}
@@ -3818,6 +3809,9 @@ const FEEDBACK_STATUS_BY_ID: Record<string, { id: string; label: string; ar: str
   Object.fromEntries(FEEDBACK_STATUSES.map((status) => [status.id, status]));
 // الكومنت المكتوب تلقائياً عند اختيار «no answer» — يظهر في خانة الكومنتات كما هو
 const NO_ANSWER_COMMENT = 'No answer';
+// كومنت البطاقة التلقائية عند إضافة عميل جديد بلا كومنت مكتوب —
+// فالعميل يظهر في تبويب الفيدباك من لحظته الأولى بلا أي خطوة يدوية.
+const NEW_CLIENT_FEEDBACK = 'عميل جديد — لم يتم التواصل معه بعد';
 
 // آخر حالة فيدباك على العميل: أحدث حدث في الخط الزمني يحمل حالة (الأحداث مرتّبة بالأحدث أولاً)
 const latestFeedbackStatusOf = (c: any): string =>
@@ -5125,34 +5119,14 @@ function NotificationsPanel({ user, notifState, setNotifState, settings, onSaveS
 function WhatsAppComposer({ name, phones, onClose, onOpened }: { name?: string; phones: string[]; onClose: () => void; onOpened?: () => void }) {
   const list = Array.from(new Set((phones || []).map((p) => String(p || '').trim()).filter(Boolean)));
   const [phone, setPhone] = useState(list[0] || '');
-  const [template, setTemplate] = useState(getWaTemplate);
-  const [savedFlash, setSavedFlash] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const me = (() => {
-    try {
-      return JSON.parse(localStorage.getItem('current_user') || 'null');
-    } catch {
-      return null;
-    }
-  })();
-  const message = fillWaTemplate(template, { name, employee: me?.name });
   const target = waPhone(phone);
   const ready = target.length >= 10;
 
+  // نفتح واتساب على الرقم مباشرة — بلا أي رسالة مكتوبة مسبقاً
   const openWhatsApp = () => {
     if (!ready) return;
-    window.open(waLink(phone, message), '_blank', 'noopener,noreferrer');
+    window.open(waLink(phone), '_blank', 'noopener,noreferrer');
     onOpened?.();
-  };
-
-  const copyMessage = async () => {
-    try {
-      await navigator.clipboard.writeText(message);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch {
-      setCopied(false);
-    }
   };
 
   return (
@@ -5194,31 +5168,9 @@ function WhatsAppComposer({ name, phones, onClose, onOpened }: { name?: string; 
           <p className="text-sm text-[var(--text-muted)] mb-4" dir="ltr">{phone || 'لا يوجد رقم مسجّل'}</p>
         )}
 
-        <label className="block text-xs text-[var(--text-muted)] mb-1">
-          الرسالة (اكتب <span className="text-emerald-300">{'{الاسم}'}</span> ليظهر مكانه اسم العميل)
-        </label>
-        <textarea value={template} onChange={(e) => setTemplate(e.target.value)} rows={4}
-          className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] text-sm resize-y" />
-        <div className="flex flex-wrap gap-2 mt-2">
-          <button type="button" onClick={() => setTemplate(DEFAULT_WA_TEMPLATE)}
-            className="text-xs bg-[var(--tint-1)] hover:bg-[var(--tint-2)] border border-[var(--border)] text-[var(--text)] px-3 py-1.5 rounded-[var(--r-sm)]">
-            استعادة الافتراضي
-          </button>
-          <button type="button"
-            onClick={() => { saveWaTemplate(template); setSavedFlash(true); setTimeout(() => setSavedFlash(false), 1800); }}
-            className="text-xs bg-[var(--brand-primary-softer)] hover:bg-[var(--brand-primary-soft)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-3 py-1.5 rounded-[var(--r-sm)]">
-            {savedFlash ? 'تم الحفظ ✓' : 'حفظ كقالب دائم'}
-          </button>
-          <button type="button" onClick={copyMessage}
-            className="text-xs bg-[var(--tint-1)] hover:bg-[var(--tint-2)] border border-[var(--border)] text-[var(--text)] px-3 py-1.5 rounded-[var(--r-sm)]">
-            {copied ? 'تم النسخ ✓' : 'نسخ الرسالة'}
-          </button>
-        </div>
-
-        <div className="mt-4 rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] px-4 py-3">
-          <p className="text-[11px] text-[var(--text-muted)] mb-1">الرسالة التي ستُرسل:</p>
-          <p className="text-sm text-[var(--text)] whitespace-pre-line">{message}</p>
-        </div>
+        <p className="text-xs text-[var(--text-muted)] mb-4 leading-relaxed">
+          يُفتح واتساب على الرقم مباشرة، بلا أي رسالة مكتوبة مسبقاً — تكتب أنت ما يناسب العميل داخل المحادثة.
+        </p>
 
         {!ready && list.length > 0 && (
           <p className="text-xs text-amber-400 mt-3"> الرقم غير مكتمل — اكتبه بصيغة 01xxxxxxxxx أو 201xxxxxxxxx</p>
@@ -5227,7 +5179,7 @@ function WhatsAppComposer({ name, phones, onClose, onOpened }: { name?: string; 
         <div className="flex flex-col sm:flex-row gap-2 mt-5">
           <button type="button" onClick={openWhatsApp} disabled={!ready}
             className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-[var(--tint-1)] disabled:text-[var(--text-dim)] text-white py-3 rounded-[var(--r-md)] font-bold flex items-center justify-center gap-2">
-            <MessageCircle className="w-5 h-5" /> فتح واتساب وإرسال
+            <MessageCircle className="w-5 h-5" /> فتح واتساب على الرقم
           </button>
           <button type="button" onClick={onClose}
             className="sm:w-32 bg-[var(--tint-2)] hover:bg-[var(--tint-3)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إغلاق</button>
@@ -5246,7 +5198,7 @@ function WhatsAppButton({ name, phones, label = 'واتساب', className = '', 
       <button
         type="button"
         disabled={available.length === 0}
-        title={available.length ? 'إرسال واتساب برسالة جاهزة' : 'لا يوجد رقم مسجّل'}
+        title={available.length ? 'فتح واتساب على رقم العميل' : 'لا يوجد رقم مسجّل'}
         onClick={(e) => { e.stopPropagation(); if (available.length) setOpen(true); }}
         className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-[var(--r-sm)] border transition-colors ${
           available.length
@@ -6371,11 +6323,29 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
     setView(next);
     localStorage.setItem('crm_admin_users_tab', next);
   };
-  // إعداد الكامبينات للمدير وحده (قائد الفريق يرى حسابات فريقه فقط)
   const isAdmin = currentUser?.role === 'admin';
+  // سحب أرقام الكامبين متاح للإدارة كلها: CEO و Team Leader.
+  // السيرفر يسمح للرتبتين بنفس الصلاحية (isManagerRole في api/lead-source)،
+  // فقائد الفريق يستطيع لصق التوكن (الكود) وسحب أرقام كامبين لتوزيعها على فريقه.
+  const canPullCampaigns = currentUser?.role === 'admin' || currentUser?.role === 'supervisor';
   // حماية: لا يُحذف حساب CEO الرئيسي، ولا يستطيع قائد الفريق حذف أو تعديل الـ CEO
-  const canDelete = (user: User) =>
-    user.role !== 'admin' && user.id !== currentUser.id && !(currentUser.role === 'supervisor' && user.role === 'supervisor');
+  // حساب الإدارة الأساسي (admin) يمكنه حذف حسابات المدراء (supervisor) وحسابات الإدارة الأخرى
+  const isMainAdmin = currentUser?.role === 'admin' && currentUser?.username === 'admin';
+  const canDelete = (user: User) => {
+    if (user.id === currentUser.id) return false;
+    if (user.role === 'admin' && user.username === 'admin' && currentUser.username === 'admin') return false; // لا يحذف نفسه
+    // admin الرئيسي يمكنه حذف أي حساب ماعدا نفسه وحساب admin الرئيسي إن وجد آخر
+    if (isMainAdmin) {
+      // لا يسمح بحذف حساب admin الرئيسي نفسه
+      if (user.username === 'admin' && user.role === 'admin') return false;
+      return true; // يمكنه حذف المدراء والإداريين الآخرين
+    }
+    // بقية الإداريين: لا يستطيعون حذف حسابات admin
+    if (user.role === 'admin') return false;
+    // قائد الفريق لا يستطيع حذف قائد فريق آخر
+    if (currentUser.role === 'supervisor' && user.role === 'supervisor') return false;
+    return true;
+  };
   const canEdit = (user: User) =>
     user.id !== currentUser.id ? !(currentUser.role === 'supervisor' && user.role === 'admin') : true;
   // الدخول لحساب سيلز متاح للإدارة فقط، وبدون أي كلمة مرور
@@ -6395,7 +6365,7 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
 
       {/* التبويبات: الحسابات / كامبين فيسبوك / كامبين إنستجرام — كل قناة معزولة بإعدادها.
           نفس شكل شريط التبديل المستخدم في كل مكان تاني في النظام. */}
-      {isAdmin && (
+      {canPullCampaigns && (
         <div className="seg-bar" role="tablist" aria-label="فريق العمل والكامبينات">
           {([['accounts', 'الحسابات'], ['facebook', 'فيسبوك'], ['instagram', 'إنستجرام']] as Array<['accounts' | LeadChannel, string]>).map(([id, label]) => (
             <button
@@ -8084,8 +8054,17 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
   const isAdmin = currentUser?.role !== 'sales';
   // المدير يضيف العميل لمندوب بعينه حتى يظهر للفريق (الإدارة مالها تبويب عملاء خاص)
   const reps = (users || []).filter((u: User) => u.role === 'sales' || u.role === 'supervisor');
-  const [form, setForm] = useState({ name: '', phone: '', phones: [] as string[], property: '', budget: '', monthlyInstallment: '', deliveryPeriod: '', status: 'campaign', stage: 'new', feedback: '', priority: 'medium', source: '', ownerId: '' });
+  const [form, setForm] = useState({
+    name: '', phone: '', phones: [] as string[], property: '', budget: '', monthlyInstallment: '', deliveryPeriod: '',
+    status: 'campaign', stage: 'new', feedback: '', feedbackStatus: 'follow-up',
+    reminderAt: nextReminderInput(), priority: 'medium', source: '', ownerId: '',
+  });
   const [newPhone, setNewPhone] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  // معرّف العميل بعد حفظه محلياً: لو فشل الوصول لقاعدة البيانات نعيد المحاولة
+  // على نفس السجل بدل إنشاء نسخة مكرّرة.
+  const [createdId, setCreatedId] = useState('');
   
   const addPhone = () => {
     if (newPhone && !form.phones.includes(newPhone)) {
@@ -8098,23 +8077,108 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
     setForm({ ...form, phones: form.phones.filter(p => p !== phone) });
   };
   
-  const handleSubmit = (e: React.FormEvent) => {
+  // ===== الحفظ: العميل + الفيدباك + التذكير في خطوة واحدة، ثم رفعهم لقاعدة البيانات =====
+  // الحفظ المحلي وحده كان يجعل العميل/الفيدباك موجودين على هذا الجهاز فقط،
+  // فلا يراه صاحب العميل ولا الإدارة ولا التذكيرات — وهذا هو سبب إحساس
+  // «الميزة مش شغّالة». هنا تُكتب البطاقات فعلاً ويُتحقق من وصولها للسيرفر.
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const clients = JSON.parse(localStorage.getItem('crm_clients') || '[]');
-    const now = new Date().toISOString();
-    const { ownerId, ...rest } = form;
-    const owner = isAdmin ? (ownerId || reps[0]?.id || currentUser.id) : currentUser.id;
-    const newClient = {
-      ...rest,
-      id: crypto.randomUUID(),
-      userId: owner,
-      createdAt: now,
-      updatedAt: now,
-      activities: [{ id: crypto.randomUUID(), type: 'created', text: 'تمت إضافة العميل', at: now, by: currentUser?.name || '' }],
-    };
-    localStorage.setItem('crm_clients', JSON.stringify([newClient, ...clients]));
-    onSuccess();
-    onClose();
+    if (saving) return;
+    setError('');
+    const owner = isAdmin ? form.ownerId.trim() : currentUser.id;
+    if (!owner) {
+      setError('اختر السيلز المسؤول عن العميل أولاً');
+      return;
+    }
+    const comment = form.feedback.trim();
+    setSaving(true);
+    try {
+      const now = new Date().toISOString();
+      const existing: Client[] = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+      const alreadySaved = !!createdId && existing.some((c) => c.id === createdId);
+
+      if (!alreadySaved) {
+        const { ownerId, feedbackStatus, reminderAt, ...rest } = form;
+        const newClient: Client = {
+          ...rest,
+          id: crypto.randomUUID(),
+          userId: owner,
+          assignedTo: owner,
+          createdAt: now,
+          updatedAt: now,
+          activities: [{ id: crypto.randomUUID(), type: 'created', text: 'تمت إضافة العميل', at: now, by: currentUser?.name || '' }],
+        } as Client;
+        localStorage.setItem('crm_clients', JSON.stringify([newClient, ...existing]));
+        setCreatedId(newClient.id);
+
+        // الفيدباك الأول: يُصبح بطاقة في «الفيدباك اليومي» باسم كاتبه + حدثاً في خط العميل.
+        // ولو مافيش كومنت مكتوب: تُنشأ بطاقة «مرحلة جديدة» باسم صاحب العميل،
+        // فالعميل الجديد يظهر في تبويب الفيدباك مباشرة بلا خطوة يدوية.
+        if (comment) {
+          addClientActivity(newClient.id, 'feedback', comment, currentUser?.name || '', {
+            authorId: currentUser.id,
+            status: feedbackStatus,
+            callStatus: feedbackStatus === 'no-answer' ? 'no-answer' : 'called',
+          });
+        } else {
+          addClientActivity(newClient.id, 'feedback', NEW_CLIENT_FEEDBACK, currentUser?.name || '', {
+            skipCard: true,
+            status: 'fresh-stage',
+            callStatus: 'not-called',
+          });
+          const allFeedbacks: DailyFeedback[] = JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]');
+          const card: DailyFeedback = {
+            id: crypto.randomUUID(),
+            userId: owner,
+            clientPhone: newClient.phone,
+            clientName: newClient.name,
+            date: now,
+            feedback: NEW_CLIENT_FEEDBACK,
+            callStatus: 'not-called',
+            status: 'fresh-stage',
+            createdAt: now,
+          };
+          localStorage.setItem('crm_daily_feedback', JSON.stringify([card, ...allFeedbacks]));
+        }
+
+        // التذكير: ينزل في تبويب التذكيرات عند صاحب العميل مباشرة
+        if (reminderAt) {
+          const allReminders: Reminder[] = JSON.parse(localStorage.getItem('crm_reminders') || '[]');
+          const reminder: Reminder = {
+            id: crypto.randomUUID(),
+            userId: owner,
+            clientId: newClient.id,
+            clientName: newClient.name,
+            clientPhone: newClient.phone,
+            dateTime: new Date(reminderAt).toISOString(),
+            note: comment ? `متابعة العميل الجديد: ${comment}` : 'متابعة العميل الجديد',
+            isCompleted: false,
+            isDelayed: false,
+            delayCount: 0,
+            createdAt: now,
+          };
+          localStorage.setItem('crm_reminders', JSON.stringify([reminder, ...allReminders]));
+        }
+      }
+
+      // الرفع: كل مفتاح على حدة حتى نعرف أي جزء لم يصل للقاعدة
+      const [clientsOk, remindersOk, feedbackOk] = await Promise.all([
+        pushKey('crm_clients'),
+        form.reminderAt ? pushKey('crm_reminders') : Promise.resolve(true),
+        // بطاقة الفيدباك تُنشأ دائماً (كومنت مكتوب أو «مرحلة جديدة» تلقائياً)
+        pushKey('crm_daily_feedback'),
+      ]);
+      onSuccess();
+      if (clientsOk && remindersOk && feedbackOk) {
+        onClose();
+        return;
+      }
+      setError('العميل اتسجل على الشاشة دي لكن ماوصلش لقاعدة البيانات — تأكد من الاتصال واضغط «إعادة المحاولة» لرفعه.');
+    } catch {
+      setError('تعذّر حفظ العميل — حاول مرة أخرى');
+    } finally {
+      setSaving(false);
+    }
   };
   
   return (
@@ -8182,8 +8246,42 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
             <option value="closed" className="bg-gray-900">تم البيع</option>
             <option value="lost" className="bg-gray-900">ضائع</option>
           </select>
-          <textarea placeholder="ملاحظات" value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-24" />
-          <button type="submit" className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إضافة</button>
+          {/* فيدباك أول للعميل: حالة + كومنت — ينزل في تبويب «الفيدباك» فوراً */}
+          <div className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3.5 space-y-3">
+            <div>
+              <label className="block text-xs font-bold text-[var(--text)] mb-1.5">أول فيدباك للعميل (حالة + كومنت)</label>
+              <StatusMenu
+                value={form.feedbackStatus}
+                label="اختر حالة الفيدباك"
+                stopPropagation={false}
+                onPick={(optionId: string) =>
+                  setForm({
+                    ...form,
+                    feedbackStatus: optionId,
+                    // المرحلة تتحرّك مع الحالة المختارة، فيظهر العميل في مكانه الصحيح
+                    ...(FEEDBACK_STATUS_BY_ID[optionId]?.stage ? { stage: FEEDBACK_STATUS_BY_ID[optionId].stage } : {}),
+                    ...(optionId === 'no-answer' && !form.feedback.trim() ? { feedback: NO_ANSWER_COMMENT } : {}),
+                  })
+                }
+              />
+            </div>
+            <textarea placeholder="اكتب كومنت الفيدباك — ولو سيبته فاضي ينزل العميل في الفيدباك كـ«مرحلة جديدة لم يتم التواصل معه»"
+              value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })}
+              className="w-full bg-[var(--surface)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-20" />
+            <div>
+              <label className="block text-xs font-bold text-[var(--text)] mb-1.5">تذكير المتابعة</label>
+              <input type="datetime-local" value={form.reminderAt} dir="ltr"
+                onChange={(e) => setForm({ ...form, reminderAt: e.target.value })}
+                className="w-full bg-[var(--surface)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
+              <p className="text-[11px] text-[var(--text-dim)] mt-1.5">
+                ينزل مباشرة في تبويب «التذكيرات» عند السيلز المسؤول — افرغ الحقل لو ما تحبّش تذكير.
+              </p>
+            </div>
+          </div>
+          {error && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-[var(--r-md)] px-3 py-2">{error}</p>}
+          <button type="submit" disabled={saving} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-60">
+            {saving ? 'جارٍ الحفظ...' : createdId ? 'إعادة المحاولة' : 'إضافة'}
+          </button>
         </form>
       </motion.div>
     </motion.div>
@@ -8780,10 +8878,15 @@ function AddUserModal({ currentUser, users = [], onClose, onSuccess }: any) {
   const canCreateCeo = isCeoRole(currentUser?.role);
   const [form, setForm] = useState({ username: '', password: '', name: '', phone: '', role: canCreateCeo ? 'admin' : 'sales', team: '' });
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  // معرّف الحساب بعد حفظه على هذا الجهاز: لو ماوصلش لقاعدة البيانات نعيد المحاولة
+  // بنفس الحساب بدل ما ننشئ واحداً آخر يكسر الدخول.
+  const [createdId, setCreatedId] = useState('');
   const teamNames = Array.from(new Set((users || []).map((u: User) => u.team).filter(Boolean))) as string[];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
     setError('');
     const clean = { username: form.username.trim(), name: form.name.trim(), phone: form.phone.trim() };
     if (!/^[A-Za-z0-9._-]{3,24}$/.test(clean.username)) {
@@ -8800,27 +8903,41 @@ function AddUserModal({ currentUser, users = [], onClose, onSuccess }: any) {
       return;
     }
     const store = JSON.parse(localStorage.getItem('crm_users') || '[]') as User[];
-    if (store.some((u) => u.username.toLowerCase() === clean.username.toLowerCase())) {
+    if (!createdId && store.some((u) => u.username.toLowerCase() === clean.username.toLowerCase())) {
       setError('اسم المستخدم موجود بالفعل');
       return;
     }
-    const newUser: User = {
-      username: clean.username,
-      // تُحفظ كما أُرسلت: نصاً تراها الإدارة في حسابات السيلز
-      password: form.password,
-      name: clean.name,
-      phone: clean.phone,
-      role: form.role as User['role'],
-      team: form.team.trim(),
-      isActive: true,
-      id: crypto.randomUUID(),
-      createdAt: new Date().toISOString(),
-      createdBy: currentUser.id,
-    };
-    localStorage.setItem('crm_users', JSON.stringify([...store, newUser]));
-    await pushKey('crm_users');
-    onSuccess();
-    onClose();
+    setSaving(true);
+    try {
+      if (!createdId) {
+        const newUser: User = {
+          username: clean.username,
+          // تُحفظ كما أُرسلت: نصاً تراها الإدارة في حسابات السيلز
+          password: form.password,
+          name: clean.name,
+          phone: clean.phone,
+          role: form.role as User['role'],
+          team: form.team.trim(),
+          isActive: true,
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+          createdBy: currentUser.id,
+        };
+        localStorage.setItem('crm_users', JSON.stringify([...store, newUser]));
+        setCreatedId(newUser.id);
+      }
+      // لا نعتبر الحساب منشأً قبل أن يصل لقاعدة البيانات: الدخول يمرّ بالسيرفر،
+      // فحساب موجود على هذا الجهاز وحده لا يستطيع صاحبه أن يسجّل الدخول.
+      const savedToDb = await pushKey('crm_users');
+      if (!savedToDb) {
+        setError('الحساب اتسجّل على الجهاز ده لكن ماوصلش لقاعدة البيانات — من غير وصوله مايقدرش صاحبه يدخل من جهازه. تأكد من الاتصال واضغط «إعادة المحاولة».');
+        return;
+      }
+      onSuccess();
+      onClose();
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -8864,7 +8981,9 @@ function AddUserModal({ currentUser, users = [], onClose, onSuccess }: any) {
             </datalist>
           </div>
           {error && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-[var(--r-md)] px-3 py-2">{error}</p>}
-          <button type="submit" className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إنشاء الحساب</button>
+          <button type="submit" disabled={saving} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-60">
+            {saving ? 'جارٍ الحفظ...' : createdId ? 'إعادة المحاولة' : 'إنشاء الحساب'}
+          </button>
         </form>
       </motion.div>
     </motion.div>
