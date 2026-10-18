@@ -1247,6 +1247,29 @@ function App() {
     if (!currentUser) return;
     resyncPush({ id: currentUser.id, name: currentUser.name }).then(setNotifState).catch(() => {});
   }, [currentUser?.id, showNotifyPanel]);
+
+  // ===== قياس ارتفاع الشريط العلوي فعلياً =====
+  // الشريط ثابت (fixed)، فالمحتوى يحتاج مساحة محجوزة بمقداره — وارتفاعه يتغيّر
+  // مع حجم الشاشة والخط وطول اسم الحساب. القياس هنا يمنع أي نص يمرّ تحته.
+  useEffect(() => {
+    const root = document.documentElement;
+    const measure = () => {
+      const bar = document.querySelector('.app-topbar');
+      const height = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
+      if (height > 0) root.style.setProperty('--topbar-h', `${height}px`);
+    };
+    measure();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    const bar = document.querySelector('.app-topbar');
+    if (observer && bar) observer.observe(bar);
+    window.addEventListener('resize', measure);
+    window.addEventListener('orientationchange', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('orientationchange', measure);
+    };
+  }, [currentUser?.id, desktopNavHidden, sidebarOpen]);
   const [loginAnimation, setLoginAnimation] = useState<User | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [deletingUser, setDeletingUser] = useState<User | null>(null);
@@ -2014,11 +2037,14 @@ function App() {
     setCallClient(null);
   };
 
+  // ملاحظة: الدخول بتلاشي فقط، بلا `scale` عمداً.
+  // أي `transform` على جذر التطبيق يجعل العناصر الثابتة داخله (الشريط العلوي
+  // والقائمة الجانبية) مثبّتة بالنسبة له لا بالنسبة للشاشة، فتتحرك مع التمرير.
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0.98 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.5, ease: 'easeOut' }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.35, ease: 'easeOut' }}
       className="app-root"
     >
       <div className="bg-orb bg-orb-1"></div>
@@ -2060,27 +2086,26 @@ function App() {
           عنصر متحرك يصبح مثبتاً بالنسبة له لا بالنسبة للشاشة — فيتحرك مع التمرير
           ويتداخل مع العنوان. الـ Portal يضعه في `body` مباشرة فيثبت على الشاشة. */}
       {impersonator && createPortal(
-        <div className="imp-bar">
-          <UserCog className="w-4 h-4 imp-bar-icon" aria-hidden="true" />
+        <div className="imp-bar" role="status">
+          <span className="imp-bar-mark" aria-hidden="true"><UserCog className="w-3.5 h-3.5" /></span>
           <span className="imp-bar-text">
-            أنت الآن داخل حساب <span className="imp-bar-who">{currentUser.name}</span>
-            <span className="imp-bar-note">— ما تراه الآن هو ما يراه هذا الحساب بالضبط</span>
+            <span className="imp-bar-title">
+              داخل حساب <b className="imp-bar-who">{currentUser.name}</b>
+              <span className="imp-bar-role">{rankLabel(currentUser.role)}</span>
+            </span>
+            <span className="imp-bar-note">ما تراه الآن هو ما يراه هذا الحساب بالضبط</span>
           </span>
           <div className="imp-bar-actions">
-            <motion.button
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={handleReturnToAdmin}
-              className="imp-bar-back"
-            >
-              <Undo2 className="w-4 h-4" aria-hidden="true" />
+            <button onClick={handleReturnToAdmin} className="imp-bar-back">
+              <Undo2 className="w-3.5 h-3.5" aria-hidden="true" />
               <span className="sm:hidden">الرجوع للإدارة</span>
-              <span className="hidden sm:inline">الرجوع لحساب: {impersonator.name}</span>
-            </motion.button>
+              <span className="hidden sm:inline">الرجوع لحساب {impersonator.name}</span>
+            </button>
             <button
               onClick={handleLogout}
               title="خروج نهائي من النظام"
-              className="p-1.5 bg-black/30 text-[var(--text)] rounded-[var(--r-md)] hover:bg-black/50 transition-colors"
+              aria-label="خروج نهائي من النظام"
+              className="imp-bar-logout"
             >
               <LogOut className="w-4 h-4" aria-hidden="true" />
             </button>
@@ -2089,7 +2114,7 @@ function App() {
         document.body
       )}
 
-      <div className={`app-shell ${impersonator ? 'has-impersonator' : ''}`}>
+      <div className={`app-shell ${impersonator ? 'has-impersonator' : ''} ${desktopNavHidden ? 'nav-rail' : ''}`}>
         {/* القائمة الجانبية — على يمين الشاشة */}
         <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''} ${desktopNavHidden ? 'rail' : ''}`}>
           <div className="sidebar-brand">
@@ -2125,15 +2150,8 @@ function App() {
           </div>
 
           <div className="sidebar-foot space-y-3">
-            {impersonator && (
-              <button
-                onClick={handleReturnToAdmin}
-                className="w-full flex items-center justify-center gap-2 rounded-[var(--r-md)] bg-amber-400/15 border border-amber-400/40 text-amber-200 py-2.5 px-3 text-[11.5px] font-bold hover:bg-amber-400/25 transition-colors"
-              >
-                <Undo2 className="w-4 h-4 shrink-0" />
-                <span className="truncate">الرجوع لحساب: {impersonator.name}</span>
-              </button>
-            )}
+            {/* زر الرجوع للإدارة موجود في الشريط العلوي الثابت دائماً —
+                تكراره هنا كان يزحم المساحة بنفس اللون والوظيفة. */}
             <div className="flex items-center justify-between gap-2">
               <ModeToggle />
               <button
@@ -2167,7 +2185,7 @@ function App() {
 
         {/* المنطقة الرئيسية */}
         <div className="app-main">
-          <header className={`app-topbar ${impersonator ? 'topbar-offset' : ''}`}>
+          <header className="app-topbar">
             <button
               onClick={() => {
                 // موبايل: فتح/إغلاق الدرج — كمبيوتر: طي القائمة إلى أيقونات فقط

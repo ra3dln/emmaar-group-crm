@@ -105,6 +105,14 @@ html[data-mode="dark"] {
   --font-ui: 'IBM Plex Sans Arabic', 'Changa', system-ui, -apple-system, sans-serif;
 
   --sidebar-w: 248px;
+
+  /* ---- الشريط العلوي وشريط «أنت داخل حساب سيلز» ----
+     الارتفاعان محجوزان للمحتوى من خلال متغيّر واحد (`--topbar-h` + `--imp-h`)،
+     فلا يمرّ أي نص تحت الشريط الثابت. `--topbar-h` يُقاس فعلياً بالجافاسكريبت
+     (App.tsx) لأن ارتفاعه يتغيّر مع الخط وحجم الشاشة، وهذه قيم أولية آمنة. */
+  --topbar-h: 56px;
+  --imp-bar-h: 50px; /* ارتفاع شريط «داخل حساب» نفسه */
+  --imp-h: 0px; /* المساحة المحجوزة له (صفر إلا داخل حساب سيلز) */
 }
 
 html[data-mode="light"] {
@@ -411,27 +419,31 @@ html[data-mode="light"] {
   position: relative;
   z-index: 1;
   min-height: 100vh;
-  transition: padding-top 0.2s ease;
+  /* عرض القائمة الجانبية الفعلي — يتغيّر مع الطي (rail) وعلى الهاتف (درج مغلق) */
+  --nav-w: var(--sidebar-w);
 }
 
+/* داخل حساب سيلز: شريط التنبيه معروض أعلى الشاشة، فينزل كل شيء بمقداره */
 .app-shell.has-impersonator {
-  padding-top: 50px;
+  --imp-h: var(--imp-bar-h);
 }
 
-@media (max-width: 640px) {
-  .app-shell.has-impersonator {
-    padding-top: 45px;
-  }
+/* القائمة مطويّة إلى أيقونات فقط (كمبيوتر) */
+.app-shell.nav-rail { --nav-w: 64px; }
+
+@media (max-width: 900px) {
+  /* الهاتف: القائمة درج فوق الشاشة، فالشريط يأخذ العرض كله */
+  .app-shell { --nav-w: 0px; }
 }
 
 /* ---------- القائمة الجانبية (يمين الشاشة) ---------- */
 .app-sidebar {
   width: var(--sidebar-w);
   flex: 0 0 var(--sidebar-w);
-  height: 100vh;
-  height: 100dvh;
+  height: calc(100vh - var(--imp-h));
+  height: calc(100dvh - var(--imp-h));
   position: sticky;
-  top: 0;
+  top: var(--imp-h);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -442,78 +454,127 @@ html[data-mode="light"] {
   transition: top 0.2s ease;
 }
 
-.app-shell.has-impersonator .app-sidebar {
-  top: 50px;
-  height: calc(100vh - 50px);
-  height: calc(100dvh - 50px);
-}
-
-@media (max-width: 640px) {
-  .app-shell.has-impersonator .app-sidebar {
-    top: 45px;
-    height: calc(100vh - 45px);
-    height: calc(100dvh - 45px);
-  }
-}
-
 /* ---------- شريط «أنت داخل حساب سيلز» ----------
    يُرسم في `body` عبر Portal، وارتفاعه ثابت هنا بالضبط، فلا يحتاج أي قياس
    بالجافاسكريبت — وإزاحة الشريط العلوي والقائمة والإطار كلها ٥٠px (٤٥ على الهاتف).
-   سطر واحد دائماً: الاسم يُقصّ بنقاط والزر لا ينزل لسطر ثانٍ فوق المحتوى. */
+
+   الهندسة: خلفية بلون السطح العادي (مش صبغة برتقالية على كامل العرض)، وعلامة
+   الحالة داخل الشريط: خط رقيق بلون التحذير على الحافة العليا + أيقونة صغيرة
+   → الإحساس بالوضع واضح من غير «لطخة» لونية تفصل الشريط عن باقي الواجهة.
+   سطران مرتّبان: العنوان ثم الشرح، فما فيش عناصر متباعدة على غير نظام. */
 .imp-bar {
   position: fixed;
   inset-block-start: 0;
   inset-inline: 0;
   z-index: 90;
-  height: 50px;
+  height: var(--imp-bar-h);
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 12px;
-  background: color-mix(in srgb, var(--warn) 12%, var(--surface));
-  border-bottom: 2px solid color-mix(in srgb, var(--warn) 60%, transparent);
-  backdrop-filter: blur(6px);
+  /* نفس هامش الشريط العلوي بالحرف، فتتراصف عناصر الشريطين على خط واحد */
+  padding: 0 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 2px 0 0 var(--warn);
 }
-.imp-bar-icon { flex: 0 0 auto; color: var(--warn); }
+.imp-bar-mark {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--warn) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  color: color-mix(in srgb, var(--warn) 78%, #000);
+}
+html[data-mode="dark"] .imp-bar-mark { color: var(--warn); }
 .imp-bar-text {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  align-items: baseline;
-  gap: 5px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  line-height: 1.3;
+}
+.imp-bar-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.imp-bar-who { font-weight: 800; color: color-mix(in srgb, var(--warn) 78%, #000); }
+html[data-mode="dark"] .imp-bar-who { color: var(--warn); }
+.imp-bar-role {
+  flex: 0 0 auto;
+  font-size: 9.5px;
   font-weight: 700;
-  color: var(--text-strong);
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--warn) 13%, transparent);
+  color: color-mix(in srgb, var(--warn) 70%, #000);
+}
+html[data-mode="dark"] .imp-bar-role { color: var(--warn); }
+.imp-bar-note {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.imp-bar-who { color: color-mix(in srgb, var(--warn) 82%, #000); }
-html[data-mode="dark"] .imp-bar-who { color: var(--warn); }
-.imp-bar-note { font-size: 11px; font-weight: 400; color: var(--text-muted); white-space: nowrap; }
 .imp-bar-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
 .imp-bar-back {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 13px;
+  height: 30px;
+  padding: 0 12px;
   border-radius: var(--r-md);
-  background: var(--warn);
-  color: #10161f;
+  border: 1px solid color-mix(in srgb, var(--warn) 42%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: color-mix(in srgb, var(--warn) 78%, #000);
   font-size: 11.5px;
   font-weight: 700;
   white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
-.imp-bar-back:hover { filter: brightness(1.08); }
-/* الوضع النهاري: لون التحذير غامق، فالكتابة عليه بيضاء لإضاءة واضحة */
-html[data-mode="light"] .imp-bar-back { color: #fff; }
+html[data-mode="dark"] .imp-bar-back { color: var(--warn); }
+.imp-bar-back:hover {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 62%, transparent);
+}
+.imp-bar-logout {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.imp-bar-logout:hover { color: var(--text-strong); background: var(--tint-1); }
 @media (max-width: 1023px) {
   .imp-bar-note { display: none; }
 }
+@media (max-width: 900px) {
+  :root { --topbar-h: 50px; }
+}
 @media (max-width: 640px) {
-  .imp-bar { height: 45px; gap: 7px; padding: 0 9px; }
-  .imp-bar-text { font-size: 11.5px; }
-  .imp-bar-back { padding: 6px 10px; font-size: 11px; }
+  :root { --imp-bar-h: 45px; --topbar-h: 46px; }
+  /* هوامش الشريطين واحدة على الهاتف أيضاً حتى لا يبدو أحدهما نازلاً عن الآخر */
+  .imp-bar { gap: 7px; padding: 0 8px; }
+  .imp-bar-mark { width: 24px; height: 24px; }
+  .imp-bar-title { font-size: 11.5px; }
+  .imp-bar-back { height: 28px; padding: 0 9px; font-size: 11px; }
+  .imp-bar-logout { width: 28px; height: 28px; }
 }
 
 .app-sidebar.nav-hidden-desktop { display: none; }
@@ -674,15 +735,19 @@ html[data-mode="light"] .imp-bar-back { color: #fff; }
   min-width: 0;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  min-height: 100dvh;
+  min-height: calc(100vh - var(--imp-h));
+  min-height: calc(100dvh - var(--imp-h));
+  /* حجز الشريطين الثابتين: المحتوى يبدأ تحت الشريط العلوي بالضبط */
+  padding-block-start: calc(var(--imp-h) + var(--topbar-h));
 }
 
+/* الشريط العلوي: يمتد من نهاية القائمة الجانبية إلى الطرف الآخر (RTL: من اليمين)
+   بـ«خصائص منطقية» لا `left/right`، فلا ينزاح للجهة الخطأ ولا يغطّي القائمة. */
 .app-topbar {
   position: fixed;
-  top: 0;
-  left: var(--sidebar-w, 240px);
-  right: 0;
+  inset-block-start: var(--imp-h);
+  inset-inline-start: var(--nav-w);
+  inset-inline-end: 0;
   z-index: 50;
   display: flex;
   align-items: center;
@@ -690,17 +755,7 @@ html[data-mode="light"] .imp-bar-back { color: #fff; }
   padding: 10px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  transition: top 0.2s ease, left 0.2s ease;
-}
-
-.app-topbar.topbar-offset {
-  top: 50px;
-}
-
-@media (max-width: 640px) {
-  .app-topbar.topbar-offset {
-    top: 45px;
-  }
+  transition: inset-block-start 0.2s ease, inset-inline-start 0.2s ease;
 }
 
 .page-heading {
