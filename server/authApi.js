@@ -230,12 +230,15 @@ export function createAuthHandler({ storage, env = process.env }) {
 
         const db = await storage.load();
         const users = Array.isArray(db.data?.crm_users) ? db.data.crm_users : [];
+        // البوابة (إدارة / مندوب) اختيار واجهة فقط، والرتبة هي التي تحدد ما يُرى.
+        // لذلك حساب المندوب لا يدخل من بوابة الإدارة، بينما حساب الإدارة وقائد الفريق
+        // يدخل من أي بوابة — حتى لا يظل أحد يجرّب ويقول «حسابي مش شغّال» وهو محق.
         const candidate = users.find(
           (u) =>
             u &&
             String(u.username || '').trim().toLowerCase() === username &&
             u.isActive !== false &&
-            (loginType === 'admin' ? isManagerRole(u.role) : u.role === 'sales')
+            (loginType === 'admin' ? isManagerRole(u.role) : u.role === 'sales' || isManagerRole(u.role))
         );
 
         const check = candidate ? verifyPassword(password, candidate.password) : { ok: false };

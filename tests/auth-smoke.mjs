@@ -137,6 +137,14 @@ try {
   );
   const wrongType = await login({ username: 'ahmed', password: 'AhmedPass123', loginType: 'admin' });
   check('سيلز يحاول الدخول من بوابة الإدارة: 401', wrongType.status === 401);
+  // أما حساب الإدارة/قائد الفريق فيدخل من أي بوابة: البوابة شكل واجهة والرتبة تحدد الصلاحيات،
+  // ورفضه كان يجعل قائد الفريق يقول «حسابي مش شغّال» وهو يكتب كلمة المرور الصحيحة.
+  const managerOnSalesGate = await login({ username: 'admin', password: 'admin123', loginType: 'sales' });
+  check(
+    'حساب الإدارة يدخل من بوابة المندوبين أيضاً (بلا قفل)',
+    managerOnSalesGate.status === 200 && managerOnSalesGate.json?.user?.role === 'admin',
+    JSON.stringify(managerOnSalesGate.json)
+  );
 
   db = { ...db, data: { ...db.data, crm_users: [{ ...SALES, isActive: false }, DEFAULT_ADMIN] } };
   const inactive = await login({ username: 'ahmed', password: 'AhmedPass123', loginType: 'sales' });
