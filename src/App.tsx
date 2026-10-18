@@ -21,6 +21,14 @@ import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey } f
 import { buildPreview, buildSampleCsv, buildFakeCampaignCsv, decodeText, parseTable, type ImportPreview } from './leadImport';
 import { alarm, loadAlarmSettings, saveAlarmSettings, DEFAULT_ALARM_SETTINGS, type AlarmSettings } from './alarm';
 import { enablePush, disablePush, pushState, sendTestPush, pushSupported, registerWorker, resyncPush, localNotification, type PushState } from './push';
+import {
+  arabicMoneyValue,
+  arabicNumberValue,
+  isArabicMoneyWord,
+  isRoomWord,
+  numberWordValue,
+  roomsFromText,
+} from './arabicNumbers';
 
 // ===== الحضور والانصراف =====
 const ATTENDANCE_KEY = 'crm_attendance';
@@ -292,6 +300,11 @@ const parseMoneyQuery = (raw: string): number[] => {
   const values = new Set<number>();
   if (!raw) return [];
 
+  // الأرقام المكتوبة بالحروف: (عشر آلاف) (مية وخمسين ألف) (نص مليون)…
+  // لو فهمناها بدقة لا نضيف تخمينات الكلمات المفردة تحتها (كانت تخلي «نص مليون» مليون كامل)
+  const arabicMoney = arabicMoneyValue(raw);
+  if (arabicMoney !== null) values.add(arabicMoney);
+
   let text = normalizeArabicText(raw);
   // إزالة فواصل الآلاف: 1,000,000 أو 1 000 000
   for (let i = 0; i < 4; i += 1) {
@@ -316,16 +329,19 @@ const parseMoneyQuery = (raw: string): number[] => {
   }
 
   // كلمات مالية بدون رقم قبلها: (مليون) (نصف مليون) (ألفين)
-  let masked = normalizeArabicText(raw);
-  for (const entry of [...PRICE_MULTIPLIERS].sort((a, b) => b.words[0].length - a.words[0].length)) {
-    for (const word of entry.words) {
-      let index = masked.indexOf(word);
-      while (index !== -1) {
-        const before = masked.slice(Math.max(0, index - 12), index);
-        const numMatch = before.match(/(\d+(?:[.,]\d+)?)\s*$/);
-        values.add(numMatch ? parseFloat(numMatch[1].replace(',', '.')) * entry.value : entry.value);
-        masked = `${masked.slice(0, index)}${'#'.repeat(word.length)}${masked.slice(index + word.length)}`;
-        index = masked.indexOf(word);
+  // نتخطاها لو التعبير العربي اتفهم بالكامل فوق
+  if (arabicMoney === null) {
+    let masked = normalizeArabicText(raw);
+    for (const entry of [...PRICE_MULTIPLIERS].sort((a, b) => b.words[0].length - a.words[0].length)) {
+      for (const word of entry.words) {
+        let index = masked.indexOf(word);
+        while (index !== -1) {
+          const before = masked.slice(Math.max(0, index - 12), index);
+          const numMatch = before.match(/(\d+(?:[.,]\d+)?)\s*$/);
+          values.add(numMatch ? parseFloat(numMatch[1].replace(',', '.')) * entry.value : entry.value);
+          masked = `${masked.slice(0, index)}${'#'.repeat(word.length)}${masked.slice(index + word.length)}`;
+          index = masked.indexOf(word);
+        }
       }
     }
   }
@@ -561,84 +577,15 @@ const NEEDS_TYPE_WORDS: Array<{ keys: string[]; label: string }> = [
   { keys: ['عمارة', 'بناية', 'عقار'], label: 'عمارة' },
 ];
 
-const NEEDS_HUNDREDS: Array<{ keys: string[]; value: number }> = [
-  { keys: ['مية', 'ميه', 'مايه', 'مائة', 'مئة'], value: 100 },
-  { keys: ['ميتين', 'مئتين', 'مئتان'], value: 200 },
-  { keys: ['تلتمية', 'تلتميه', 'ثلاثمائة'], value: 300 },
-  { keys: ['ربعمية', 'أربعمائة'], value: 400 },
-  { keys: ['خمسمية', 'خمسمائة'], value: 500 },
-  { keys: ['ستمية', 'ستمائة'], value: 600 },
-  { keys: ['سبعمية', 'سبعمائة'], value: 700 },
-  { keys: ['تمنمية', 'ثمانمائة'], value: 800 },
-  { keys: ['تسعمية', 'تسعمائة'], value: 900 },
-];
-
-const NEEDS_TENS: Array<{ keys: string[]; value: number }> = [
-  { keys: ['عشرة', 'عشره'], value: 10 },
-  { keys: ['عشرين'], value: 20 },
-  { keys: ['تلاتين', 'ثلاثين'], value: 30 },
-  { keys: ['أربعين', 'اربعين'], value: 40 },
-  { keys: ['خمسين'], value: 50 },
-  { keys: ['ستين'], value: 60 },
-  { keys: ['سبعين'], value: 70 },
-  { keys: ['تمانين', 'ثمانين'], value: 80 },
-  { keys: ['تسعين'], value: 90 },
-];
-
-const NEEDS_ONES: Array<{ keys: string[]; value: number }> = [
-  { keys: ['واحد', 'واحدة'], value: 1 },
-  { keys: ['اتنين', 'اثنين', 'اثنان'], value: 2 },
-  { keys: ['تلاتة', 'ثلاثة', 'تلاته'], value: 3 },
-  { keys: ['أربعة', 'اربعة'], value: 4 },
-  { keys: ['خمسة'], value: 5 },
-  { keys: ['ستة'], value: 6 },
-  { keys: ['سبعة'], value: 7 },
-  { keys: ['تمانية', 'تمانيه', 'ثمانية'], value: 8 },
-  { keys: ['تسعة'], value: 9 },
-];
-
-const NEEDS_MONEY_UNITS: Array<{ keys: string[]; value: number }> = [
-  { keys: ['مليار'], value: 1000000000 },
-  { keys: ['مليونين', 'مليونان', 'مليوني'], value: 2000000 },
-  { keys: ['مليون'], value: 1000000 },
-  { keys: ['الفين', 'ألفين', 'الفان'], value: 2000 },
-  { keys: ['الف', 'ألف', 'الاف', 'آلاف'], value: 1000 },
-];
-
-// الكلمات مكتوبة كما هي ثم تُوحَّد (فتعمل مع الهمزات والتاء المربوطة بلا فرق)
-const normalizeValueWords = (items: Array<{ keys: string[]; value: number }>) =>
-  items.map((item) => ({ value: item.value, keys: item.keys.map((key) => normalizeArabicText(key).trim()) }));
-
-const HUNDREDS_N = normalizeValueWords(NEEDS_HUNDREDS);
-const TENS_N = normalizeValueWords(NEEDS_TENS);
-const ONES_N = normalizeValueWords(NEEDS_ONES);
-const MONEY_N = normalizeValueWords(NEEDS_MONEY_UNITS);
-
-// الأرقام مفصولة: (مية) (و عشرين) => 120 | (اتنين) (مليون) => 2,000,000
+// الأرقام والوحدات المالية والغرف تُفهم في src/arabicNumbers.ts
+// (مختبرة في tests/arabic-numbers.mjs: غرفتين، عشر آلاف، مية وخمسين ألف، نص مليون…)
 const needsTokens = (normalized: string): string[] =>
   normalized.split(/[^\u0621-\u064A0-9a-zA-Z]+/).filter(Boolean);
 
-const findValueWord = (word: string): number | null => {
-  const bare = word.replace(/^و/, '');
-  const candidates = bare && bare !== word ? [word, bare] : [word];
-  for (const candidate of candidates) {
-    const hit = HUNDREDS_N.find((e) => e.keys.includes(candidate))
-      || TENS_N.find((e) => e.keys.includes(candidate))
-      || ONES_N.find((e) => e.keys.includes(candidate));
-    if (hit) return hit.value;
-  }
-  return null;
-};
+const findValueWord = (word: string): number | null => numberWordValue(word);
 
 // مجموع كلمات الأرقام في نافذة: (مية وعشرين) => 120 | (خمسة وتلاتين) => 35
-const arabicWordsToNumber = (words: string[]): number | null => {
-  let total = 0;
-  for (const word of words) {
-    const value = findValueWord(word);
-    if (value) total += value;
-  }
-  return total > 0 ? total : null;
-};
+const arabicWordsToNumber = (words: string[]): number | null => arabicNumberValue(words.join(' '));
 
 // الرقم الذي يسبق كلمة (متر / مليون / غرف) سواء مكتوباً بالأرقام أو بالحروف
 const numberBeforeToken = (
@@ -666,21 +613,20 @@ const numberBeforeToken = (
     break;
   }
   if (digit !== null) return digit;
-  const total = arabicWordsToNumber(words);
+  // الكلمات مجموعة بالعكس (من الأقرب للأبعد) فنعيدها لترتيبها الطبيعي
+  const total = arabicWordsToNumber(words.slice().reverse());
   return total !== null && total >= opts.min && total <= opts.max ? total : null;
 };
 
-const PRICE_FLOOR = 100000; // أقل مبلغ يُحسب سعراً للعقار (بالجنيه)
+// أقل مبلغ يُحسب سعراً للعقار (بالجنيه). 10,000 لأن ما دونها غالباً غرف/مساحة،
+// وتسمح بقراءة «10000» نفسها كسعر — وكذلك «عشر آلاف» بالحروف.
+const PRICE_FLOOR = 10000;
 
 const moneyFrom = (text: string): number | null => {
+  // التعبير العربي الكامل أدق: (مية وخمسين ألف) = 150,000 و(نص مليون) = 500,000
+  const explicit = arabicMoneyValue(text);
+  if (explicit !== null) return explicit;
   const candidates = [...parseMoneyQuery(text)].filter((value) => value >= PRICE_FLOOR);
-  const tokens = needsTokens(normalizeArabicText(text));
-  tokens.forEach((token, index) => {
-    const unit = MONEY_N.find((entry) => entry.keys.includes(token.replace(/^و/, '')));
-    if (!unit) return;
-    const amount = numberBeforeToken(tokens, index, { min: 0.1, max: 1000 }) ?? 1;
-    candidates.push(amount * unit.value);
-  });
   if (!candidates.length) return null;
   return Math.max(...candidates);
 };
@@ -698,7 +644,23 @@ export type NeedsQuery = {
   raw: string;
 };
 
-const roundTo = (value: number, step: number): number => Math.round(value / step) * step;
+// هل النص أفاد أي فلتر فعلي؟ (يُستخدم في نافذة الاحتياجات والبحث العام)
+const hasNeedsFilter = (needs: NeedsQuery): boolean =>
+  needs.kinds.length > 0
+  || needs.priceMin !== null
+  || needs.priceMax !== null
+  || needs.areaMin !== null
+  || needs.areaMax !== null
+  || needs.rooms !== null
+  || needs.places.length > 0
+  || needs.finishing !== null
+  || needs.delivery !== null;
+
+// تقريب لأقرب خطوة — لا يرجع صفراً لمبلغ صغير (1,500 مع خطوة 5,000 كانت تصبح 0)
+const roundTo = (value: number, step: number): number => {
+  const rounded = Math.round(value / step) * step;
+  return rounded > 0 ? rounded : value;
+};
 
 const NEEDS_STOP_WORDS = new Set(
   [
@@ -706,11 +668,42 @@ const NEEDS_STOP_WORDS = new Set(
     'شقه', 'شقق', 'فيلا', 'فلل', 'فيلات', 'ارض', 'اراضي', 'مكتب', 'مكاتب', 'محل', 'محلات', 'عماره',
     'سعر', 'بسعر', 'ميزانيه', 'ميزانية', 'مبلغ', 'سعرها', 'فوق', 'تحت', 'اقل', 'اكتر', 'اكثر', 'حد', 'لحد', 'حتي',
     'اقصي', 'امكانيات', 'حدود', 'تقريبا', 'حوالي', 'من', 'الي', 'في', 'علي', 'مع', 'عن', 'هو', 'هي', 'ده', 'دي',
-    'مساحه', 'مساحة', 'امتار', 'متر', 'مترمربع', 'مربع', 'غرف', 'غرفه', 'غرفة', 'اوض', 'اوضه', 'اوضة', 'نوم', 'سرير',
-    'تشطيب', 'متشطب', 'سوبر', 'لوكس', 'طوب', 'محاره', 'نص', 'نصف', 'تسليم', 'فوري', 'جاهز', 'جنيه', 'مليون', 'الف',
-    'مليونين', 'ميزانية', 'بيع', 'شراء', 'يرغب', 'يبحث', 'يبحثون', 'جدا', 'اكون', 'يكون', 'تكون', 'ممكن', 'لو', 'سمحت', 'السلام', 'عليكم',
+    'مساحه', 'مساحة', 'امتار', 'متر', 'مترمربع', 'مربع',
+    // كل صيغ الغرف (وإلا تُقرأ كأنها «منطقة»)
+    'غرف', 'غرفه', 'غرفة', 'غرفتين', 'غرفتان', 'اوض', 'اوضه', 'اوضة', 'اوضتين', 'اوضتان', 'اودتين', 'اودتان',
+    'نوم', 'سرير', 'bedroom', 'bedrooms', 'room', 'rooms',
+    // كلمات الحمامات/الريسبشن/المطبخ مش أماكن
+    'حمام', 'حمامات', 'باث', 'باثروم', 'ريسبشن', 'صاله', 'صالون', 'مطبخ', 'بلكونه', 'تراس', 'جاردن', 'حديقه',
+    'تشطيب', 'متشطب', 'سوبر', 'لوكس', 'طوب', 'محاره', 'نص', 'نصف', 'ربع', 'تلت', 'ثلث',
+    'تسليم', 'فوري', 'جاهز', 'جنيه', 'مليون', 'الف', 'مليونين', 'ملايين', 'مليار', 'الاف', 'آلاف', 'الفين',
+    'مقدم', 'اقساط', 'قسط', 'تقسيط', 'استلام', 'صافي', 'متبقي',
+    'بيع', 'شراء', 'يرغب', 'يبحث', 'يبحثون', 'جدا', 'اكون', 'يكون', 'تكون', 'ممكن', 'لو', 'سمحت', 'السلام', 'عليكم',
   ].map((word) => normalizeArabicText(word))
 );
+
+// صيغة اسم المنطقة: نزيل «ال» التعريف وحروف الجر المركبة فقط،
+// ولا نلمس أول حرف في أسماء حقيقية مثل (بورسعيد) (فيصل) (لوران) (كفر).
+const placeForm = (word: string): string => {
+  const w = word.replace(/^و/, '');
+  if (w.startsWith('لل')) return w.slice(2);
+  if (/^(?:بال|فال|لال|كال)/.test(w)) return w.slice(3);
+  if (w.startsWith('ال')) return w.slice(2);
+  return w;
+};
+
+// صيغ الكلمة بعد إزالة «و» وحروف الجر والـ«ال»:
+// (بالتجمع) (للتجمع) (بعشر) (بغرفتين) — عشان البحث يفهمها صح
+const needsWordForms = (word: string): string[] => {
+  const forms = new Set<string>();
+  const noWaw = word.replace(/^و/, '');
+  forms.add(word);
+  forms.add(noWaw);
+  const noPrep = noWaw.replace(/^[بلف]+/, '');
+  forms.add(noPrep);
+  forms.add(noPrep.replace(/^ال/, ''));
+  forms.add(noWaw.replace(/^ال/, ''));
+  return [...forms].filter(Boolean);
+};
 
 const parseNeeds = (raw: string): NeedsQuery => {
   const result: NeedsQuery = {
@@ -757,23 +750,30 @@ const parseNeeds = (raw: string): NeedsQuery => {
     }
   }
 
-  // 4) الغرف: (٣ غرف) (تلات غرف)
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (!/^(غرف|غرفه|اوض|اوضه|نوم|سرير)$/.test(tokens[index])) continue;
-    const rooms = numberBeforeToken(tokens, index, { min: 1, max: 12, wordWindow: 2 });
-    if (rooms) {
-      result.rooms = Math.round(rooms);
-      break;
+  // 3-ب) (مساحة 120) (بمساحة مية وعشرين) بدون كلمة «متر»
+  if (result.areaMin === null) {
+    for (let index = 0; index < tokens.length; index += 1) {
+      if (!/^(مساحه|بمساحه|مساحة|بمساحة)$/.test(tokens[index])) continue;
+      const area = numberFromSpan(tokens.slice(index + 1, index + 4).join(' '));
+      if (area && area >= 15 && area <= 3000) {
+        result.areaMin = roundTo(area * 0.85, 5);
+        result.areaMax = roundTo(area * 1.25, 5);
+        break;
+      }
     }
   }
 
+  // 4) الغرف: (٣ غرف) (تلات غرف) (غرفتين) (أوضتين) (غرفة واحدة)
+  const rooms = roomsFromText(q);
+  if (rooms) result.rooms = rooms;
+
   // 5) السعر: مدى صريح ثم قيمة مفردة مع حد أعلى ١.٥ ضعف
-  const moneyRange = rest.match(/من\s+([^\s]{1,12}(?:\s+[^\s]{1,12})?)\s+(?:الي|لحد|حتي|ل)\s+([^\s]{1,14}(?:\s+[^\s]{1,14})?)/);
+  const priceRange = rest.match(/(?:^|\s)من\s+(.+?)\s+(?:الي|لحد|حتي|ل)\s*(.+)/);
   let priceMax: number | null = null;
   let priceMin: number | null = null;
-  if (moneyRange) {
-    const low = moneyFrom(moneyRange[1]);
-    const high = moneyFrom(moneyRange[2]);
+  if (priceRange) {
+    const low = moneyFrom(priceRange[1]);
+    const high = moneyFrom(priceRange[2]);
     if (low && high && low < high) {
       priceMin = low;
       priceMax = high;
@@ -782,7 +782,8 @@ const parseNeeds = (raw: string): NeedsQuery => {
   if (priceMax === null) {
     const value = moneyFrom(rest.replace(/متر/g, ' '));
     if (value) {
-      const maxOnly = /(لحد|حتي|اقصي|مش اكتر|لا يزيد|تحت)/.test(q);
+      // «ميزانية / معايا / لحد» = سقف أعلى، مش بداية نطاق
+      const maxOnly = /(لحد|حتي|اقصي|مش اكتر|لا يزيد|تحت|ميزانيه|مبلغ|معايا|حدود|حدودي)/.test(q);
       const minOnly = /(فوق|اكتر من|اكثر من|يبدا من|مش اقل من|ابدا من)/.test(q);
       if (maxOnly && !minOnly) {
         priceMax = value;
@@ -801,13 +802,18 @@ const parseNeeds = (raw: string): NeedsQuery => {
     const word = token.replace(/^و/, '');
     if (word.length < 3) continue;
     if (/^[\d.,]+$/.test(word)) continue;
-    if (findValueWord(token)) continue;
-    // قد تلتصق حروف الجر بالكلمة: (بمساحه) (بمليون) (للتجمع)
-    if (NEEDS_STOP_WORDS.has(word) || NEEDS_STOP_WORDS.has(word.replace(/^[بلفك]/, ''))) continue;
-    if (MONEY_N.some((entry) => entry.keys.includes(word))) continue;
-    if (seen.has(word)) continue;
-    seen.add(word);
-    result.places.push(word);
+    const forms = needsWordForms(token);
+    // الأرقام والوحدات المالية والغرف وكلمات الحشو لا تُعتبر «منطقة»
+    if (forms.some((form) => findValueWord(form))) continue;
+    if (forms.some((form) => NEEDS_STOP_WORDS.has(form))) continue;
+    if (forms.some((form) => isArabicMoneyWord(form))) continue;
+    if (forms.some((form) => isRoomWord(form))) continue;
+    // نطبّع اسم المنطقة فقط (إزالة ال/لل/بال…) بدون كسر أسماء مثل بورسعيد
+    const place = placeForm(word);
+    if (place.length < 3) continue;
+    if (seen.has(place)) continue;
+    seen.add(place);
+    result.places.push(place);
   }
 
   // 7) التشطيب والتسليم
@@ -850,7 +856,9 @@ const matchPropertyNeeds = (property: Property, needs: NeedsQuery): NeedsMatch =
   const area = parseFloat(normalizeDigits(String(property.area || '')).replace(/[^\d.]/g, ''))
     || numberFromSpan(String(property.area || ''))
     || 0;
-  const rooms = parseFloat(normalizeDigits(String(property.rooms || '')).replace(/[^\d.]/g, '')) || 0;
+  const rooms = parseFloat(normalizeDigits(String(property.rooms || '')).replace(/[^\d.]/g, ''))
+    || roomsFromText(String(property.rooms || ''))
+    || 0;
   // الملاحظات تدخل في المطابقة أيضاً: (العقار مطلوب بيعه بسرعة) (القبضة متبقية) إلخ
   const haystack = normalizeArabicText(
     [property.name, property.type, property.location, property.project, property.compound, property.description, (property as any).floor]
@@ -1968,32 +1976,70 @@ function App() {
   const userInitial = (currentUser.name || '؟').trim().charAt(0);
   const closeSidebar = () => setSidebarOpen(false);
 
+  // كلمات البحث (٣ أحرف على الأقل) لمطابقة الكلمات مهما كان ترتيبها
+  const queryWords = (value: string): string[] =>
+    normalizeArabicText(value).split(/\s+/).filter((word) => word.length >= 3);
+
   const filteredClients = clients.filter((c) => {
     const query = normalizeArabicText(searchTerm).trim();
     if (!query) return true;
+    const ownerName = users.find((u: User) => u.id === c.userId || u.id === c.assignedTo)?.name || '';
     const haystack = normalizeArabicText(
-      [c.name, c.phone, c.property, (c.phones || []).join(' ')].filter(Boolean).join(' | ')
+      [
+        c.name, c.phone, (c.phones || []).join(' '), c.property, c.budget,
+        c.monthlyInstallment, c.deliveryPeriod, c.source, c.feedback, ownerName,
+      ].filter(Boolean).join(' | ')
     );
     if (haystack.includes(query)) return true;
+
+    // كل كلمات البحث موجودة (بأي ترتيب): «أحمد التجمع» = «التجمع أحمد»
+    const words = queryWords(searchTerm);
+    if (words.length > 1 && words.every((word) => haystack.includes(word))) return true;
+
+    // بحث برقم الهاتف حتى لو فيه مسافات أو رموز
+    const digitsQuery = normalizeDigits(searchTerm).replace(/\D/g, '');
+    if (digitsQuery.length >= 3 && normalizeDigits(haystack).replace(/\D/g, '').includes(digitsQuery)) return true;
+
     return moneyMatches(searchTerm, c.budget || '', parsePrice(c.budget || ''));
   });
+
+  // فلتر الاحتياجات يُستخدم أيضاً في البحث العام (غرفتين، عشر آلاف، متشطبة…)
+  const propertyNeeds = propertySearch.trim() ? parseNeeds(propertySearch) : null;
+  const propertyNeedsActive = !!propertyNeeds && hasNeedsFilter(propertyNeeds);
 
   const filteredProperties = properties.filter((p) => {
     const query = normalizeArabicText(propertySearch).trim();
     if (!query) return true;
 
-    // بحث بالاسم أو النوع أو الموقع أو العميل
+    // بحث بالاسم أو النوع أو الموقع أو الغرف/المساحة أو العميل أو التشطيب
+    const finishingLabel = p.finishing === 'fully-finished'
+      ? 'سوبر لوكس متشطب مفروش'
+      : p.finishing === 'semi-finished' ? 'نصف تشطيب سيمي' : 'طوب محاره';
+    const deliveryLabel = p.delivery === 'immediate' ? 'تسليم فوري جاهز للاستلام' : 'تسليم بعد فترة متأخر';
     const haystack = normalizeArabicText(
-      [p.name, p.type, p.location, p.project, p.compound, p.area, p.description, (p as any).notes, p.clientName, p.clientPhone, p.clientPhone2]
-        .filter(Boolean)
-        .join(' | ')
+      [
+        p.name, p.type, p.location, p.project, p.compound, p.area, p.rooms, p.bathrooms, p.floor,
+        p.description, (p as any).notes, p.clientName, p.clientPhone, p.clientPhone2,
+        finishingLabel, deliveryLabel,
+      ].filter(Boolean).join(' | ')
     );
     if (haystack.includes(query)) return true;
 
-    // بحث بالمبلغ: بالأرقام أو بفواصل أو بالحروف (مليون / ألف)
+    // كل كلمات البحث موجودة (بأي ترتيب)
+    const words = queryWords(propertySearch);
+    if (words.length > 1 && words.every((word) => haystack.includes(word))) return true;
+
+    // بحث بالمبلغ: بالأرقام أو بفواصل أو بالحروف (مليون / ألف / عشر آلاف)
     if (moneyMatches(propertySearch, p.price || '', p.priceNumeric)) return true;
 
-    // كلمة مالية بلا أرقام: (مليون) تطابق عقاراً مكتوباً (1.5 مليون)
+    // فهم الاحتياجات: غرفتين، أوضتين، 3 غرف، مساحة، تشطيب…
+    // في البحث العام نعرض المطابق بدقة فقط؛ النتائج «القريبة» مكانها نافذة الاحتياجات.
+    if (propertyNeedsActive && propertyNeeds) {
+      const match = matchPropertyNeeds(p, propertyNeeds);
+      if (match.ok && match.warns.length === 0) return true;
+    }
+
+    // «مليون» تطابق عقاراً مكتوباً (1.5 مليون)
     const priceWords = normalizeArabicText(p.price || '');
     return !/\d/.test(query) && priceWords.includes(query);
   });
@@ -5423,10 +5469,7 @@ function NeedsSearchModal({ properties, onClose, onApply }: any) {
       }
     : needs;
 
-  const hasFilter =
-    effective.kinds.length > 0 || effective.priceMin !== null || effective.priceMax !== null
-    || effective.areaMin !== null || effective.areaMax !== null || !!effective.rooms
-    || effective.places.length > 0 || !!effective.finishing || !!effective.delivery;
+  const hasFilter = hasNeedsFilter(effective);
 
   const rows = (properties as Property[]).map((property) => ({ property, match: matchPropertyNeeds(property, effective) }));
   const exact = rows.filter((r) => r.match.ok && r.match.warns.length === 0).sort((a, b) => b.match.score - a.match.score);
@@ -5507,12 +5550,15 @@ function NeedsSearchModal({ properties, onClose, onApply }: any) {
         <p className="text-xs text-[var(--text-muted)] mb-2">
           اكتب احتياجات العميل بكلامك العادي: النوع، المبلغ، المساحة، الغرف، المنطقة — والنظام يفهمها ويرشّح العقارات.
         </p>
+        <p className="text-[11px] text-[var(--text-dim)] mb-2">
+          يفهم الصيغ المكتوبة: «غرفتين» أو «أوضتين» = ٢، «عشر آلاف» = ١٠٬٠٠٠، «مية وخمسين ألف» = ١٥٠٬٠٠٠، «مليون وميتين ألف» = ١٬٢٠٠٬٠٠٠، «نص مليون» = ٥٠٠٬٠٠٠.
+        </p>
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3}
-          placeholder="مثال: العميل محتاج شقة ب اتنين مليون في التجمع الخامس بمساحة مية وعشرين متر و٣ غرف"
+          placeholder="مثال: العميل محتاج شقة غرفتين في التجمع الخامس بمساحة مية وعشرين متر بعشر آلاف جنيه"
           className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] text-sm resize-y" />
 
         <div className="flex flex-wrap gap-2 mt-2">
-          {['شقة بمليونين في التجمع', 'فيلا ب 5 مليون و٤ غرف', 'شقة 90 متر لحد 3 مليون متشطبة'].map((sample) => (
+          {['شقة غرفتين في التجمع', 'فيلا ٤ غرف بمليون وميتين ألف', 'شقة 90 متر لحد 3 مليون متشطبة', 'شقة بعشر آلاف جنيه'].map((sample) => (
             <button key={sample} type="button" onClick={() => setText(sample)}
               className="text-[11px] bg-[var(--tint-1)] hover:bg-[var(--tint-2)] border border-[var(--border)] text-[var(--text)] px-2.5 py-1 rounded-full">
               {sample}
@@ -5848,7 +5894,7 @@ function PropertiesView({ properties, users, currentUser, searchTerm, onSearch, 
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="flex-1 relative">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--text-muted)]" />
-          <input type="text" placeholder="بحث ذكي: اسم، نوع، موقع، أو مبلغ (مليون / 1,500,000)..." value={searchTerm} onChange={(e) => onSearch(e.target.value)}
+          <input type="text" placeholder="بحث ذكي: اسم، نوع، موقع، غرف (غرفتين / 3 غرف)، أو مبلغ (عشر آلاف / مليون)..." value={searchTerm} onChange={(e) => onSearch(e.target.value)}
             className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-11 pl-4 py-3 text-[var(--text-strong)] focus:border-[var(--brand)]" />
         </div>
         <button
