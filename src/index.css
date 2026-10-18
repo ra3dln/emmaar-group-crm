@@ -2380,6 +2380,69 @@ html[data-mode="light"] .sb-cell.is-empty .sb-count { color: var(--text-dim); }
   .due-acts { margin-inline-start: auto; }
 }
 
+/* تنبيه التذكيرات المستحقة داخل الموقع: يظل ظاهراً حتى يُتخذ إجراء */
+.reminder-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface));
+  border-radius: var(--r-md);
+}
+.reminder-strip .rs-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+}
+.reminder-strip .rs-body {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.reminder-strip .rs-body b {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.reminder-strip .rs-body small {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reminder-strip .rs-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+/* تنبيه تفعيل الإشعارات: بلون الهوية لا بلون التحذير */
+.reminder-strip.is-perm {
+  border-color: var(--border-strong);
+  background: var(--tint-1);
+}
+.reminder-strip.is-perm .rs-icon {
+  background: var(--brand-primary-softer);
+  color: var(--brand);
+}
+@media (max-width: 560px) {
+  .reminder-strip .rs-actions { width: 100%; }
+  .reminder-strip .rs-actions .rc-action { flex: 1 1 auto; justify-content: center; }
+  .reminder-strip .rs-body small { white-space: normal; }
+}
+
 /* صفحة الحالة: كل الأرقام في حالة واحدة */
 .status-board {
   position: fixed;

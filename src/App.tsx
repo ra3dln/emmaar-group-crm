@@ -1083,12 +1083,32 @@ function App() {
   const [statusBoard, setStatusBoard] = useState<string | null>(null);
   // صوت رسائل المحادثة فقط — التذكيرات نوتفكيشن صامتة (بند ٦) وما بتستخدمش الصوت.
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [notificationPermission, setNotificationPermission] = useState(false);
+  // صلاحية إشعارات المتصفح على هذا الجهاز (default = لم يُسأل بعد)
+  const [notifPermission, setNotifPermission] = useState<string>(() =>
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission
+  );
+  // تنبيه تفعيل الإشعارات: يظهر مرة واحدة حتى يضغط «لاحقاً»
+  const [notifPromptDismissed, setNotifPromptDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('crm_notif_prompt_hidden') === '1';
+    } catch {
+      return false;
+    }
+  });
   const [inAppNotification, setInAppNotification] = useState<{title: string, body: string} | null>(null);
 
   // ===== المنبه والإشعارات الحقيقية =====
   const [alarmSettings, setAlarmSettings] = useState<AlarmSettings>(() => loadAlarmSettings());
   const [activeAlarm, setActiveAlarm] = useState<{ id: string; title: string; body: string; phone: string; quiet: boolean; firedAt: number } | null>(null);
+  // تذكيرات أُغلقت في هذه الجلسة فقط — تُفتح من جديد عند إعادة تحميل الصفحة
+  // أو الدخول التالي، لأن التذكير المستحق لا يجوز أن يختفي نهائياً.
+  const dismissedAlarmIds = useRef<Set<string>>(new Set());
+  // تذكيرات أُرسل لها إشعار جهاز في هذه الجلسة (منع التكرار كل ثانيتين)
+  const notifiedReminderIds = useRef<Set<string>>(new Set());
+  const activeAlarmRef = useRef<typeof activeAlarm>(null);
+  useEffect(() => {
+    activeAlarmRef.current = activeAlarm;
+  }, [activeAlarm]);
   const [showNotifyPanel, setShowNotifyPanel] = useState(false);
   const [notifState, setNotifState] = useState<PushState>('default');
   const [notifBusy, setNotifBusy] = useState(false);
@@ -1162,19 +1182,32 @@ function App() {
   // بند ٦: التذكير نوتفكيشن فقط — بلا رنة وبلا صوت متكرر.
   // بنعرض بطاقة التذكير على الشاشة + إشعار الجهاز، والعدّاد بيبدأ فوراً.
   const startAlarm = (reminder: any) => {
-    const title = ` حان وقت الاتصال بـ ${reminder.clientName || 'عميل'}`;
+    const title = `⏰ حان وقت الاتصال بـ ${reminder.clientName || 'عميل'}`;
     const body = `${reminder.clientPhone || ''}${reminder.note ? ' — ' + reminder.note : ''}`.trim();
     alarm.stop(); // لو فيه رنة قديمة شغّالة من نسخة أقدم، تتقفل
-    setActiveAlarm({ id: reminder.id, title, body, phone: reminder.clientPhone || '', quiet: true, firedAt: Date.now() });
-    markReminderFired(reminder.id);
+    const nextAlarm = { id: reminder.id, title, body, phone: reminder.clientPhone || '', quiet: true, firedAt: Date.now() };
+    activeAlarmRef.current = nextAlarm;
+    setActiveAlarm(nextAlarm);
+    // عدّاد «متأخر» يخص صاحب التذكير فقط — الإدارة تعرض تذكير مندوب دون أن تُسجّله متأخراً
+    if (reminder.userId === currentUser?.id) markReminderFired(reminder.id);
   };
 
   const startAlarmById = (id: string) => {
     const reminder = readReminders().find((r) => r.id === id);
     if (reminder) {
+      // فتح التذكير يدوياً (من رابط إشعار مثلاً) يلغى إغلاقه المؤقت
+      dismissedAlarmIds.current.delete(id);
       markReminderAction(id); // فتح التذكير = إجراء
       startAlarm(reminder);
     }
+  };
+
+  const closeActiveAlarm = (id: string) => {
+    if (activeAlarmRef.current?.id !== id) return;
+    dismissedAlarmIds.current.add(id);
+    activeAlarmRef.current = null;
+    alarm.stop();
+    setActiveAlarm(null);
   };
 
   const completeReminder = (id: string) => {
@@ -1182,6 +1215,7 @@ function App() {
     const next = readReminders().map((r) => (r.id === id ? { ...r, isCompleted: true } : r));
     localStorage.setItem('crm_reminders', JSON.stringify(next));
     void pushKey('crm_reminders');
+    closeActiveAlarm(id);
     loadData();
   };
 
@@ -1203,11 +1237,17 @@ function App() {
     } catch {
       /* لا شيء */
     }
+    notifiedReminderIds.current.delete(id);
+    closeActiveAlarm(id);
     loadData();
   };
 
   const hideAlarm = () => {
-    if (activeAlarm) markReminderAction(activeAlarm.id);
+    if (activeAlarm) {
+      dismissedAlarmIds.current.add(activeAlarm.id);
+      markReminderAction(activeAlarm.id);
+    }
+    activeAlarmRef.current = null;
     alarm.stop();
     setActiveAlarm(null);
   };
@@ -1294,6 +1334,9 @@ function App() {
   useEffect(() => {
     initializeSystem();
     applyMode(readMode()); // تطبيق وضع المظهر (ليلي/نهاري) المحفوظ قبل أي شيء
+    // نسجّل عامل الخدمة مبكراً حتى يكون جاهزاً للإشعارات (بدل انتظار أول اشتراك)
+    void registerWorker();
+    setNotifPermission(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
     // استرجاع جلسة «الدخول لحساب سيلز» بعد تحديث الصفحة
     const imp = localStorage.getItem('impersonator_user');
     if (imp) {
@@ -1302,10 +1345,6 @@ function App() {
       } catch {
         localStorage.removeItem('impersonator_user');
       }
-    }
-
-    if ('Notification' in window && Notification.permission === 'granted') {
-      setNotificationPermission(true);
     }
   }, []);
 
@@ -1378,61 +1417,85 @@ function App() {
     loadData();
   }, [currentUser]);
 
+  // ===== جلسة جديدة: نمسح علامات «تم الإشعار» القديمة =====
+  // كانت هذه العلامات تُحفظ للأبد، فلو ضاع أول إشعار (صلاحية مقفولة / التاب مقفول)
+  // يظل التذكير صامتاً إلى الأبد حتى بعد تحديث الصفحة. التذكير المستحق لازم يظهر
+  // من جديد في كل جلسة، ويختفي فقط بإجراء حقيقي (تم / تأجيل) أو بإغلاقه يدوياً.
+  useEffect(() => {
+    notifiedReminderIds.current = new Set();
+    dismissedAlarmIds.current = new Set();
+    activeAlarmRef.current = null;
+    setActiveAlarm(null);
+    try {
+      localStorage.removeItem('crm_notified');
+      localStorage.removeItem('crm_alarmed');
+    } catch {
+      /* لا شيء */
+    }
+  }, [currentUser?.id]);
+
   useEffect(() => {
     if (!currentUser) return;
-    
-    const checkReminders = () => {
-      const allReminders = JSON.parse(localStorage.getItem('crm_reminders') || '[]');
-      const currentReminders = currentUser.role === 'admin' 
-        ? allReminders 
-        : allReminders.filter((r: Reminder) => r.userId === currentUser.id);
-      
-      const notifiedIds = JSON.parse(localStorage.getItem('crm_notified') || '[]');
-      
-      currentReminders.forEach((reminder: Reminder) => {
-        if (isReminderDue(reminder) && !reminder.isCompleted && !notifiedIds.includes(reminder.id)) {
-          notifiedIds.push(reminder.id);
-          localStorage.setItem('crm_notified', JSON.stringify(notifiedIds));
-          
-          // نوتفكيشن فقط: إشعار الجهاز + بطاقة على الشاشة، بلا صوت
-          sendNotification(
-            ` حان وقت الاتصال بـ ${reminder.clientName}`,
-            `${reminder.clientPhone}${reminder.note ? ' — ' + reminder.note : ''}`
-          );
-          // بداية عدّاد الخمس دقايق
-          markReminderFired(reminder.id);
-          
-          setInAppNotification({
-            title: ` حان وقت الاتصال بـ ${reminder.clientName}`,
-            body: `${reminder.clientPhone} - ${reminder.note || ''}`
-          });
-          
-          setTimeout(() => setInAppNotification(null), 10000);
+    let stopped = false;
 
-          // بطاقة التذكير على الشاشة (بلا رنة) لتذكيراتك أنت
-          if (reminder.userId === currentUser.id) {
-            try {
-              const alarmed = JSON.parse(localStorage.getItem('crm_alarmed') || '[]');
-              if (!alarmed.includes(reminder.id)) {
-                alarmed.push(reminder.id);
-                localStorage.setItem('crm_alarmed', JSON.stringify(alarmed));
-                startAlarm(reminder);
-              }
-            } catch {
-              startAlarm(reminder);
-            }
-          }
-        }
-      });
+    const checkReminders = () => {
+      if (stopped) return;
+      let allReminders: Reminder[] = [];
+      try {
+        const parsed = JSON.parse(localStorage.getItem('crm_reminders') || '[]');
+        allReminders = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        allReminders = [];
+      }
+
+      // نفس نطاق التبويب: الإدارة ترى الكل، وغيرها يرى تذكيراتها فقط
+      const scoped = allReminders.filter(
+        (r) => r && !r.isCompleted && (currentUser.role === 'admin' || r.userId === currentUser.id)
+      );
+      // الأجدد أولاً
+      const due = scoped
+        .filter(isReminderDue)
+        .slice()
+        .sort((a, b) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
+
+      // إشعار الجهاز: مرة واحدة لكل تذكير في هذه الجلسة، بغض النظر عن الصلاحية.
+      // (لو الصلاحية رُفضت وقتها، ولا شيء يمنع المحاولة من جديد في الجلسة التالية)
+      for (const reminder of due) {
+        if (notifiedReminderIds.current.has(reminder.id)) continue;
+        notifiedReminderIds.current.add(reminder.id);
+        void sendNotification(
+          `⏰ حان وقت الاتصال بـ ${reminder.clientName || 'عميل'}`,
+          `${reminder.clientPhone || ''}${reminder.note ? ' — ' + reminder.note : ''}`.trim(),
+          `reminder-${reminder.id}`
+        );
+      }
+
+      // بطاقة داخل الموقع: أول تذكير مستحق لم يُغلق في هذه الجلسة.
+      // الأولوية لتذكيراتي أنا، ثم أي تذكير داخل نطاقي (حساب الإدارة).
+      if (!activeAlarmRef.current) {
+        const fresh = due.filter((r) => !dismissedAlarmIds.current.has(r.id));
+        const next = fresh.find((r) => r.userId === currentUser.id) || fresh[0];
+        if (next) startAlarm(next);
+      }
 
       // بند ٨: تذكير بلا إجراء خلال ٥ دقايق يتسجّل «متأخر»
       applyReminderDelays();
     };
-    
+
     checkReminders();
-    const interval = setInterval(checkReminders, 5000);
-    return () => clearInterval(interval);
-  }, [currentUser, soundEnabled]);
+    // كل ثانيتين: أقرب ما يمكن لوقت التذكير الفعلي بدل دورة كل ٥ ثوانٍ
+    const interval = window.setInterval(checkReminders, 2000);
+    // العودة إلى التاب بعد تركه: نفحص فوراً بدل انتظار الدورة
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') checkReminders();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [currentUser?.id, currentUser?.role]);
 
   const loadData = () => {
     if (!currentUser) return;
@@ -1740,7 +1803,10 @@ function App() {
     );
     localStorage.setItem('crm_clients', JSON.stringify(next));
     const updated = next.find((c) => c.id === id);
-    if (updated && stage !== 'lost' && stage !== 'closed') scheduleFollowUp(updated, to);
+    if (updated && stage !== 'lost' && stage !== 'closed') {
+      // تذكير المتابعة التلقائي يُرفع فوراً (وإلا لم يعرفه السيرفر لإشعار الموقع المقفول)
+      if (scheduleFollowUp(updated, to)) void pushKey('crm_reminders');
+    }
     loadData();
   };
 
@@ -1769,10 +1835,47 @@ function App() {
     setTimeout(() => setInAppNotification(null), 10000);
   }, [messages, currentUser, soundEnabled]);
 
-  const handlePermissionRequest = async () => {
-    if ('Notification' in window) {
+  // طلب صلاحية الإشعارات من ضغطة المستخدم (المتصفحات ترفض الطلب التلقائي).
+  // بعد السماح: نسجّل العامل ونشترك في Web Push حتى تصل التذكيرات والموقع مقفول.
+  const requestNotifications = async () => {
+    if (typeof Notification === 'undefined') {
+      setInAppNotification({ title: 'المتصفح لا يدعم الإشعارات', body: 'استخدم Chrome أو Edge على الكمبيوتر، أو ثبّت الموقع على الهاتف.' });
+      setTimeout(() => setInAppNotification(null), 7000);
+      return;
+    }
+    try {
       const permission = await Notification.requestPermission();
-      setNotificationPermission(permission === 'granted');
+      setNotifPermission(permission);
+      if (permission !== 'granted') {
+        setInAppNotification({
+          title: 'الإشعارات غير مفعّلة',
+          body: 'لم تسمح بها — افتح إعدادات الموقع في المتصفح ← الإشعارات ← سماح، ثم جرّب مرة أخرى.',
+        });
+        setTimeout(() => setInAppNotification(null), 9000);
+        return;
+      }
+      void registerWorker();
+      // نسمح بمحاولة إشعار جديدة للتذكيرات المستحقة فوراً بعد السماح
+      notifiedReminderIds.current = new Set();
+      let subscribed = false;
+      if (currentUser) {
+        try {
+          const result = await enablePush({ id: currentUser.id, name: currentUser.name });
+          subscribed = result.ok;
+          setNotifState(await pushState());
+        } catch {
+          /* الإشعار المحلي يعمل حتى لو تعذّر الاشتراك */
+        }
+      }
+      setInAppNotification({
+        title: '✅ إشعارات الكمبيوتر مفعّلة',
+        body: subscribed
+          ? 'التذكيرات هتظهر لك حتى لو الموقع مقفول.'
+          : 'الإشعارات هتظهر والموقع مفتوح — لو حاببها والموقع مقفول اضغط «تفعيل الإشعارات» من زر الجرس.',
+      });
+      setTimeout(() => setInAppNotification(null), 7000);
+    } catch {
+      /* لا شيء */
     }
   };
 
@@ -1910,7 +2013,11 @@ function App() {
   const scopedProperties = teamMemberIds ? properties.filter((p) => inTeam(p.userId)) : properties;
 
   const activeReminders = reminders.filter(r => !r.isCompleted);
-  const dueReminders = reminders.filter(r => isReminderDue(r));
+  // المستحق الآن — الأحدث أولاً (نفس ترتيب تبويب التذكيرات)
+  const dueReminders = reminders
+    .filter((r) => isReminderDue(r))
+    .slice()
+    .sort((a, b) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
   
   const stats = {
     totalClients: clients.length,
@@ -1929,10 +2036,11 @@ function App() {
   };
 
   // ===== بيانات مركز الإشعارات (مقسَّمة: تذكيرات / أرقام جديدة / رسائل / اتصالات الفريق) =====
+  // الأجدد أولاً في القائمة أيضاً
   const notifReminders = reminders
     .filter((r) => !r.isCompleted)
     .slice()
-    .sort((a, b) => a.dateTime.localeCompare(b.dateTime));
+    .sort((a, b) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
 
   // للسيلز: أرقامه الجديدة فقط • للإدارة: كل الأرقام الجديدة التي نزلت من المصادر
   const notifLeads = currentUser.role === 'sales'
@@ -2027,6 +2135,8 @@ function App() {
       };
       localStorage.setItem('crm_reminders', JSON.stringify([reminder, ...allReminders]));
       setReminders(currentUser.role === 'sales' ? [...reminders, reminder] : [...reminders, reminder]);
+      // يرفع فوراً حتى يُرسل السيرفر إشعاره والموقع مقفول
+      void pushKey('crm_reminders');
     }
 
     setInAppNotification({
@@ -2270,6 +2380,65 @@ function App() {
         </header>
 
         <main className="app-content">
+        {/* تنبيه داخل الموقع يظل ظاهراً ما دام فيه تذكير مستحق — لا يختفي بعد ١٠ ثوانٍ */}
+        {dueReminders.length > 0 && (
+          <div className="reminder-strip" role="status" aria-live="polite">
+            <span className="rs-icon" aria-hidden="true"><BellRing className="w-4 h-4" /></span>
+            <div className="rs-body">
+              <b>{dueReminders.length} تذكير مستحق الآن</b>
+              <small>
+                الأحدث: {dueReminders[0].clientName} — {formatDateTime(dueReminders[0].dateTime)}
+                {dueReminders[0].isDelayed ? ' (متأخر)' : ''}
+              </small>
+            </div>
+            <div className="rs-actions">
+              {notifPermission === 'default' && (
+                <button type="button" className="rc-action is-done" onClick={() => void requestNotifications()}>
+                  تفعيل إشعارات الكمبيوتر
+                </button>
+              )}
+              <button
+                type="button"
+                className="rc-action"
+                onClick={() => {
+                  if (currentUser.role === 'sales') setActiveTab('reminders');
+                  else setShowNotifyCenter(true);
+                }}
+              >
+                عرض التذكيرات
+              </button>
+            </div>
+          </div>
+        )}
+        {/* طلب تفعيل إشعارات الكمبيوتر مرة واحدة — بدونها المتصفح لا يسمح بأي إشعار */}
+        {dueReminders.length === 0 && notifPermission === 'default' && !notifPromptDismissed && (
+          <div className="reminder-strip is-perm" role="status">
+            <span className="rs-icon" aria-hidden="true"><Bell className="w-4 h-4" /></span>
+            <div className="rs-body">
+              <b>فعّل إشعارات الكمبيوتر</b>
+              <small>مرة واحدة فقط — عشان التذكيرات ورسائل الفريق توصلك حتى لو الموقع مقفول.</small>
+            </div>
+            <div className="rs-actions">
+              <button type="button" className="rc-action is-done" onClick={() => void requestNotifications()}>
+                تفعيل الإشعارات
+              </button>
+              <button
+                type="button"
+                className="rc-action"
+                onClick={() => {
+                  setNotifPromptDismissed(true);
+                  try {
+                    localStorage.setItem('crm_notif_prompt_hidden', '1');
+                  } catch {
+                    /* لا شيء */
+                  }
+                }}
+              >
+                لاحقاً
+              </button>
+            </div>
+          </div>
+        )}
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && currentUser.role === 'sales' && <DashboardView stats={stats} clients={clients} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} onOpenStatus={setStatusBoard} onCompleteReminder={completeReminder} onActed={markReminderAction} />}
           {activeTab === 'clients' && currentUser.role === 'sales' && <ClientsView
@@ -3381,7 +3550,10 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
 
 // Dashboard View
 function DashboardView({ stats, clients, reminders, properties, currentUser, impersonating, onOpenStatus, onCompleteReminder, onActed }: any) {
-  const dueReminders = reminders.filter((r: Reminder) => isReminderDue(r) && !r.isCompleted);
+  const dueReminders = reminders
+    .filter((r: Reminder) => isReminderDue(r) && !r.isCompleted)
+    .slice()
+    .sort((a: Reminder, b: Reminder) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
   // عملاي أنا فقط — خانات الحالات تحسب أرقامي
   const myClients = (clients || []).filter((c: Client) => c.userId === currentUser.id || c.assignedTo === currentUser.id);
   const [todayRecord, setTodayRecord] = useState<Attendance | undefined>(() => getTodayCheckIn(currentUser.id));
@@ -4601,7 +4773,7 @@ function StatusBoardView({ statusId, clients, onClose, onCall, onSelect }: any) 
                   {lastCommentOf(c)?.text ? <p className="stb-note">{lastCommentOf(c)?.text}</p> : null}
                 </div>
                 <a href={`tel:${c.phone}`} className="rc-action" dir="ltr">اتصال</a>
-                <button type="button" className="rc-action" onClick={() => onCall?.(c)}>تسجيل مكالمة</button>
+                <button type="button" className="rc-action" onClick={() => onCall?.(c)}>تسجيل فيدباك</button>
               </div>
             ))}
           </div>
@@ -5789,7 +5961,11 @@ function PropertiesView({ properties, users, currentUser, searchTerm, onSearch, 
 
 // Reminders View
 function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: any) {
-  const pending = reminders.filter((r: Reminder) => !r.isCompleted);
+  // الأحدث أولاً: التذكير الأقرب/الأجدد فوق، والأقدم تحت
+  const pending = reminders
+    .filter((r: Reminder) => !r.isCompleted)
+    .slice()
+    .sort((a: Reminder, b: Reminder) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
   
   return (
     <div className="space-y-4">
@@ -8308,17 +8484,41 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
 
 function AddReminderModal({ clients, currentUser, onClose, onSuccess }: any) {
   const [form, setForm] = useState({ clientId: '', clientName: '', clientPhone: '', dateTime: '', note: '' });
-  
-  const handleSubmit = (e: React.FormEvent) => {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  // معرّف التذكير بعد حفظه محلياً: إعادة المحاولة ترفع نفس السجل بدل إنشاء نسخة مكررة
+  const [createdId, setCreatedId] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const reminders = JSON.parse(localStorage.getItem('crm_reminders') || '[]');
-    const newReminder = { ...form, id: crypto.randomUUID(), userId: currentUser.id, isCompleted: false, isDelayed: false, delayCount: 0, createdAt: new Date().toISOString() };
-    localStorage.setItem('crm_reminders', JSON.stringify([newReminder, ...reminders]));
-    if (form.clientId) {
-      addClientActivity(form.clientId, 'reminder', `تم إنشاء تذكير${form.note ? `: ${form.note}` : ''}`, currentUser?.name);
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      if (!createdId) {
+        const reminders = JSON.parse(localStorage.getItem('crm_reminders') || '[]');
+        const newReminder = { ...form, id: crypto.randomUUID(), userId: currentUser.id, isCompleted: false, isDelayed: false, delayCount: 0, createdAt: new Date().toISOString() };
+        localStorage.setItem('crm_reminders', JSON.stringify([newReminder, ...reminders]));
+        setCreatedId(newReminder.id);
+        if (form.clientId) {
+          addClientActivity(form.clientId, 'reminder', `تم إنشاء تذكير${form.note ? `: ${form.note}` : ''}`, currentUser?.name);
+        }
+      }
+      // لا نعتبر التذكير محفوظاً قبل وصوله للقاعدة: إشعار «الموقع مقفول» يرسله السيرفر من هناك
+      const savedToDb = await pushKey('crm_reminders');
+      if (!savedToDb) {
+        // يظهر في القائمة محلياً رغم تعذّر الرفع، ويظل قابلاً لإعادة المحاولة بنفس السجل
+        onSuccess();
+        setError('التذكير اتسجل على الجهاز ده لكن ماوصلش لقاعدة البيانات — تأكد من الاتصال واضغط «إعادة المحاولة».');
+        return;
+      }
+      onSuccess();
+      onClose();
+    } catch {
+      setError('تعذّر حفظ التذكير — حاول مرة أخرى');
+    } finally {
+      setSaving(false);
     }
-    onSuccess();
-    onClose();
   };
   
   return (
@@ -8354,7 +8554,10 @@ function AddReminderModal({ clients, currentUser, onClose, onSuccess }: any) {
           <input type="tel" placeholder="رقم الهاتف *" value={form.clientPhone} onChange={(e) => setForm({ ...form, clientPhone: e.target.value, clientId: '' })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
           <input type="datetime-local" value={form.dateTime} onChange={(e) => setForm({ ...form, dateTime: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
           <textarea placeholder="ملاحظة" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-20" />
-          <button type="submit" className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إضافة</button>
+          {error && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-[var(--r-md)] px-3 py-2">{error}</p>}
+          <button type="submit" disabled={saving} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-60">
+            {saving ? 'جارٍ الحفظ...' : createdId ? 'إعادة المحاولة' : 'إضافة'}
+          </button>
         </form>
       </motion.div>
     </motion.div>

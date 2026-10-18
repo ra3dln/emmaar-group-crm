@@ -187,13 +187,50 @@ export async function sendTestPush(user: { id: string }): Promise<PushResult> {
   }
 }
 
-// إشعار محلي فوري (يعمل والموقع مفتوح) — يمر دائماً عبر Service Worker.
-// آيفون لا يدعم new Notification أبداً، لذلك ننتظر جاهزية العامل ونستخدمه هو.
+// إشعار محلي فوري (يعمل والموقع مفتوح).
+// الأولوية لـ Service Worker (وهو المسار الوحيد على الهاتف)، لكن على الكمبيوتر
+// قد لا يكون العامل مسجّلاً بعد — والانتظار على serviceWorker.ready كان يعلّق
+// إلى الأبد فلا يظهر أي إشعار إطلاقاً. لذلك: مهلة قصيرة ثم إشعار المتصفح المباشر.
+const SW_READY_TIMEOUT_MS = 1500;
+
 export async function localNotification(title: string, body: string, tag?: string, url = '/'): Promise<boolean> {
-  if (!pushSupported() || Notification.permission !== 'granted') return false;
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return false;
+  const finalTag = tag || `local-${Date.now()}`;
+
+  // ١) عبر عامل الخدمة إن كان جاهزاً (أفضل على الكمبيوتر، وضروري على الهاتف)
+  if ('serviceWorker' in navigator) {
+    try {
+      const registration = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), SW_READY_TIMEOUT_MS)),
+      ]);
+      if (registration?.active) {
+        registration.active.postMessage({ type: 'notify', title, body, tag: finalTag, url });
+        return true;
+      }
+    } catch {
+      /* نكمل بالبديل المباشر */
+    }
+  }
+
+  // ٢) بديل الكمبيوتر: إشعار مباشر من الصفحة (Chrome / Edge / Firefox)
   try {
-    const registration = await navigator.serviceWorker.ready;
-    registration.active?.postMessage({ type: 'notify', title, body, tag: tag || `local-${Date.now()}`, url });
+    const notification = new Notification(title, {
+      body,
+      tag: finalTag,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      data: { url },
+      requireInteraction: true,
+    });
+    notification.onclick = () => {
+      try {
+        window.focus();
+        notification.close();
+      } catch {
+        /* لا شيء */
+      }
+    };
     return true;
   } catch {
     return false;
