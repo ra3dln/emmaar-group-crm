@@ -29,6 +29,17 @@ import {
   numberWordValue,
   roomsFromText,
 } from './arabicNumbers';
+import { buildXlsx, downloadBlob } from './xlsx';
+import {
+  ATTENDANCE_END_DEFAULT,
+  ATTENDANCE_GRACE_DEFAULT,
+  ATTENDANCE_START_DEFAULT,
+  clockLabel,
+  clockToMinutes,
+  earlyMinutes as earlyMinutesOf,
+  lateMinutes as lateMinutesOf,
+  minutesOfIso,
+} from './attendance';
 
 // ===== الحضور والانصراف =====
 const ATTENDANCE_KEY = 'crm_attendance';
@@ -5638,34 +5649,41 @@ function NeedsSearchModal({ properties, onClose, onApply }: any) {
 }
 
 // ===== تقرير الحضور الشهري (لكل مندوب) =====
+// الدوام الافتراضي: حضور 10:00 — سماحية 30 دقيقة — انصراف 18:00.
 function AttendanceMonthlyReport({ users }: any) {
   const [open, setOpen] = useState(false);
   const [month, setMonth] = useState(() => todayKey().slice(0, 7));
-  const [workStart, setWorkStart] = useState(() => localStorage.getItem('crm_work_start') || '09:00');
+  const [workStart, setWorkStart] = useState(() => {
+    const saved = localStorage.getItem('crm_work_start');
+    // 09:00 كانت القيمة الافتراضية القديمة — نرقّيها مرة واحدة إلى 10:00
+    return saved && saved !== '09:00' ? saved : ATTENDANCE_START_DEFAULT;
+  });
+  const [workEnd, setWorkEnd] = useState(() => localStorage.getItem('crm_work_end') || ATTENDANCE_END_DEFAULT);
+  const [graceMinutes, setGraceMinutes] = useState(() => {
+    const raw = localStorage.getItem('crm_attendance_grace');
+    const saved = raw === null ? NaN : Number(raw);
+    return Number.isFinite(saved) && saved >= 0 ? Math.min(180, saved) : ATTENDANCE_GRACE_DEFAULT;
+  });
   const [restDay, setRestDay] = useState(() => localStorage.getItem('crm_rest_day') || '5');
 
   useEffect(() => {
     try {
       localStorage.setItem('crm_work_start', workStart);
+      localStorage.setItem('crm_work_end', workEnd);
+      localStorage.setItem('crm_attendance_grace', String(graceMinutes));
       localStorage.setItem('crm_rest_day', restDay);
     } catch {
       /* لا شيء */
     }
-  }, [workStart, restDay]);
+  }, [workStart, workEnd, graceMinutes, restDay]);
 
   const [year, monthNumber] = month.split('-').map(Number);
   const monthLabel = new Date(year, monthNumber - 1, 1).toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' });
-  const startMinutes = (() => {
-    const [h, m] = workStart.split(':').map(Number);
-    return (h || 0) * 60 + (m || 0);
-  })();
-
-  const minutesOf = (iso?: string): number | null => {
-    if (!iso) return null;
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return null;
-    return d.getHours() * 60 + d.getMinutes();
-  };
+  const startMinutes = clockToMinutes(workStart);
+  // التأخير يبدأ بعد انتهاء السماحية: 10:00 + 30 دقيقة = 10:30
+  const lateAfterMinutes = startMinutes + graceMinutes;
+  const restLabel = restDay === '5' ? 'الجمعة' : restDay === '6' ? 'السبت' : 'لا يوجد';
+  const restPhrase = restDay === 'none' ? 'كل الأيام أيام عمل' : `بلا ${restLabel}`;
 
   // أيام العمل المتوقعة في الشهر (باستثناء يوم الراحة المختار)
   const expectedDays = (() => {
@@ -5689,32 +5707,36 @@ function AttendanceMonthlyReport({ users }: any) {
     .map((user) => {
       const mine = records.filter((rec) => rec.userId === user.id);
       const days = new Set(mine.map((rec) => rec.date));
-      const lateRecords = mine.filter((rec) => {
-        const mins = minutesOf(rec.checkInAt);
-        return mins !== null && mins > startMinutes;
-      });
-      const lateMinutes = lateRecords.reduce((sum, rec) => {
-        const mins = minutesOf(rec.checkInAt);
-        return sum + (mins === null ? 0 : mins - startMinutes);
-      }, 0);
+      // التأخير بعد السماحية فقط: 10:30 وما بعدها
+      const lateRecords = mine.filter((rec) => lateMinutesOf(rec.checkInAt, workStart, graceMinutes) > 0);
+      const lateMinutes = lateRecords.reduce(
+        (sum, rec) => sum + lateMinutesOf(rec.checkInAt, workStart, graceMinutes),
+        0
+      );
       const noCheckout = mine.filter((rec) => !rec.checkOutAt).length;
       const done = mine.filter((rec) => rec.checkOutAt);
+      // الانصراف المبكر: قبل 18:00
+      const earlyRecords = done.filter((rec) => earlyMinutesOf(rec.checkOutAt, workEnd) > 0);
+      const earlyMinutes = earlyRecords.reduce(
+        (sum, rec) => sum + earlyMinutesOf(rec.checkOutAt, workEnd),
+        0
+      );
       const totalMinutes = done.reduce((sum, rec) => sum + workedMinutes(rec), 0);
-      const times = mine.map((rec) => minutesOf(rec.checkInAt)).filter((v): v is number => v !== null);
-      const outTimes = done.map((rec) => minutesOf(rec.checkOutAt)).filter((v): v is number => v !== null);
-      const clock = (mins: number | null) =>
-        mins === null ? '—' : `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+      const times = mine.map((rec) => minutesOfIso(rec.checkInAt)).filter((v): v is number => v !== null);
+      const outTimes = done.map((rec) => minutesOfIso(rec.checkOutAt)).filter((v): v is number => v !== null);
       return {
         user,
         days: days.size,
         lateDays: lateRecords.length,
         lateMinutes,
         noCheckout,
+        earlyDays: earlyRecords.length,
+        earlyMinutes,
         missing: Math.max(0, expectedDays - days.size),
         hours: Math.round((totalMinutes / 60) * 10) / 10,
         avgHours: done.length ? Math.round((totalMinutes / done.length / 60) * 10) / 10 : 0,
-        earliest: clock(times.length ? Math.min(...times) : null),
-        latest: clock(outTimes.length ? Math.max(...outTimes) : null),
+        earliest: clockLabel(times.length ? Math.min(...times) : null),
+        latest: clockLabel(outTimes.length ? Math.max(...outTimes) : null),
       };
     });
 
@@ -5724,27 +5746,50 @@ function AttendanceMonthlyReport({ users }: any) {
       lateDays: acc.lateDays + row.lateDays,
       lateMinutes: acc.lateMinutes + row.lateMinutes,
       noCheckout: acc.noCheckout + row.noCheckout,
+      earlyDays: acc.earlyDays + row.earlyDays,
+      earlyMinutes: acc.earlyMinutes + row.earlyMinutes,
       hours: Math.round((acc.hours + row.hours) * 10) / 10,
     }),
-    { days: 0, lateDays: 0, lateMinutes: 0, noCheckout: 0, hours: 0 }
+    { days: 0, lateDays: 0, lateMinutes: 0, noCheckout: 0, earlyDays: 0, earlyMinutes: 0, hours: 0 }
   );
 
-  const exportCsv = () => {
-    const header = ['السيلز', 'أيام الحضور', 'أيام التأخير', 'إجمالي دقائق التأخير', 'أيام بلا انصراف', 'أيام بلا تسجيل', 'إجمالي ساعات العمل', 'متوسط ساعات اليوم', 'أبكر حضور', 'آخر انصراف'];
-    const lines = rows.map((row) => [
-      row.user.name, row.days, row.lateDays, row.lateMinutes, row.noCheckout, row.missing,
-      row.hours, row.avgHours, row.earliest, row.latest,
+  // ===== تصدير Excel حقيقي (.xlsx) =====
+  // كان CSV، وبعض برامج العرض كانت تفتحه كخطأ «unrecoverable problem».
+  // الآن ملف xlsx قياسي: أرقام كأرقام، RTL، وعناوين بولد.
+  const exportExcel = () => {
+    const header = [
+      'السيلز', 'أيام الحضور', 'أيام التأخير', 'إجمالي التأخير (دقيقة)',
+      'أيام بلا انصراف', 'أيام انصراف مبكر', 'إجمالي الانصراف المبكر (دقيقة)',
+      'أيام بلا تسجيل', 'إجمالي ساعات العمل', 'متوسط ساعات اليوم', 'أبكر حضور', 'آخر انصراف',
+    ];
+    const data = rows.map((row) => [
+      row.user.name, row.days, row.lateDays, row.lateMinutes, row.noCheckout,
+      row.earlyDays, row.earlyMinutes, row.missing, row.hours, row.avgHours,
+      row.earliest, row.latest,
     ]);
-    const csv = `\uFEFFsep=,\r\n${[header, ...lines]
-      .map((cols) => cols.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
-      .join('\r\n')}`;
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `تقرير-الحضور-${month}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    const totalRow = [
+      'الإجمالي', totals.days, totals.lateDays, totals.lateMinutes, totals.noCheckout,
+      totals.earlyDays, totals.earlyMinutes, '—', totals.hours, '—', '—', '—',
+    ];
+    const note = `«بلا تسجيل» = أيام العمل المتوقعة (${expectedDays} يوم، ${restPhrase}) ناقص أيام الحضور. • التأخير يُحسب بعد ${graceMinutes} دقيقة سماح من ${workStart} (أي بعد ${clockLabel(lateAfterMinutes)}). • الانصراف المبكر قبل ${workEnd}.`;
+    const noteRow = rows.length + 5; // عنوان + سطر الإعدادات + العنوان + البيانات + الإجمالي
+
+    const blob = buildXlsx({
+      sheetName: 'الحضور',
+      rows: [
+        [`تقرير الحضور الشهري — ${monthLabel}`],
+        [`بداية الدوام ${workStart} • سماحية التأخير ${graceMinutes} دقيقة • نهاية الدوام ${workEnd} • يوم الراحة ${restLabel}`],
+        header,
+        ...data,
+        totalRow,
+        [note],
+      ],
+      headerRows: [3],
+      titleRows: [1],
+      columnWidths: [22, 12, 12, 18, 14, 16, 20, 14, 16, 16, 12, 12],
+      merges: ['A1:L1', 'A2:L2', `A${noteRow}:L${noteRow}`],
+    });
+    downloadBlob(blob, `تقرير-الحضور-${month}.xlsx`);
   };
 
   return (
@@ -5775,7 +5820,18 @@ function AttendanceMonthlyReport({ users }: any) {
               </label>
               <label>
                 <span className="text-[11px] text-[var(--text-muted)] block mb-1">بداية الدوام</span>
-                <input type="time" value={workStart} onChange={(e) => setWorkStart(e.target.value || '09:00')}
+                <input type="time" value={workStart} onChange={(e) => setWorkStart(e.target.value || ATTENDANCE_START_DEFAULT)}
+                  className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm" dir="ltr" />
+              </label>
+              <label>
+                <span className="text-[11px] text-[var(--text-muted)] block mb-1">سماحية التأخير (دقيقة)</span>
+                <input type="number" min={0} max={180} step={5} value={graceMinutes}
+                  onChange={(e) => setGraceMinutes(Math.max(0, Math.min(180, Number(e.target.value) || 0)))}
+                  className="w-24 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm" dir="ltr" />
+              </label>
+              <label>
+                <span className="text-[11px] text-[var(--text-muted)] block mb-1">نهاية الدوام</span>
+                <input type="time" value={workEnd} onChange={(e) => setWorkEnd(e.target.value || ATTENDANCE_END_DEFAULT)}
                   className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm" dir="ltr" />
               </label>
               <label>
@@ -5788,9 +5844,12 @@ function AttendanceMonthlyReport({ users }: any) {
                 </select>
               </label>
             </div>
+            <p className="text-[11px] text-[var(--text-dim)] mt-2">
+              الحضور من {workStart} • سماحية حتى {clockLabel(lateAfterMinutes)} • الانصراف {workEnd} • التأخير يُحسب بعد السماحية والانصراف المبكر قبل نهاية الدوام.
+            </p>
 
             <div className="overflow-x-auto mt-4">
-              <table className="w-full text-sm min-w-[720px]">
+              <table className="w-full text-sm min-w-[1020px]">
                 <thead>
                   <tr className="text-[var(--text-muted)] text-xs">
                     <th className="text-right py-2 px-2 font-bold">السيلز</th>
@@ -5798,6 +5857,8 @@ function AttendanceMonthlyReport({ users }: any) {
                     <th className="py-2 px-2">أيام التأخير</th>
                     <th className="py-2 px-2">إجمالي التأخير</th>
                     <th className="py-2 px-2">بلا انصراف</th>
+                    <th className="py-2 px-2">انصراف مبكر</th>
+                    <th className="py-2 px-2">إجمالي الانصراف المبكر</th>
                     <th className="py-2 px-2">بلا تسجيل</th>
                     <th className="py-2 px-2">ساعات العمل</th>
                     <th className="py-2 px-2">متوسط اليوم</th>
@@ -5816,6 +5877,8 @@ function AttendanceMonthlyReport({ users }: any) {
                       <td className={`py-2.5 px-2 text-center font-bold ${row.lateDays ? 'text-amber-400' : 'text-[var(--text-dim)]'}`}>{row.lateDays}</td>
                       <td className="py-2.5 px-2 text-center text-[var(--text)]">{row.lateMinutes ? formatDuration(row.lateMinutes) : '—'}</td>
                       <td className={`py-2.5 px-2 text-center ${row.noCheckout ? 'text-amber-400' : 'text-[var(--text-dim)]'}`}>{row.noCheckout}</td>
+                      <td className={`py-2.5 px-2 text-center ${row.earlyDays ? 'text-amber-400' : 'text-[var(--text-dim)]'}`}>{row.earlyDays}</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text)]">{row.earlyMinutes ? formatDuration(row.earlyMinutes) : '—'}</td>
                       <td className={`py-2.5 px-2 text-center ${row.missing ? 'text-red-400' : 'text-emerald-300'}`}>{row.missing}</td>
                       <td className="py-2.5 px-2 text-center text-[var(--text)]">{row.hours} س</td>
                       <td className="py-2.5 px-2 text-center text-[var(--text)]">{row.avgHours || '—'} {row.avgHours ? 'س' : ''}</td>
@@ -5830,6 +5893,8 @@ function AttendanceMonthlyReport({ users }: any) {
                       <td className="py-2.5 px-2 text-center text-amber-300 font-bold">{totals.lateDays}</td>
                       <td className="py-2.5 px-2 text-center text-[var(--text)]">{totals.lateMinutes ? formatDuration(totals.lateMinutes) : '—'}</td>
                       <td className="py-2.5 px-2 text-center text-[var(--text)]">{totals.noCheckout}</td>
+                      <td className="py-2.5 px-2 text-center text-amber-300 font-bold">{totals.earlyDays}</td>
+                      <td className="py-2.5 px-2 text-center text-[var(--text)]">{totals.earlyMinutes ? formatDuration(totals.earlyMinutes) : '—'}</td>
                       <td className="py-2.5 px-2 text-center text-[var(--text-dim)]">—</td>
                       <td className="py-2.5 px-2 text-center text-[var(--text)]">{totals.hours} س</td>
                       <td className="py-2.5 px-2 text-center text-[var(--text-dim)]">—</td>
@@ -5847,12 +5912,14 @@ function AttendanceMonthlyReport({ users }: any) {
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-4">
               <p className="text-[11px] text-[var(--text-dim)]">
-                «بلا تسجيل» = أيام العمل المتوقعة في الشهر ({expectedDays} يوم، بلا {restDay === '5' ? 'الجمعة' : restDay === '6' ? 'السبت' : 'يوم راحة'}) ناقص أيام الحضور الفعلية.
+                «بلا تسجيل» = أيام العمل المتوقعة في الشهر ({expectedDays} يوم، {restPhrase}) ناقص أيام الحضور الفعلية.
                 • «بلا انصراف» = سجّل حضوراً ولم يسجّل انصرافه.
+                • التأخير يُحسب بعد {graceMinutes} دقيقة سماح من {workStart} (أي بعد {clockLabel(lateAfterMinutes)}).
+                • «انصراف مبكر» = انصرف قبل {workEnd}.
               </p>
-              <button type="button" onClick={exportCsv} disabled={rows.length === 0}
+              <button type="button" onClick={exportExcel} disabled={rows.length === 0}
                 className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-[var(--tint-1)] disabled:text-[var(--text-dim)] text-white px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center justify-center gap-2 whitespace-nowrap">
-                <Download className="w-4 h-4" /> تنزيل التقرير (إكسل)
+                <Download className="w-4 h-4" /> تنزيل التقرير (Excel .xlsx)
               </button>
             </div>
           </motion.div>
