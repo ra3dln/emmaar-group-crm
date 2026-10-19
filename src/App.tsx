@@ -2577,6 +2577,26 @@ function App() {
           {activeTab === 'reports' && currentUser.role === 'sales' && <ReportsView clients={clients} feedbacks={dailyFeedbacks} reminders={reminders} />}
           {activeTab === 'admin-users' && currentUser.role !== 'sales' && <AdminUsersView users={scopedUsers} currentUser={currentUser} onSelect={setSelectedUserFeedback} onAdd={() => setShowAddUser(true)} onEdit={setEditingUser} onDelete={setDeletingUser} onImpersonate={handleImpersonate} />}
           {activeTab === 'admin-feedback' && currentUser.role !== 'sales' && <AdminFeedbackView users={scopedUsers.filter((u: User) => u.role === 'sales' || u.role === 'supervisor')} dailyFeedbacks={scopedFeedbacks} clients={scopedClients} callLogs={scopedCallLogs} onSelect={setSelectedUserFeedback} />}
+          {/* كل عملاء الشركة: العدد + كارت لكل عميل يفتح التفاصيل كاملة */}
+          {activeTab === 'admin-clients' && currentUser.role !== 'sales' && <AdminClientsView
+            clients={scopedClients}
+            users={scopedUsers}
+            onSelect={(c: Client) => setSelectedClient(c)}
+            onCall={(c: Client) => setCallClient(c)}
+          />}
+          {/* الأرقام الجديدة التي وصلت للمندوب من الكامبينات — الكارت يفتح التفاصيل */}
+          {activeTab === 'new-leads' && currentUser.role === 'sales' && <NewLeadsViewForSales
+            assignedLeads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id && l.status !== 'closed')}
+            onConvert={handleConvertLeadToClient}
+            onMarkViewed={(id: string) => {
+              const target = assignedLeads.find((l: AssignedLead) => l.id === id);
+              if (!target || target.status !== 'new') return;
+              const updated = assignedLeads.map((l: AssignedLead) => (l.id === id ? { ...l, status: 'viewed' as const, viewedAt: new Date().toISOString() } : l));
+              setAssignedLeads(updated);
+              localStorage.setItem('crm_assigned_leads', JSON.stringify(updated));
+              void pushKey('crm_assigned_leads');
+            }}
+          />}
           {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={scopedLeads} users={scopedUsers} currentUser={currentUser} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
             const updated = assignedLeads.filter(l => l.id !== id);
             setAssignedLeads(updated);
@@ -3203,6 +3223,8 @@ function getTabGroups(role: string): NavGroup[] {
       label: 'لوحة العمل',
       items: [
         { id: 'dashboard', icon: Home, label: 'الرئيسية' },
+        // «أرقام جديدة»: الأرقام التي وصلته من الكامبينات قبل أن يضيفها لعملائه
+        { id: 'new-leads', icon: UserPlus, label: 'أرقام جديدة' },
         { id: 'clients', icon: Users, label: 'العملاء' },
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
       ],
@@ -3234,6 +3256,8 @@ function getTabGroups(role: string): NavGroup[] {
     {
       label: 'متابعة العمل',
       items: [
+        // كل عملاء الشركة وعددهم في تبويب واحد، والكارت يفتح التفاصيل
+        { id: 'admin-clients', icon: Users, label: 'العملاء' },
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
         { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
         { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
@@ -3263,6 +3287,7 @@ function getTabGroups(role: string): NavGroup[] {
       {
         label: 'متابعة العمل',
         items: [
+          { id: 'admin-clients', icon: Users, label: 'العملاء' },
           { id: 'pipeline', icon: Workflow, label: 'المراحل' },
           { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
           { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
@@ -7100,6 +7125,134 @@ function SalesShareModal({ leads, users, onClose }: any) {
   );
 }
 
+// ===== تبويب «العملاء» للإدارة =====
+// كل عملاء الشركة في مكان واحد: العدد الحالي في المقدمة، وكارت لكل عميل يفتح
+// نافذة التفاصيل نفسها المستخدمة في «المراحل» (البيانات + الخط الزمني + الاتصال).
+function AdminClientsView({ clients, users, onSelect, onCall }: any) {
+  const [query, setQuery] = useState('');
+  const [stage, setStage] = useState<'all' | Client['stage']>('all');
+
+  const ownerName = (c: Client) =>
+    users.find((u: User) => u.id === (c.assignedTo || c.userId))?.name || 'غير مخصص';
+  const q = normalizeArabicText(query).trim();
+  const matches = (c: Client) =>
+    !q ||
+    normalizeArabicText(`${c.name} ${c.phone} ${(c.phones || []).join(' ')} ${c.source || ''} ${ownerName(c)}`).includes(q);
+
+  const visible = clients.filter((c: Client) => (stage === 'all' || c.stage === stage) && matches(c));
+  const stageCount = (id: 'all' | Client['stage']) =>
+    id === 'all' ? clients.length : clients.filter((c: Client) => c.stage === id).length;
+  const inProgress = clients.filter((c: Client) => c.stage !== 'closed' && c.stage !== 'lost').length;
+  const sold = clients.filter((c: Client) => c.stage === 'closed').length;
+
+  const chips: { id: 'all' | Client['stage']; label: string }[] = [
+    { id: 'all', label: 'الكل' },
+    ...(['new', 'contacted', 'meeting', 'negotiation', 'closed', 'lost'] as Client['stage'][]).map((id) => ({
+      id,
+      label: STAGE_META[id]?.label || id,
+    })),
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+        <div>
+          <div className="page-intro"><div><h2>العملاء</h2></div></div>
+          <p className="text-xs text-[var(--text-muted)] mt-1">اضغط على كارت العميل لعرض التفاصيل الكاملة</p>
+        </div>
+      </div>
+
+      {/* العدد الحالي — ثلاث خانات تكفي للنظرة السريعة */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="panel p-4">
+          <p className="text-[11px] text-[var(--text-muted)]">إجمالي العملاء</p>
+          <p className="text-3xl font-extrabold text-[var(--brand)] mt-1" dir="ltr">{clients.length}</p>
+        </div>
+        <div className="panel p-4">
+          <p className="text-[11px] text-[var(--text-muted)]">قيد المتابعة</p>
+          <p className="text-3xl font-extrabold text-[var(--text-strong)] mt-1" dir="ltr">{inProgress}</p>
+        </div>
+        <div className="panel p-4">
+          <p className="text-[11px] text-[var(--text-muted)]">تم البيع</p>
+          <p className="text-3xl font-extrabold text-emerald-400 mt-1" dir="ltr">{sold}</p>
+        </div>
+      </div>
+
+      <div className="panel p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
+        <div className="relative flex-1">
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="ابحث بالاسم أو الرقم أو المصدر..."
+            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm"
+          />
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {chips.map((chip) => (
+            <button
+              key={chip.id}
+              onClick={() => setStage(chip.id)}
+              className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${
+                stage === chip.id
+                  ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
+                  : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
+              }`}
+            >
+              {chip.label} ({stageCount(chip.id)})
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {visible.map((client: Client) => {
+          const meta = STAGE_META[client.stage] || STAGE_META.new;
+          return (
+            <motion.div
+              key={client.id}
+              whileHover={{ scale: 1.01 }}
+              onClick={() => onSelect(client)}
+              className="panel p-4 cursor-pointer"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h4 className="font-bold text-[var(--text-strong)] truncate">{client.name}</h4>
+                  <p className="text-[var(--brand)] text-sm mt-0.5" dir="ltr">{client.phone}</p>
+                </div>
+                <span className={meta.cls}>{meta.label}</span>
+              </div>
+              <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1 text-[11.5px] text-[var(--text-muted)]">
+                <p>المسؤول: <span className="text-[var(--text)] font-bold">{ownerName(client)}</span></p>
+                <p className="truncate">المصدر: {client.source || '—'}</p>
+                <p>{formatDateTime(client.createdAt)}</p>
+              </div>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onCall?.(client); }}
+                className="icon-btn !w-9 !h-9 text-emerald-300 mt-3"
+                title="الاتصال بالعميل"
+              >
+                <PhoneCall className="w-4 h-4" />
+              </button>
+            </motion.div>
+          );
+        })}
+      </div>
+
+      {clients.length === 0 && (
+        <div className="text-center py-16">
+          <Users className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
+          <p className="text-[var(--text-muted)]">لا يوجد عملاء بعد</p>
+        </div>
+      )}
+      {clients.length > 0 && visible.length === 0 && (
+        <p className="text-center text-sm text-[var(--text-dim)] py-8">لا نتائج مطابقة للبحث أو التصفية</p>
+      )}
+    </div>
+  );
+}
+
 function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onImport, onAssign }: any) {
   const salesUsers = users.filter((u: User) => (u.role === 'sales' || u.role === 'supervisor') && u.isActive);
   const [query, setQuery] = useState('');
@@ -7248,7 +7401,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
 
                 <div className="flex items-center gap-2 shrink-0">
                   <a href={`tel:${lead.phone}`} className="icon-btn !w-9 !h-9 text-emerald-300" title="الاتصال بالعميل"><PhoneCall className="w-4 h-4" /></a>
-                  <button onClick={() => onDelete(lead.id)} className="icon-btn !w-9 !h-9 text-red-400" title="حذف الرقم">
+                  <button onClick={() => onDelete(lead.id)} className="icon-btn !w-9 !h-9 text-red-400" title="حذف الرقم نهائياً من النظام">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
@@ -7266,7 +7419,19 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                     <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
                   ))}
                 </select>
-                {owner && <span className="st-chip st-closed">✓ مع {owner.name}</span>}
+                {owner && (
+                  <>
+                    <span className="st-chip st-closed">✓ مع {owner.name}</span>
+                    {/* سحب الرقم من السيلز بلا حذفه: يرجع «غير مخصص» ويظهر في التصفية */}
+                    <button
+                      onClick={() => onAssign?.([lead.id], '')}
+                      className="text-[11px] font-bold text-amber-300 border border-amber-400/40 bg-amber-500/10 px-2.5 py-1.5 rounded-[var(--r-sm)] hover:bg-amber-500/20 transition-colors"
+                      title="يسحب الرقم من عهدة السيلز ويرجعه لقائمة غير المخصصة"
+                    >
+                      إزالة من السيلز
+                    </button>
+                  </>
+                )}
               </div>
             </motion.div>
           );
