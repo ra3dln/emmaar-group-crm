@@ -9,6 +9,21 @@
 
 import http from 'node:http';
 import assert from 'node:assert/strict';
+import { buildAssignments } from '../server/leadSource.js';
+
+// الحصة الممتلئة لا تُسقط الرقم: يُحفظ غير موزّع حتى توزّعه الإدارة
+const limitBuilt = buildAssignments({
+  fetched: [
+    { phone: '01000000001', name: 'أول' },
+    { phone: '01000000002', name: 'ثاني' },
+  ],
+  sales: [{ id: 's1', name: 'سيلز واحد' }],
+  config: { perSalesLimit: 1 },
+  knownPhones: [],
+});
+assert.equal(limitBuilt.added.length, 2);
+assert.equal(limitBuilt.added[0].salesId, 's1');
+assert.equal(limitBuilt.added[1].salesId, '');
 
 // ---------- محاكي Redis REST (نفس عقد Upstash: POST /pipeline) ----------
 const redisData = new Map();
@@ -356,7 +371,7 @@ try {
   const wrongKey = await call(cronApi, { url: '/api/cron?key=غلط' });
   check('المُشغّل يرفض مفتاحاً غلطاً (403)', wrongKey.status === 403);
 
-  const rightKey = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  const rightKey = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   check('المُشغّل ينفّذ التوزيع بالمفتاح الصحيح', rightKey.status === 200 && rightKey.json?.summary?.added === 2, JSON.stringify(rightKey.json?.summary));
 
   const viaHeader = await call(cronApi, {
@@ -376,8 +391,16 @@ try {
   });
   check('إضافة عميل برقم جديد تنجح', clients.status === 200);
   csvRows.push(csvLine('1005', '01011110005', 'عميل موجود بالفعل'));
-  const dupCheck = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  const dupCheck = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   check('رقم موجود عند عميل لا يُوزَّع كرقم جديد', dupCheck.json?.summary?.added === 0, JSON.stringify(dupCheck.json?.summary));
+
+  // احترام «كل كم دقيقة»: الدورة القريبة من السحب السابق تُتخطى بلا سحب جديد
+  const intervalSkip = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  check(
+    'السحب التلقائي يحترم الفاصل الزمني ولا يسحب كل دقيقة',
+    intervalSkip.json?.summary?.skipped === true,
+    JSON.stringify(intervalSkip.json?.summary)
+  );
 
   // ===== ٨.٥) قناة إنستجرام: إعداد مستقل، ومؤشر مستقل، وسحب مشترك =====
   instaRows = [csvHeader, csvLine('3001', '01033330001', 'عميل إنستجرام')];
@@ -401,7 +424,7 @@ try {
 
   // نوقف فيسبوك ونترك إنستجرام وحده: يجب أن يعمل السحب بلا توقف
   await call(leadSourceApi, { method: 'POST', url: '/api/lead-source', body: { enabled: false } });
-  const igOnly = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  const igOnly = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   check(
     'إنستجرام وحده يكفي لتشغيل المُشغّل الدوري',
     igOnly.status === 200 && igOnly.json?.summary?.added === 1 && igOnly.json?.summary?.channels?.facebook == null,
@@ -420,7 +443,7 @@ try {
   await call(leadSourceApi, { method: 'POST', url: '/api/lead-source', body: { enabled: true } });
   csvRows.push(csvLine('1006', '01011110006', 'عميل فيسبوك جديد'));
   instaRows.push(csvLine('3002', '01033330002', 'عميل إنستجرام ٢'));
-  const bothRun = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  const bothRun = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   check(
     'القناتان تُسحبان في دورة واحدة وتُوزّع أرقامهما معاً',
     bothRun.json?.summary?.added === 2 &&
@@ -436,7 +459,7 @@ try {
     body: { type: 'sheet', sheetUrl: 'http://127.0.0.1:1/dead.csv' },
   });
   instaRows.push(csvLine('3003', '01033330003', 'عميل إنستجرام ٣'));
-  const partial = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  const partial = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   check(
     'فشل قناة لا يوقف القناة الأخرى (عزل القنوات)',
     partial.json?.summary?.added === 1 &&
@@ -472,7 +495,7 @@ try {
     body: { channel: 'instagram', enabled: true, type: 'meta', token: 'EAAG-demo-ig', forms: [{ id: 'form-ig', pageId: 'page-ig', name: 'فورم إنستجرام أكتوبر' }], pages: [{ id: 'page-ig', name: 'صفحة إعمار', token: 'PAGE-IG-TOKEN' }] },
   });
 
-  const tokenRun = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  const tokenRun = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   check(
     'مسار التوكن يسحب من فيسبوك وإنستجرام معاً',
     tokenRun.json?.summary?.added === 2 && tokenRun.json?.summary?.fetched === 2,
@@ -495,7 +518,7 @@ try {
   );
 
   // المؤشر: الدورة التالية تطلب من ميتا الأرقام الأحدث فقط (filtering time_created) فلا تكرار
-  const tokenAgain = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  const tokenAgain = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   check(
     'لا تكرار في مسار التوكن: الدورة التالية تجلب صفراً',
     tokenAgain.json?.summary?.added === 0 && tokenAgain.json?.summary?.fetched === 0,
@@ -505,7 +528,7 @@ try {
 
   // ليد تجريبي من أداة اختبار ميتا: يُقبل برقم صالح موسوم، أو يُتجاهل حسب الإعداد
   graph.pushLead('form-fb', { id: 'lead-test', created_time: '2026-10-15T11:30:00+0000', field_data: [{ name: 'full_name', values: ['<test lead: dummy data for full_name>'] }, { name: 'phone_number', values: ['<test lead: dummy data for phone_number>'] }] });
-  const testLeadRun = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  const testLeadRun = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   if (process.env.DEBUG_GRAPH) console.error('DEBUG calls:', graph.calls.filter((c) => c.includes('leads')).join('\n'), '\nchannels:', JSON.stringify(testLeadRun.json?.summary?.channels));
   check('أداة اختبار ميتا لا تعطّل السحب ويدخل رقمها موسوماً «تجريبي»', testLeadRun.json?.summary?.added === 1 && /تجريبي/.test(JSON.stringify((await call(storeApi)).json?.data?.crm_assigned_leads || [])), JSON.stringify(testLeadRun.json?.summary).slice(0, 200));
 
@@ -531,7 +554,7 @@ try {
       && (directConfig.json?.config?.pages || []).length === 0,
     JSON.stringify(directConfig.json?.config).slice(0, 300)
   );
-  const directRun = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  const directRun = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   check(
     'Form ID فقط: السحب يعمل بالتوكن بدون صفحة',
     directRun.json?.summary?.added === 1 && directRun.json?.summary?.fetched === 1,
@@ -556,12 +579,12 @@ try {
   // ===== ٩) إيقاف كل القناتين معاً =====
   await call(leadSourceApi, { method: 'POST', url: '/api/lead-source', body: { enabled: false } });
   await call(leadSourceApi, { method: 'POST', url: '/api/lead-source', body: { channel: 'instagram', enabled: false } });
-  const offRun = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  const offRun = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   check('المُشغّل يتخطى العمل لما تتوقف القناتان', offRun.json?.skipped === true, JSON.stringify(offRun.json));
 
   // ===== ١٠) بدون CRON_SECRET لا يعمل المُشغّل =====
   delete process.env.CRON_SECRET;
-  const noSecret = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  const noSecret = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   check('المُشغّل لا يعمل بلا مفتاح مضبوط (503)', noSecret.status === 503, JSON.stringify(noSecret.json));
 
   console.log(`\n✅ كل الاختبارات نجحت (${passed}) — أوامر Redis المنفَّذة: ${redisCommands}`);

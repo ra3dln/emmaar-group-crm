@@ -177,6 +177,8 @@ export default async function handler(req, res) {
       const summary = await runAutoImportCore({
         storage: dataStore,
         config: next,
+        // الزر اليدوي force افتراضيًا؛ السحب التلقائي من المتصفح يرسل force:false
+        force: body.force !== false,
         saveConfig: (updated) => configStore.save(updated),
       });
       return reply(res, 200, { ok: true, summary, config: publicConfig(next) });
@@ -222,17 +224,6 @@ async function statelessHandler(req, res, url) {
     if (action === 'run') {
       const config = { ...(body.config || {}), instagram: { ...((body.config || {}).instagram || {}) } };
       const sales = Array.isArray(body.sales) ? body.sales.filter((u) => u && u.id) : [];
-      if (!sales.length) {
-        return reply(res, 200, {
-          ok: true,
-          leads: [],
-          summary: {
-            at: new Date().toISOString(),
-            ok: false,
-            error: 'لا يوجد حساب سيلز مفعّل لتوزيع الأرقام عليه',
-          },
-        });
-      }
 
       // نفس محرك السيرفر: كل قناة مفعّلة تُسحب على حدة، وفشل إحداهما لا يوقف الأخرى
       const { rows: fetched, channels } = await collectLeads(config);
@@ -267,6 +258,7 @@ async function statelessHandler(req, res, url) {
           invalid: built.invalid,
           perUser: built.perUser,
           channels,
+          ...(sales.length ? {} : { warning: 'لا يوجد سيلز مفعّل — الأرقام محفوظة غير موزّعة', unassigned: built.added.filter((l) => !l.salesId).length }),
         },
         // مؤشرات كل قناة ليعيد المتصفح كتابتها في إعداداته المحلية فلا تتكرر الأرقام
         cursorTime: Number(config.cursorTime) || 0,

@@ -516,14 +516,10 @@ export function buildAssignments({ fetched, sales, config = {}, knownPhones = []
         break;
       }
     }
-    // الكل وصل حده الأقصى — نوقف هذه الدفعة والمتبقي يُسحب في المرة القادمة
-    if (!owner) break;
-    counts.set(owner.id, (counts.get(owner.id) || 0) + 1);
-
-    added.push({
+    // الكل وصل حده الأقصى — نحفظ الرقم غير موزّع بدل فقدانه، والإدارة توزّعه لاحقاً
+    const baseLead = {
       id: crypto.randomUUID(),
       adminId: 'auto-import',
-      salesId: owner.id,
       name: row.name || 'عميل بدون اسم',
       phone: row.phone,
       description: [
@@ -535,7 +531,14 @@ export function buildAssignments({ fetched, sales, config = {}, knownPhones = []
         .join(' • '),
       status: 'new',
       createdAt: at,
-    });
+    };
+    if (!owner) {
+      added.push({ ...baseLead, salesId: '' });
+      continue;
+    }
+    counts.set(owner.id, (counts.get(owner.id) || 0) + 1);
+
+    added.push({ ...baseLead, salesId: owner.id });
   }
 
   return {
@@ -602,8 +605,31 @@ export async function collectLeads(config) {
   return { rows, channels };
 }
 
-export async function runAutoImportCore({ storage, config, saveConfig: persist }) {
+export async function runAutoImportCore({ storage, config, saveConfig: persist, force = false }) {
   const at = new Date().toISOString();
+
+  // احترام «كل كم دقيقة يسحب؟»: لو السحب الأخير قريب، نتخطى هذه الدورة
+  // (الطلب اليدوي force=true يتخطى الانتظار). نأخذ أقصر فاصل بين القنوات المفعّلة.
+  const intervals = [Number(config.intervalMinutes) || 5];
+  if (config.instagram?.enabled) intervals.push(Number(config.instagram.intervalMinutes) || 5);
+  const intervalMinutes = Math.min(Math.max(Math.round(Math.min(...intervals)), 1), 1440);
+  const lastRunAt = Math.max(
+    Date.parse(config.lastRun?.at || '') || 0,
+    Date.parse(config.instagram?.lastRun?.at || '') || 0
+  );
+  if (!force && Number.isFinite(lastRunAt)) {
+    const elapsed = Date.now() - lastRunAt;
+    if (elapsed >= 0 && elapsed < intervalMinutes * 60_000) {
+      return {
+        ...(config.lastRun || {}),
+        ok: true,
+        skipped: true,
+        at,
+        nextAt: new Date(lastRunAt + intervalMinutes * 60_000).toISOString(),
+        intervalMinutes,
+      };
+    }
+  }
 
   try {
     const db = await storage.load();
@@ -618,7 +644,8 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist }
 
     const users = Array.isArray(data.crm_users) ? data.crm_users : [];
     const sales = users.filter((u) => u.isActive && (u.role === 'sales' || u.role === 'supervisor'));
-    if (!sales.length) throw new Error('لا يوجد حساب سيلز مفعّل لتوزيع الأرقام عليه');
+    // لو مفيش سيلز: نحفظ الأرقام غير موزّعة بدل فقدانها، والإدارة توزّعها بعد إضافة الفريق.
+    const noSalesWarning = sales.length ? '' : 'لا يوجد سيلز مفعّل — الأرقام محفوظة غير موزّعة';
 
     const assigned = Array.isArray(data.crm_assigned_leads) ? data.crm_assigned_leads : [];
     const clients = Array.isArray(data.crm_clients) ? data.crm_clients : [];
@@ -645,6 +672,7 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist }
       invalid: built.invalid,
       perUser: built.perUser,
       channels,
+      ...(noSalesWarning ? { warning: noSalesWarning, unassigned: built.added.filter((lead) => !lead.salesId).length } : {}),
     };
     config.assignCursor = built.assignCursor;
     // مؤشر "آخر سحب" يُحفظ في القناة نفسها حتى تعرض كل تبويب نتيجته بصدق
@@ -666,12 +694,13 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist }
 }
 
 // غلاف سيرفر الشركة المحلي: الإعدادات في ملف والتخزين في ملف
-export async function runAutoImport({ storeFile, configFile }) {
+export async function runAutoImport({ storeFile, configFile, force = false }) {
   const storage = fileStorage(storeFile);
   const config = loadConfig(configFile);
   return runAutoImportCore({
     storage,
     config,
+    force,
     saveConfig: (next) => Promise.resolve(saveConfig(configFile, next)),
   });
 }
@@ -786,6 +815,12 @@ export function createLeadSourceHandler({ storeFile, configFile, auth = null }) 
         const body = await readJsonBody(req);
         if (!body) return reply(res, 400, { ok: false, error: 'طلب غير صالح' });
 
+        // نفس مسار الاستضافة: زر «جلب الأرقام الآن» يرسل action=run
+        if (body.action === 'run') {
+          const summary = await runAutoImport({ storeFile, configFile, force: true });
+          return reply(res, 200, { ok: true, summary, config: publicConfig(loadConfig(configFile)) });
+        }
+
         const current = loadConfig(configFile);
         // المفاتيح العامة للنظام (لیست لقناة بعينها)
         const globalPatch = typeof body.acceptTestLeads === 'boolean' ? { acceptTestLeads: body.acceptTestLeads } : {};
@@ -821,7 +856,8 @@ export function createLeadSourceHandler({ storeFile, configFile, auth = null }) 
       }
 
       if (req.method === 'POST' && url === '/api/lead-source/run') {
-        const summary = await runAutoImport({ storeFile, configFile });
+        // طلب يدوي من زر «جلب الأرقام الآن»: يتخطى انتظار الخمس دقائق
+        const summary = await runAutoImport({ storeFile, configFile, force: true });
         return reply(res, 200, { ok: true, summary, config: publicConfig(loadConfig(configFile)) });
       }
 

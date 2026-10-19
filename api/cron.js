@@ -65,6 +65,8 @@ export default async function handler(req, res) {
     }
 
     const config = normalizeConfig(await configStore.load());
+    // force=1 للاختبارات/التشغيل اليدوي فقط — المجدول العادي يحترم «كل كم دقيقة»
+    const force = params.get('force') === '1';
 
     // كل قناة لها مشغّلها: يكفي أن تكون قناة واحدة مفعّلة (فيسبوك أو إنستجرام)
     // السحب التلقائي والتذكيرات مستقلان، فلا يوقف توقف القنوات إرسال التذكيرات.
@@ -73,6 +75,7 @@ export default async function handler(req, res) {
       summary = await runAutoImportCore({
         storage,
         config,
+        force,
         saveConfig: (updated) => configStore.save(updated),
       });
     }

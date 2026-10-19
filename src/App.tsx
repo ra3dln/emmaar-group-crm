@@ -1469,6 +1469,50 @@ function App() {
     applyThemeForUser(currentUser?.id);
   }, [currentUser?.id]);
 
+  // ===== سحب تلقائي احتياطي من متصفح الإدارة =====
+  // على الاستضافة بدون cron مضبوط لا توجد حلقة خلفية. طالما صفحة الإدارة مفتوحة،
+  // نشغّل السحب كل X دقيقة (نفس إعداد القناة) حتى لا تتوقف الأرقام.
+  // للعمل 24/7 بدون متصفح مفتوح: CRON_SECRET + cron-job.org (انظر README).
+  useEffect(() => {
+    if (!currentUser || currentUser.role === 'sales') return;
+    let stopped = false;
+    let timer: number | undefined;
+    const start = async () => {
+      try {
+        const res = await fetch('/api/lead-source', { cache: 'no-store', credentials: 'same-origin' });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (json.stateless) return; // الوضع بلا قاعدة يعالجه كارت إعدادات القناة
+        const config = json.config || {};
+        const channels = [config, config.instagram].filter((c: any) => c && c.enabled);
+        if (!channels.length) return;
+        const minutes = Math.max(1, Math.min(...channels.map((c: any) => Number(c.intervalMinutes) || 5)));
+        const run = async () => {
+          if (stopped) return;
+          try {
+            await fetch('/api/lead-source', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'run', force: false }),
+            });
+          } catch {
+            /* الدورة القادمة تحاول */
+          }
+        };
+        await run();
+        if (!stopped) timer = window.setInterval(run, minutes * 60 * 1000);
+      } catch {
+        /* لا شيء */
+      }
+    };
+    void start();
+    return () => {
+      stopped = true;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [currentUser?.id, currentUser?.role]);
+
   // ===== جلسة جديدة: نمسح علامات «تم الإشعار» القديمة =====
   // كانت هذه العلامات تُحفظ للأبد، فلو ضاع أول إشعار (صلاحية مقفولة / التاب مقفول)
   // يظل التذكير صامتاً إلى الأبد حتى بعد تحديث الصفحة. التذكير المستحق لازم يظهر
@@ -7433,8 +7477,11 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
   const userName = (id?: string) => users.find((u: User) => u.id === id)?.name || 'غير مخصص';
   const digitsOf = (value: any) => normalizeDigits(String(value || '')).replace(/\D/g, '');
   const clientPhones = new Set((clients || []).map((c: Client) => digitsOf(c.phone)).filter(Boolean));
+  const leadPhones = new Set((leads || []).map((l: AssignedLead) => digitsOf(l.phone)).filter(Boolean));
   const q = normalizeArabicText(query).trim();
-  const campaignClients = (clients || []).filter((c: Client) => !campaignOnly || isCampaignRecord(c));
+  const campaignClients = (clients || []).filter(
+    (c: Client) => !campaignOnly || isCampaignRecord(c) || leadPhones.has(digitsOf(c.phone))
+  );
   // الأرقام اللي لسه في «توزيع الأرقام» ولم تتحول لسجل عميل — تظهر هنا كأرقام كامبين
   // (كل الأرقام الموزعة أرقام كامبين/توزيع، حتى لو وصفها القديم بلا «المصدر»)
   const campaignLeads = (leads || []).filter((lead: AssignedLead) => {
@@ -8458,7 +8505,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
     .map((c) => channelViewOf(config, c))
     .filter((c) => c?.enabled);
   const anyChannelEnabled = enabledViews.length > 0;
-  const shortestInterval = Math.max(1, Math.min(...enabledViews.map((c) => Number(c.intervalMinutes) || 5), 5));
+  const shortestInterval = Math.max(1, Math.min(...enabledViews.map((c) => Number(c.intervalMinutes) || 5)));
   useEffect(() => {
     if (remote !== false || !anyChannelEnabled) return;
     const timer = setInterval(() => void runRef.current?.(), shortestInterval * 60 * 1000);
@@ -8494,6 +8541,13 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
         <p className="text-[11px] text-amber-300/90 leading-relaxed mb-4 bg-amber-500/10 border border-amber-400/20 rounded-[var(--r-md)] px-3 py-2">
           على هذه الاستضافة لا توجد قاعدة بيانات مركزية: الإعدادات والأرقام تُحفظ في متصفح هذا الجهاز، والسحب التلقائي يعمل ما دام
           الموقع مفتوحاً. على سيرفر الشركة يعمل السحب في الخلفية وتظهر الأرقام على كل الأجهزة.
+        </p>
+      )}
+      {remote === true && (
+        <p className="text-[11px] text-[var(--text-dim)] leading-relaxed mb-4 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2">
+          السحب التلقائي يحترم «كل كم دقيقة» (الحالي: {view.intervalMinutes || 5} دقيقة). على Vercel يعمل من متصفح الإدارة
+          ما دامت الصفحة مفتوحة؛ وللعمل 24/7 بدون متصفح أضف <span dir="ltr">CRON_SECRET</span> على Vercel
+          وجدول رابط <span dir="ltr">/api/cron?key=...</span> كل دقيقة.
         </p>
       )}
 
