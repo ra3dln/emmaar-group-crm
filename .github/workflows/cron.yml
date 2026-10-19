@@ -1,0 +1,29 @@
+name: CRM Cron
+
+# مجدول مجاني بديل لـ cron-job.org: ينادي /api/cron كل 5 دقائق.
+# يحتاج مفتاح CRON_SECRET في: Settings → Secrets and variables → Actions.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Trigger CRM cron
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET غير مضبوط في GitHub Secrets"
+            exit 1
+          fi
+          status=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 30 \
+            "https://emmaar-group-crm.vercel.app/api/cron?key=${CRON_SECRET}")
+          echo "HTTP $status"
+          test "$status" = "200"
