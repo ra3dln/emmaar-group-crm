@@ -2627,6 +2627,7 @@ function App() {
           {/* كل عملاء الشركة: العدد + كارت لكل عميل يفتح التفاصيل كاملة */}
           {activeTab === 'admin-clients' && currentUser.role !== 'sales' && <AdminClientsView
             clients={scopedClients}
+            leads={scopedLeads}
             users={scopedUsers}
             onSelect={(c: Client) => setSelectedClient(c)}
             onCall={(c: Client) => setCallClient(c)}
@@ -7421,7 +7422,7 @@ function SalesShareModal({ leads, users, onClose }: any) {
 // ===== تبويب «العملاء» للإدارة =====
 // كل عملاء الشركة في مكان واحد: العدد الحالي في المقدمة، وكارت لكل عميل يفتح
 // نافذة التفاصيل نفسها المستخدمة في «المراحل» (البيانات + الخط الزمني + الاتصال).
-function AdminClientsView({ clients, users, onSelect, onCall }: any) {
+function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any) {
   const [query, setQuery] = useState('');
   const [stage, setStage] = useState<'all' | Client['stage']>('all');
   // افتراضياً عملاء الكامبين فقط — وزر واحد يعرض كل العملاء (بما فيهم المضافون يدوياً)
@@ -7429,18 +7430,35 @@ function AdminClientsView({ clients, users, onSelect, onCall }: any) {
 
   const ownerName = (c: Client) =>
     users.find((u: User) => u.id === (c.assignedTo || c.userId))?.name || 'غير مخصص';
+  const userName = (id?: string) => users.find((u: User) => u.id === id)?.name || 'غير مخصص';
+  const digitsOf = (value: any) => normalizeDigits(String(value || '')).replace(/\D/g, '');
+  const clientPhones = new Set((clients || []).map((c: Client) => digitsOf(c.phone)).filter(Boolean));
   const q = normalizeArabicText(query).trim();
-  const campaignClients = clients.filter((c: Client) => !campaignOnly || isCampaignRecord(c));
+  const campaignClients = (clients || []).filter((c: Client) => !campaignOnly || isCampaignRecord(c));
+  // الأرقام اللي لسه في «توزيع الأرقام» ولم تتحول لسجل عميل — تظهر هنا كأرقام كامبين
+  // (كل الأرقام الموزعة أرقام كامبين/توزيع، حتى لو وصفها القديم بلا «المصدر»)
+  const campaignLeads = (leads || []).filter((lead: AssignedLead) => {
+    if (lead.status === 'closed') return false;
+    if (clientPhones.has(digitsOf(lead.phone))) return false;
+    return true;
+  });
   const matches = (c: Client) =>
     !q ||
     normalizeArabicText(`${c.name} ${c.phone} ${(c.phones || []).join(' ')} ${c.source || ''} ${formNameOf(c)} ${ownerName(c)}`).includes(q);
+  const matchesLead = (lead: AssignedLead) =>
+    !q ||
+    normalizeArabicText(`${lead.name} ${lead.phone} ${lead.description || ''} ${formNameOf(lead)} ${userName(lead.salesId)}`).includes(q);
 
   const visible = campaignClients.filter((c: Client) => (stage === 'all' || c.stage === stage) && matches(c));
+  const visibleLeads = stage === 'all' ? campaignLeads.filter(matchesLead) : [];
   const stageCount = (id: 'all' | Client['stage']) =>
     id === 'all' ? campaignClients.length : campaignClients.filter((c: Client) => c.stage === id).length;
   const inProgress = campaignClients.filter((c: Client) => c.stage !== 'closed' && c.stage !== 'lost').length;
   const sold = campaignClients.filter((c: Client) => c.stage === 'closed').length;
-  const formNameCount = campaignClients.filter((c: Client) => !!formNameOf(c)).length;
+  const formNameCount = [...campaignClients, ...campaignLeads].filter((record: any) => !!formNameOf(record)).length;
+  const totalCampaign = campaignClients.length + campaignLeads.length;
+  const leadStatusLabel = (status: string) =>
+    status === 'viewed' ? 'تم العرض' : status === 'contacted' ? 'تم التواصل' : status === 'closed' ? 'مغلق' : 'جديد';
 
   const chips: { id: 'all' | Client['stage']; label: string }[] = [
     { id: 'all', label: 'الكل' },
@@ -7471,8 +7489,8 @@ function AdminClientsView({ clients, users, onSelect, onCall }: any) {
       {/* العدد الحالي — ثلاث خانات تكفي للنظرة السريعة */}
       <div className="grid grid-cols-3 gap-3">
         <div className="panel p-4">
-          <p className="text-[11px] text-[var(--text-muted)]">إجمالي عملاء الكامبين</p>
-          <p className="text-3xl font-extrabold text-[var(--brand)] mt-1" dir="ltr">{campaignClients.length}</p>
+          <p className="text-[11px] text-[var(--text-muted)]">إجمالي أرقام الكامبين</p>
+          <p className="text-3xl font-extrabold text-[var(--brand)] mt-1" dir="ltr">{totalCampaign}</p>
         </div>
         <div className="panel p-4">
           <p className="text-[11px] text-[var(--text-muted)]">قيد المتابعة</p>
@@ -7483,8 +7501,11 @@ function AdminClientsView({ clients, users, onSelect, onCall }: any) {
           <p className="text-3xl font-extrabold text-emerald-400 mt-1" dir="ltr">{sold}</p>
         </div>
       </div>
+      <p className="text-[11px] text-[var(--text-dim)]">
+        منهم <b className="text-[var(--text)]">{campaignClients.length}</b> عميل مسجّل، و<b className="text-[var(--text)]">{campaignLeads.length}</b> رقم لسه في «توزيع الأرقام» ما اتحوّلش لعميل.
+      </p>
       {formNameCount > 0 && (
-        <p className="text-[11px] text-[var(--text-dim)]">منهم {formNameCount} عميل مسجّل باسم الفورم.</p>
+        <p className="text-[11px] text-[var(--text-dim)]">منهم {formNameCount} سجل مسجّل باسم الفورم.</p>
       )}
 
       <div className="panel p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
@@ -7550,9 +7571,40 @@ function AdminClientsView({ clients, users, onSelect, onCall }: any) {
             </motion.div>
           );
         })}
+
+        {/* أرقام الكامبين اللي لسه في «توزيع الأرقام» — تظهر هنا أيضًا */}
+        {visibleLeads.map((lead: AssignedLead) => (
+          <motion.div key={`lead-${lead.id}`} className="panel p-4 border border-dashed border-[var(--brand-primary-soft)]">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h4 className="font-bold text-[var(--text-strong)] truncate">{lead.name || 'بدون اسم'}</h4>
+                <p className="text-[var(--brand)] text-sm mt-0.5" dir="ltr">{lead.phone}</p>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-[var(--brand-primary-softer)] text-[var(--brand)] whitespace-nowrap">
+                رقم كامبين • {leadStatusLabel(lead.status)}
+              </span>
+            </div>
+            <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1 text-[11.5px] text-[var(--text-muted)]">
+              <p>المسؤول: <span className="text-[var(--text)] font-bold">{userName(lead.salesId)}</span></p>
+              <p className="truncate">المصدر: {formatLeadDescription(lead.description) || 'رقم كامبين'}</p>
+              {formNameOf(lead) && (
+                <p className="truncate text-[var(--brand)] font-bold">الفورم: {formNameOf(lead)}</p>
+              )}
+              <p>{formatDateTime(lead.createdAt)}</p>
+              <p className="text-[10.5px] text-[var(--text-dim)]">لسه ما اتحوّلش لسجل عميل — موجود في «توزيع الأرقام».</p>
+            </div>
+            <a
+              href={`tel:${lead.phone}`}
+              className="icon-btn !w-9 !h-9 text-emerald-300 mt-3 inline-flex"
+              title="الاتصال بالرقم"
+            >
+              <PhoneCall className="w-4 h-4" />
+            </a>
+          </motion.div>
+        ))}
       </div>
 
-      {campaignClients.length === 0 && (
+      {campaignClients.length === 0 && campaignLeads.length === 0 && (
         <div className="text-center py-16">
           <Users className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
           <p className="text-[var(--text-muted)]">
@@ -7560,7 +7612,7 @@ function AdminClientsView({ clients, users, onSelect, onCall }: any) {
           </p>
         </div>
       )}
-      {campaignClients.length > 0 && visible.length === 0 && (
+      {totalCampaign > 0 && visible.length === 0 && visibleLeads.length === 0 && (
         <p className="text-center text-sm text-[var(--text-dim)] py-8">لا نتائج مطابقة للبحث أو التصفية</p>
       )}
     </div>
