@@ -3271,7 +3271,7 @@ function getTabGroups(role: string): NavGroup[] {
       items: [
         { id: 'dashboard', icon: Home, label: 'الرئيسية' },
         // أرقام الكامبين بقت جوه «عملاء كامبين» مع زر «أضف إلى عملائي»
-        { id: 'clients', icon: Users, label: 'عملاء كامبين' },
+        { id: 'clients', icon: Users, label: 'العملاء' },
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
       ],
     },
@@ -3303,7 +3303,7 @@ function getTabGroups(role: string): NavGroup[] {
       label: 'متابعة العمل',
       items: [
         // كل عملاء الشركة وعددهم في تبويب واحد، والكارت يفتح التفاصيل
-        { id: 'admin-clients', icon: Users, label: 'العملاء' },
+        { id: 'admin-clients', icon: Users, label: 'عملاء كامبين' },
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
         { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
         { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
@@ -3333,7 +3333,7 @@ function getTabGroups(role: string): NavGroup[] {
       {
         label: 'متابعة العمل',
         items: [
-          { id: 'admin-clients', icon: Users, label: 'العملاء' },
+          { id: 'admin-clients', icon: Users, label: 'عملاء كامبين' },
           { id: 'pipeline', icon: Workflow, label: 'المراحل' },
           { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
           { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
@@ -4560,8 +4560,6 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
 function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedbacks = [], searchTerm, onSearch, onSelect, onAdd, onCall, onConvert, onLeadViewed, onSetStage, onRefresh }: any) {
   const [view, setView] = useState<'cards' | 'table'>(() => (localStorage.getItem('crm_clients_view') === 'table' ? 'table' : 'cards'));
   const [showComments, setShowComments] = useState(false);
-  // افتراضياً «عملاء كامبين» فقط — زر واحد يعرض كل العملاء (المضافين يدوياً أيضاً)
-  const [campaignOnly, setCampaignOnly] = useState(true);
   const [commentsClient, setCommentsClient] = useState<Client | null>(null);
   // صندوق الفيدباك: حالة إلزامية + كومنت إلزامي — لا يُحفظ فيدباك ناقص
   const [composer, setComposer] = useState<{ key: string; clientId: string; status: string } | null>(null);
@@ -4649,25 +4647,19 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
   // بحث واحد يشمل الأرقام والعملاء معاً
   const q = normalizeArabicText(searchTerm || '').trim();
   const digitsOf = (value: any) => normalizeDigits(String(value || '')).replace(/\D/g, '');
-  // عملاء كامبين: الأرقام المسحوبة + العملاء اللي اتولدوا منها.
-  // الأرقام اللي عندها عميل بالفعل لا تتكرر ككارت رقم.
+  // الرقم اللي اتحوّل لعميل ما يتكررش ككارت رقم
   const clientPhones = new Set((clients || []).map((c: Client) => digitsOf(c.phone)).filter(Boolean));
-  const campaignClients = (clients || []).filter((c: Client) => !campaignOnly || isCampaignRecord(c));
-  const baseLeads = (leads || []).filter((l: AssignedLead) => {
-    if (l.status === 'closed') return false;
-    if (clientPhones.has(digitsOf(l.phone))) return false;
-    return !campaignOnly || isCampaignRecord(l);
-  });
+  const baseLeads = (leads || []).filter((l: AssignedLead) => l.status !== 'closed' && !clientPhones.has(digitsOf(l.phone)));
   const visibleLeads = q
     ? baseLeads.filter((l: AssignedLead) =>
-        normalizeArabicText(`${l.name} ${l.phone} ${l.description || ''} ${formNameOf(l)}`).includes(q)
+        normalizeArabicText(`${l.name} ${l.phone} ${l.description || ''}`).includes(q)
       )
     : baseLeads;
   const visibleClients = q
-    ? campaignClients.filter((c: Client) =>
-        normalizeArabicText(`${c.name} ${c.phone} ${(c.phones || []).join(' ')} ${c.source || ''} ${formNameOf(c)}`).includes(q)
+    ? (clients || []).filter((c: Client) =>
+        normalizeArabicText(`${c.name} ${c.phone} ${(c.phones || []).join(' ')} ${c.property || ''} ${c.source || ''}`).includes(q)
       )
-    : campaignClients;
+    : (clients || []);
 
   // ===== قائمة موحّدة: الأرقام والعملاء مرصوصون معاً بالأحدث أولاً =====
   type FeedItem =
@@ -4680,31 +4672,14 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
     ];
     return items.sort((a, b) => String(b.at).localeCompare(String(a.at)));
   }, [visibleLeads, visibleClients]);
-  const campaignItemsCount = visibleLeads.length + visibleClients.length;
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="page-intro">
-          <div>
-            <h2>عملاء كامبين</h2>
-            <p>كل الأرقام اللي اتسحبت من الكامبين — زوّدها لعملائك بضغطة، واسم الفورم ظاهر مع كل عميل.</p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => setCampaignOnly((value) => !value)}
-          className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)]"
-        >
-          {campaignOnly ? 'عرض كل العملاء' : 'كامبين فقط'}
-        </button>
-      </div>
-
       {/* شريط البحث + الأدوات */}
       <div className="flex flex-col md:flex-row gap-3">
         <div className="flex-1 relative">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-[var(--text-muted)]" />
-          <input type="text" placeholder="ابحث بالاسم أو الرقم أو اسم الفورم أو المبلغ..." value={searchTerm} onChange={(e) => onSearch(e.target.value)}
+          <input type="text" placeholder="ابحث بالاسم أو الرقم أو العقار أو المبلغ (مثال: مليون)" value={searchTerm} onChange={(e) => onSearch(e.target.value)}
             className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] pr-10 pl-4 py-2.5 text-[13.5px] text-[var(--text-strong)]" />
         </div>
         <div className="flex items-center gap-2">
@@ -4726,8 +4701,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
 
       {/* سطر ملخص واحد — بلا أي تقسيم للقائمة */}
       <div className="clients-summary">
-        <span>عملاء كامبين: <b>{campaignItemsCount}</b></span>
-        <span className="cs-dim">{campaignOnly ? 'أرقام وعملاء من الكامبين فقط' : 'كل العملاء (كامبين + مضافين يدوياً)'} — مرتبة بالأحدث أولاً</span>
+        <span>الإجمالي: <b>{feed.length}</b></span>
+        <span className="cs-dim">مرتبة بالأحدث أولاً</span>
       </div>
 
       {/* قائمة واحدة: الأرقام الواردة والعملاء مرصوصون معاً */}
@@ -4760,7 +4735,6 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
               const src = SOURCE_KINDS[sourceKindOf(isLead ? lead!.description : `${client!.source} ${client!.status}`)];
               const SrcIcon = src.Icon;
               const sourceText = isLead ? (formatLeadDescription(lead!.description) || 'رقم وارد') : sourceLabelOf(client);
-              const formName = isLead ? formNameOf(lead) : (client!.formName || formNameOf(client));
               const comments = isLead ? 0 : commentCountOf(client);
               const last = isLead ? null : lastCommentOf(client);
               const open = composer?.key === (isLead ? `lead-${lead!.id}` : `client-${client!.id}`);
@@ -4781,7 +4755,6 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                     </span>
                     <span role="cell">
                       <span className={`cc-src ${src.cls}`} title={sourceText}><SrcIcon className="w-3 h-3" />{sourceText}</span>
-                      {formName && <span className="cc-form" title={`الفورم: ${formName}`}>فورم: {formName}</span>}
                     </span>
                     <span role="cell" className="ct-budget">{(!isLead && client!.budget) ? displayPrice(client!.budget) : '—'}</span>
                     <span role="cell">
@@ -4847,7 +4820,6 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
             const src = SOURCE_KINDS[sourceKindOf(isLead ? lead!.description : `${client!.source} ${client!.status}`)];
             const SrcIcon = src.Icon;
             const sourceText = isLead ? (formatLeadDescription(lead!.description) || 'رقم وارد') : sourceLabelOf(client);
-            const formName = isLead ? formNameOf(lead) : (client!.formName || formNameOf(client));
             const comments = isLead ? 0 : commentCountOf(client);
             const last = isLead ? null : lastCommentOf(client);
             const facts = isLead
@@ -4857,7 +4829,6 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                   client!.property ? { k: 'العقار', v: client!.property } : null,
                   client!.monthlyInstallment ? { k: 'القسط', v: displayPrice(client!.monthlyInstallment) } : null,
                   client!.deliveryPeriod ? { k: 'التسليم', v: client!.deliveryPeriod } : null,
-                  formName ? { k: 'الفورم', v: formName } : null,
                 ].filter(Boolean) as Array<{ k: string; v: string }>);
             const open = composer?.key === (isLead ? `lead-${lead!.id}` : `client-${client!.id}`);
             void facts; void SrcIcon; void sourceText;
@@ -4904,7 +4875,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
 
                     {isLead && (
                       <p className="cc-note">
-                        وصل من {sourceText}{formName ? ` • فورم: ${formName}` : ''} — {formatDateTime(lead!.createdAt)}
+                        وصل من {sourceText} — {formatDateTime(lead!.createdAt)}
                       </p>
                     )}
                   </div>
@@ -7453,19 +7424,23 @@ function SalesShareModal({ leads, users, onClose }: any) {
 function AdminClientsView({ clients, users, onSelect, onCall }: any) {
   const [query, setQuery] = useState('');
   const [stage, setStage] = useState<'all' | Client['stage']>('all');
+  // افتراضياً عملاء الكامبين فقط — وزر واحد يعرض كل العملاء (بما فيهم المضافون يدوياً)
+  const [campaignOnly, setCampaignOnly] = useState(true);
 
   const ownerName = (c: Client) =>
     users.find((u: User) => u.id === (c.assignedTo || c.userId))?.name || 'غير مخصص';
   const q = normalizeArabicText(query).trim();
+  const campaignClients = clients.filter((c: Client) => !campaignOnly || isCampaignRecord(c));
   const matches = (c: Client) =>
     !q ||
-    normalizeArabicText(`${c.name} ${c.phone} ${(c.phones || []).join(' ')} ${c.source || ''} ${ownerName(c)}`).includes(q);
+    normalizeArabicText(`${c.name} ${c.phone} ${(c.phones || []).join(' ')} ${c.source || ''} ${formNameOf(c)} ${ownerName(c)}`).includes(q);
 
-  const visible = clients.filter((c: Client) => (stage === 'all' || c.stage === stage) && matches(c));
+  const visible = campaignClients.filter((c: Client) => (stage === 'all' || c.stage === stage) && matches(c));
   const stageCount = (id: 'all' | Client['stage']) =>
-    id === 'all' ? clients.length : clients.filter((c: Client) => c.stage === id).length;
-  const inProgress = clients.filter((c: Client) => c.stage !== 'closed' && c.stage !== 'lost').length;
-  const sold = clients.filter((c: Client) => c.stage === 'closed').length;
+    id === 'all' ? campaignClients.length : campaignClients.filter((c: Client) => c.stage === id).length;
+  const inProgress = campaignClients.filter((c: Client) => c.stage !== 'closed' && c.stage !== 'lost').length;
+  const sold = campaignClients.filter((c: Client) => c.stage === 'closed').length;
+  const formNameCount = campaignClients.filter((c: Client) => !!formNameOf(c)).length;
 
   const chips: { id: 'all' | Client['stage']; label: string }[] = [
     { id: 'all', label: 'الكل' },
@@ -7479,16 +7454,25 @@ function AdminClientsView({ clients, users, onSelect, onCall }: any) {
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div>
-          <div className="page-intro"><div><h2>العملاء</h2></div></div>
-          <p className="text-xs text-[var(--text-muted)] mt-1">اضغط على كارت العميل لعرض التفاصيل الكاملة</p>
+          <div className="page-intro"><div><h2>عملاء كامبين</h2></div></div>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            كل العملاء اللي أرقامهم اتسحبت من الكامبين — اسم الفورم ظاهر مع كل عميل. اضغط على الكارت لعرض التفاصيل الكاملة.
+          </p>
         </div>
+        <button
+          type="button"
+          onClick={() => setCampaignOnly((value) => !value)}
+          className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)] self-start sm:self-auto"
+        >
+          {campaignOnly ? 'عرض كل العملاء' : 'كامبين فقط'}
+        </button>
       </div>
 
       {/* العدد الحالي — ثلاث خانات تكفي للنظرة السريعة */}
       <div className="grid grid-cols-3 gap-3">
         <div className="panel p-4">
-          <p className="text-[11px] text-[var(--text-muted)]">إجمالي العملاء</p>
-          <p className="text-3xl font-extrabold text-[var(--brand)] mt-1" dir="ltr">{clients.length}</p>
+          <p className="text-[11px] text-[var(--text-muted)]">إجمالي عملاء الكامبين</p>
+          <p className="text-3xl font-extrabold text-[var(--brand)] mt-1" dir="ltr">{campaignClients.length}</p>
         </div>
         <div className="panel p-4">
           <p className="text-[11px] text-[var(--text-muted)]">قيد المتابعة</p>
@@ -7499,6 +7483,9 @@ function AdminClientsView({ clients, users, onSelect, onCall }: any) {
           <p className="text-3xl font-extrabold text-emerald-400 mt-1" dir="ltr">{sold}</p>
         </div>
       </div>
+      {formNameCount > 0 && (
+        <p className="text-[11px] text-[var(--text-dim)]">منهم {formNameCount} عميل مسجّل باسم الفورم.</p>
+      )}
 
       <div className="panel p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
         <div className="relative flex-1">
@@ -7506,7 +7493,7 @@ function AdminClientsView({ clients, users, onSelect, onCall }: any) {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="ابحث بالاسم أو الرقم أو المصدر..."
+            placeholder="ابحث بالاسم أو الرقم أو اسم الفورم أو المصدر..."
             className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm"
           />
         </div>
@@ -7547,6 +7534,9 @@ function AdminClientsView({ clients, users, onSelect, onCall }: any) {
               <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1 text-[11.5px] text-[var(--text-muted)]">
                 <p>المسؤول: <span className="text-[var(--text)] font-bold">{ownerName(client)}</span></p>
                 <p className="truncate">المصدر: {client.source || '—'}</p>
+                {formNameOf(client) && (
+                  <p className="truncate text-[var(--brand)] font-bold">الفورم: {formNameOf(client)}</p>
+                )}
                 <p>{formatDateTime(client.createdAt)}</p>
               </div>
               <button
@@ -7562,13 +7552,15 @@ function AdminClientsView({ clients, users, onSelect, onCall }: any) {
         })}
       </div>
 
-      {clients.length === 0 && (
+      {campaignClients.length === 0 && (
         <div className="text-center py-16">
           <Users className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
-          <p className="text-[var(--text-muted)]">لا يوجد عملاء بعد</p>
+          <p className="text-[var(--text-muted)]">
+            {clients.length === 0 ? 'لا يوجد عملاء بعد' : 'لا يوجد عملاء كامبين — جرّب «عرض كل العملاء»'}
+          </p>
         </div>
       )}
-      {clients.length > 0 && visible.length === 0 && (
+      {campaignClients.length > 0 && visible.length === 0 && (
         <p className="text-center text-sm text-[var(--text-dim)] py-8">لا نتائج مطابقة للبحث أو التصفية</p>
       )}
     </div>
@@ -10700,9 +10692,6 @@ function ClientDetailModal({ client, onClose, onSuccess, onCall }: any) {
             </p>
           )}
           {client.source && <p className="text-xs text-[var(--text-muted)]">المصدر: {client.source}</p>}
-          {(client.formName || formNameOf(client)) && (
-            <p className="text-xs text-[var(--brand)] font-bold">الفورم: {client.formName || formNameOf(client)}</p>
-          )}
         </div>
         <div className="flex flex-col sm:flex-row gap-2 mt-5">
           <button type="button"
