@@ -7766,10 +7766,13 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
         return;
       }
 
-      const res = await fetch('/api/lead-source/discover', {
+      // مسار واحد فقط على الاستضافة: /api/lead-source والفرق في action.
+      // (كان هنا /api/lead-source/discover وده غير موجود على Vercel فيرجّع صفحة 404
+      // نصية، فيفشل res.json() برسالة "Unexpected token 'T'" بدل خطأ واضح.)
+      const res = await fetch('/api/lead-source', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel, token: form.token.trim() }),
+        body: JSON.stringify({ action: 'discover', channel, token: form.token.trim() }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الاستكشاف');
@@ -7795,10 +7798,11 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       const res = await fetch('/api/lead-source', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // في الوضعين نرسل action صريحاً: بدونها يُفهم الطلب كـ«حفظ» ولا تُرجَع نماذج
         body:
           remote === false
             ? JSON.stringify({ action: 'forms', channel, pageId, pageToken })
-            : JSON.stringify({ channel, pageId }),
+            : JSON.stringify({ action: 'forms', channel, pageId }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر جلب النماذج');
@@ -7816,14 +7820,23 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
 
   const addManualForm = () => {
     const id = manual.formId.trim();
+    // Form ID فقط كافٍ: لو مافيش صفحة مكتشفة نستخدم توكن القناة مباشرة على /{form-id}/leads
     const pageId = manual.pageId || pageOptions[0]?.id || '';
     if (!id) return setNotice('اكتب معرّف النموذج أولاً');
-    if (!pageId) return setNotice('لا توجد صفحة — اضغط «استكشف صفحاتي» أولاً');
     if (forms.some((f) => f.id === id)) return setNotice('هذا النموذج مضاف بالفعل');
     setForms([...forms, { id, pageId, name: `نموذج ${id}` }]);
     setSelected((prev) => ({ ...prev, [id]: true }));
     setManual({ pageId, formId: '' });
-    setNotice('أُضيف النموذج ✓ — اضغط «حفظ الإعدادات» ليعمل السحب');
+    const hasSavedToken = !!channelViewOf(config, channel)?.hasToken;
+    if (!form.token.trim() && !hasSavedToken) {
+      setNotice('أُضيف النموذج ✓ — لكن الصق توكن فيسبوك أولاً ثم اضغط «حفظ الإعدادات»');
+    } else {
+      setNotice(
+        pageId
+          ? 'أُضيف النموذج ✓ — اضغط «حفظ الإعدادات» ليعمل السحب'
+          : 'أُضيف النموذج بمعرّفه ✓ — سيُسحب بالتوكن مباشرة بدون صفحات. اضغط «حفظ الإعدادات»'
+      );
+    }
   };
 
   // لو المستخدم لصق توكن (أو اختار نماذج) وهو على تبويب «ملف منشور» بلا رابط،
@@ -7888,7 +7901,11 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
           )
         );
       } else {
-        const res = await fetch('/api/lead-source/run', { method: 'POST' });
+        const res = await fetch('/api/lead-source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'run', channel }),
+        });
         const json = await res.json();
         if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر السحب');
         applyConfig(json.config);
@@ -8061,9 +8078,11 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
 
           {/* إضافة نموذج بمعرّفه: يعمل حتى لو منع فيسبوك عرض قائمة النماذج */}
           <div className="border border-[var(--border)] rounded-[var(--r-md)] p-3 space-y-2">
-            <label className="block text-xs text-[var(--text)]">أو أضف النموذج بمعرّفه يدوياً</label>
+            <label className="block text-xs text-[var(--text)]">أو أضف النموذج بمعرّفه فقط (Form ID)</label>
             <p className="text-[11px] text-[var(--text-dim)]">
-              يُستخدم لو رد فيسبوك بخطأ صلاحية عند عرض النماذج. افتح الفورم في Meta Business Suite وانسخ رقمه من الرابط (id أو asset_id).
+              لو معاك Form ID ومش عايز تستكشف الصفحات: الصق توكن فيسبوك في الأعلى، واكتب معرّف النموذج هنا.
+              السحب يتم مباشرة من <span dir="ltr">/{'{'}form-id{'}'}/leads</span> — الصفحة مش مطلوبة.
+              تقدر تلاقي الرقم في رابط الفورم داخل Meta Business Suite (id أو asset_id).
             </p>
             <div className="flex flex-col sm:flex-row gap-2">
               <input

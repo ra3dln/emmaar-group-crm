@@ -149,6 +149,17 @@ function installGraphMock() {
         ],
       },
     ],
+    // نموذج يُسحب بمعرّفه فقط (بدون صفحة مكتشفة)
+    'form-direct': [
+      {
+        id: 'lead-direct-1',
+        created_time: '2026-10-16T10:00:00+0000',
+        field_data: [
+          { name: 'full_name', values: ['عميل فورم مباشر'] },
+          { name: 'phone_number', values: ['01066660003'] },
+        ],
+      },
+    ],
   };
   const json = (data) => ({ ok: true, status: 200, json: async () => data });
 
@@ -497,6 +508,48 @@ try {
   const testLeadRun = await call(cronApi, { url: '/api/cron?key=secret-123' });
   if (process.env.DEBUG_GRAPH) console.error('DEBUG calls:', graph.calls.filter((c) => c.includes('leads')).join('\n'), '\nchannels:', JSON.stringify(testLeadRun.json?.summary?.channels));
   check('أداة اختبار ميتا لا تعطّل السحب ويدخل رقمها موسوماً «تجريبي»', testLeadRun.json?.summary?.added === 1 && /تجريبي/.test(JSON.stringify((await call(storeApi)).json?.data?.crm_assigned_leads || [])), JSON.stringify(testLeadRun.json?.summary).slice(0, 200));
+
+  // ===== ٨.٨) سحب Form ID فقط — بدون استكشاف صفحات نهائياً =====
+  await call(leadSourceApi, { method: 'POST', url: '/api/lead-source', body: { channel: 'instagram', enabled: false } });
+  await call(leadSourceApi, {
+    method: 'POST',
+    url: '/api/lead-source',
+    body: {
+      channel: 'facebook',
+      enabled: true,
+      type: 'meta',
+      token: 'EAAG-demo',
+      resetCursor: true,
+      pages: [],
+      forms: [{ id: 'form-direct', pageId: '', name: 'فورم بمعرّفه' }],
+    },
+  });
+  const directConfig = await call(leadSourceApi);
+  check(
+    'Form ID فقط: النموذج محفوظ بدون أي صفحة',
+    directConfig.json?.config?.forms?.some((f) => f.id === 'form-direct' && f.pageId === '')
+      && (directConfig.json?.config?.pages || []).length === 0,
+    JSON.stringify(directConfig.json?.config).slice(0, 300)
+  );
+  const directRun = await call(cronApi, { url: '/api/cron?key=secret-123' });
+  check(
+    'Form ID فقط: السحب يعمل بالتوكن بدون صفحة',
+    directRun.json?.summary?.added === 1 && directRun.json?.summary?.fetched === 1,
+    JSON.stringify(directRun.json?.summary).slice(0, 320)
+  );
+  const directLead = ((await call(storeApi)).json?.data?.crm_assigned_leads || []).find(
+    (l) => String(l.phone) === '01066660003'
+  );
+  check(
+    'Form ID فقط: الرقم دخل موسوماً باسم النموذج',
+    !!directLead && String(directLead.description).includes('فورم بمعرّفه'),
+    JSON.stringify(directLead || {}).slice(0, 200)
+  );
+  check(
+    'Form ID فقط: استُخدم توكن القناة على /form-direct/leads',
+    graph.calls.some((c) => c.includes('/form-direct/leads') && c.includes('access_token=EAAG-demo')),
+    JSON.stringify(graph.calls.filter((c) => c.includes('/leads')).slice(-3))
+  );
 
   graph.restore();
 

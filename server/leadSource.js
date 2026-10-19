@@ -164,10 +164,11 @@ export const isChannelOn = (config, channel) => {
   return channel === 'instagram' ? !!cfg.enabled : !!config.enabled;
 };
 
-// هل القناة جاهزة فعلاً للسحب؟ (توكن + صفحات + نماذج، أو رابط ملف منشور)
+// هل القناة جاهزة فعلاً للسحب؟ (توكن + نماذج، أو رابط ملف منشور)
+// لا نشترط «صفحات» لأن النموذج يمكن سحبه بمعرّفه فقط: /{form-id}/leads
 export const isChannelReady = (config) => {
   if (!config) return false;
-  if (isMetaSource(config)) return !!(config.token && config.pages?.length && config.forms?.length);
+  if (isMetaSource(config)) return !!(config.token && config.forms?.length);
   return !!String(config.sheetUrl || '').trim();
 };
 
@@ -290,16 +291,17 @@ const toUnixSeconds = (value) => {
 
 async function fetchFromMeta(config, channel = 'facebook') {
   const label = CHANNEL_LABELS[channel] || CHANNEL_LABELS.facebook;
-  if (!config.forms?.length) throw new Error('لم تختر نموذجاً (فورم) بعد — اضغط «استكشف صفحاتي» واختر النماذج');
-  if (!config.pages?.length) throw new Error('لا توجد صفحات — اضغط «استكشف صفحاتي» أولاً');
+  if (!config.forms?.length) throw new Error('لم تختر نموذجاً (فورم) بعد — أضف معرّف النموذج أو اضغط «استكشف صفحاتي» واختر النماذج');
 
-  const pageToken = (pageId) => config.pages.find((p) => p.id === pageId)?.token;
+  const pageToken = (pageId) => config.pages?.find((p) => p.id === pageId)?.token;
+  // نموذج بمعرّفه فقط: يكفي توكن المستخدم (أو توكن الصفحة العامة) للسحب من /{form-id}/leads
+  const fallbackToken = String(config.token || '').trim();
   const leads = [];
   let maxTime = Number(config.cursorTime) || 0;
 
   for (const form of config.forms) {
-    const token = pageToken(form.pageId);
-    if (!token) throw new Error(`توكن الصفحة الخاصة بالنموذج «${form.name || form.id}» غير موجود — أعد الاستكشاف`);
+    const token = pageToken(form.pageId) || String(form.token || '').trim() || fallbackToken;
+    if (!token) throw new Error(`لا يوجد توكن لسحب النموذج «${form.name || form.id}» — الصق توكن فيسبوك أولاً`);
 
     const params = { fields: 'created_time,field_data', limit: '200', access_token: token };
     // نطلب من فيسبوك الأرقام الأحدث من آخر سحب فقط (إن وُجد مؤشر)
@@ -572,7 +574,7 @@ export async function collectLeads(config) {
         label,
         source: isMetaSource(cfg) ? `${label} مباشرة` : 'ملف منشور',
         error: isMetaSource(cfg)
-          ? 'القناة ناقصة: توكن أو صفحات أو نماذج — أعد الاستكشاف واختر النماذج'
+          ? 'القناة ناقصة: توكن أو نماذج — الصق التوكن وأضف معرّف النموذج'
           : 'القناة ناقصة: لم يُضبط رابط الملف المنشور',
       };
       continue;
@@ -697,8 +699,13 @@ export function applyChannelPatch(config, body = {}) {
   }
   if (Array.isArray(body.forms)) {
     patch.forms = body.forms
-      .filter((f) => f && typeof f.id === 'string' && typeof f.pageId === 'string')
-      .map((f) => ({ id: String(f.id), pageId: String(f.pageId), name: String(f.name || f.id) }));
+      .filter((f) => f && typeof f.id === 'string' && f.id.trim())
+      .map((f) => ({
+        id: String(f.id).trim(),
+        // نموذج بمعرّفه فقط: pageId فاضي مقصود — السحب يستخدم توكن القناة
+        pageId: typeof f.pageId === 'string' ? String(f.pageId) : '',
+        name: String(f.name || f.id),
+      }));
   }
   if (typeof body.token === 'string' && body.token.trim()) patch.token = body.token.trim();
   if (body.clearToken) patch.token = '';
