@@ -28,7 +28,7 @@ export const AUTH_EVENT = 'crm-auth-required';
 
 export const API = '/api/store';
 export const AUTH_API = '/api/auth';
-const POLL_MS = 2500;
+const POLL_MS = 1500;
 
 // ===== حالة التفويض =====
 // لا يوجد أي مفتاح في كود المتصفح: التفويض كله بكوكي جلسة HttpOnly موقع من السيرفر.
@@ -252,6 +252,8 @@ const pushOne = async (key: string): Promise<void> => {
 const tick = async (): Promise<void> => {
   // بلا جلسة صحيحة لا نفعل شيئاً: لا قراءة ولا كتابة — البيانات تبقى مغلقة
   if (busy || authRequired) return;
+  // في الخلفية المتصفح بيوقف المؤقتات غالباً؛ نرجّع المزامنة فوراً عند العودة
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
   busy = true;
   try {
     // 0) هل تغيّر شيء على السيرفر؟ (نفحص قبل الرفع حتى نكتشف إعادة الضبط قبل رفع أي بيانات قديمة)
@@ -418,6 +420,32 @@ export async function pushKey(key: string): Promise<boolean> {
   }
 }
 
+// مزامنة فورية — تُنادى عند رجوع التاب/النافذة أو تغيّر بيانات في تاب آخر
+export const syncNow = (): void => {
+  void tick();
+};
+
+let wakeListenersAttached = false;
+const attachWakeListeners = (): void => {
+  if (wakeListenersAttached || typeof window === 'undefined') return;
+  wakeListenersAttached = true;
+  const wake = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    void tick();
+  };
+  window.addEventListener('focus', wake);
+  window.addEventListener('online', wake);
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') wake();
+    });
+  }
+  // تاب آخر على نفس المتصفح كتب بيانات: نعيد المزامنة فوراً بدل انتظار الدورة
+  window.addEventListener('storage', (event) => {
+    if (!event.key || event.key.startsWith('crm_')) wake();
+  });
+};
+
 // تُنادى مرة واحدة قبل تشغيل التطبيق: نجلب بيانات السيرفر أولاً ثم نبدأ المزامنة الدورية
 export async function startSync(): Promise<void> {
   // بدون قاعدة بيانات خارجية، النظام يعمل محلياً على هذا الجهاز فقط.
@@ -449,6 +477,7 @@ export async function startSync(): Promise<void> {
         window.setInterval(() => {
           void tick();
         }, POLL_MS);
+        attachWakeListeners();
         return;
       }
 
@@ -510,4 +539,5 @@ export async function startSync(): Promise<void> {
   window.setInterval(() => {
     void tick();
   }, POLL_MS);
+  attachWakeListeners();
 }

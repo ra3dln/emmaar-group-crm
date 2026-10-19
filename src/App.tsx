@@ -14,10 +14,10 @@ import {
   Rows, LayoutList, List, ShieldAlert, MapPinOff, Navigation,
   ChevronRight, ChevronLeft,
   Workflow, BellRing, ClipboardList, MessagesSquare, Share2, LineChart,
-  Megaphone, Globe, Link2, Facebook, ChevronDown
+  Megaphone, Globe, Link2, Facebook, ChevronDown, Palette
 } from 'lucide-react';
 import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, TabType } from './types';
-import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey } from './sync';
+import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, syncNow } from './sync';
 import { buildPreview, buildSampleCsv, buildFakeCampaignCsv, decodeText, parseTable, type ImportPreview } from './leadImport';
 import { alarm, loadAlarmSettings, saveAlarmSettings, DEFAULT_ALARM_SETTINGS, type AlarmSettings } from './alarm';
 import { enablePush, disablePush, pushState, sendTestPush, pushSupported, registerWorker, resyncPush, localNotification, type PushState } from './push';
@@ -30,6 +30,7 @@ import {
   roomsFromText,
 } from './arabicNumbers';
 import { buildXlsx, downloadBlob } from './xlsx';
+import { PALETTES, applyThemeForUser, readThemeChoice, reapplyCurrentTheme, saveThemeChoice, type ThemeChoice } from './theme';
 import {
   ATTENDANCE_END_DEFAULT,
   ATTENDANCE_GRACE_DEFAULT,
@@ -1436,6 +1437,38 @@ function App() {
     loadData();
   }, [currentUser]);
 
+  // ===== تحديث لحظي =====
+  // الرجوع للتاب/التطبيق المثبّت، عودة الإنترنت، أو كتابة من تاب آخر:
+  // نطلب مزامنة فورية ونعيد قراءة البيانات بدل انتظار الدورة الدورية.
+  useEffect(() => {
+    if (!currentUser) return;
+    const refresh = () => {
+      syncNow();
+      loadData();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || event.key.startsWith('crm_')) loadData();
+    };
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [currentUser?.id]);
+
+  // ألوان الموقع الخاصة بهذا المستخدم (تُحفظ على جهازه ولا تؤثر على غيره)
+  useEffect(() => {
+    applyThemeForUser(currentUser?.id);
+  }, [currentUser?.id]);
+
   // ===== جلسة جديدة: نمسح علامات «تم الإشعار» القديمة =====
   // كانت هذه العلامات تُحفظ للأبد، فلو ضاع أول إشعار (صلاحية مقفولة / التاب مقفول)
   // يظل التذكير صامتاً إلى الأبد حتى بعد تحديث الصفحة. التذكير المستحق لازم يظهر
@@ -1467,9 +1500,9 @@ function App() {
         allReminders = [];
       }
 
-      // نفس نطاق التبويب: الإدارة ترى الكل، وغيرها يرى تذكيراتها فقط
+      // إشعارات التذكير تخص صاحب التذكير فقط — لا تصل للإدارة كإشعار عن تذكيرات السيلز
       const scoped = allReminders.filter(
-        (r) => r && !r.isCompleted && (currentUser.role === 'admin' || r.userId === currentUser.id)
+        (r) => r && !r.isCompleted && r.userId === currentUser.id
       );
       // الأجدد أولاً
       const due = scoped
@@ -1644,6 +1677,8 @@ function App() {
     const next = [...getMessages(), message];
     saveMessages(next);
     setMessages(next);
+    // الرفع الفوري ضروري لإشعار الطرف الآخر والموقع مقفول (السيرفر يرسل Web Push)
+    void pushKey('crm_messages');
   };
 
   // تعليم رسائل غرفة المدراء كمقروءة لهذا العضو فقط (كل مدير له علامة قراءة مستقلة)
@@ -1755,6 +1790,7 @@ function App() {
       // الرقم موجود بالفعل كعميل — نسجّل الحدث فقط ولا نكرر السجل
       addClientActivity(existing.id, 'note', 'وصل رقم موزّع مطابق لنفس العميل', currentUser?.name);
     } else {
+      const formName = formNameOf(lead);
       const client: Client = {
         id: crypto.randomUUID(),
         userId: currentUser?.id as string,
@@ -1770,6 +1806,7 @@ function App() {
         feedback: '',
         priority: 'high',
         source: lead.description ? `رقم موزّع — ${lead.description}` : 'رقم موزّع',
+        ...(formName ? { formName } : {}),
         createdAt: nowIso,
         updatedAt: nowIso,
         activities: [
@@ -2072,7 +2109,7 @@ function App() {
   const activeReminders = reminders.filter(r => !r.isCompleted);
   // المستحق الآن — الأحدث أولاً (نفس ترتيب تبويب التذكيرات)
   const dueReminders = reminders
-    .filter((r) => isReminderDue(r))
+    .filter((r) => isReminderDue(r) && (currentUser.role !== 'admin' || r.userId === currentUser.id))
     .slice()
     .sort((a, b) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
   
@@ -2092,17 +2129,16 @@ function App() {
     totalProperties: properties.length,
   };
 
-  // ===== بيانات مركز الإشعارات (مقسَّمة: تذكيرات / أرقام جديدة / رسائل / اتصالات الفريق) =====
-  // الأجدد أولاً في القائمة أيضاً
+  // ===== بيانات مركز الإشعارات (مقسَّمة: تذكيرات / رسائل / اتصالات الفريق) =====
+  // الأجدد أولاً في القائمة أيضاً.
+  // الإدارة لا تستقبل إشعارات تذكيرات السيلز — تذكيراتها هي فقط.
   const notifReminders = reminders
-    .filter((r) => !r.isCompleted)
+    .filter((r) => !r.isCompleted && (currentUser.role !== 'admin' || r.userId === currentUser.id))
     .slice()
     .sort((a, b) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
 
-  // للسيلز: أرقامه الجديدة فقط • للإدارة: كل الأرقام الجديدة التي نزلت من المصادر
-  const notifLeads = currentUser.role === 'sales'
-    ? assignedLeads.filter((l) => l.salesId === currentUser.id && l.status !== 'closed')
-    : assignedLeads.filter((l) => l.status === 'new' || l.status === 'viewed');
+  // أرقام توزيع الكامبين مش إشعارات إدارة — السيلز يشوفها في «عملاء كامبين».
+  const notifLeads: AssignedLead[] = [];
 
   const notifMessages = messages
     .filter((m) => messageTargetsUser(m, currentUser))
@@ -2115,11 +2151,15 @@ function App() {
   // العدّاد الأحمر: ما لم يره المستخدم بعد
   const unseenNotifIds = [
     ...notifReminders.filter((r) => isReminderDue(r)).map((r) => `rem-${r.id}`),
-    ...notifLeads.filter((l) => l.status === 'new').map((l) => `lead-${l.id}`),
     ...notifMessages.filter((m) => !isMessageReadBy(m, currentUser.id)).map((m) => `msg-${m.id}`),
     ...(currentUser.role !== 'sales' ? notifCalls.slice(0, 30).map((c) => `call-${c.id}`) : []),
   ];
   const unseenNotifCount = unseenNotifIds.filter((id) => !seenNotifIds.includes(id)).length;
+
+  // شارة «عملاء كامبين»: أرقام جديدة لسه ما اتضافتش لعملاء السيلز
+  const newCampaignLeadsCount = currentUser.role === 'sales'
+    ? assignedLeads.filter((l) => l.salesId === currentUser.id && l.status === 'new' && isCampaignRecord(l)).length
+    : 0;
 
   const markNotifsSeen = (idsToMark: string[]) => {
     if (!idsToMark.length) return;
@@ -2310,6 +2350,9 @@ function App() {
                     {tab.id === 'reminders' && stats.dueNow > 0 && (
                       <span className="side-badge">{stats.dueNow}</span>
                     )}
+                    {tab.id === 'clients' && newCampaignLeadsCount > 0 && (
+                      <span className="side-badge">{newCampaignLeadsCount > 9 ? '9+' : newCampaignLeadsCount}</span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -2397,6 +2440,9 @@ function App() {
                 <span className="topbar-badge is-warn" />
               )}
             </motion.button>
+
+            {/* ألوان الموقع (لكل مستخدم) */}
+            <ThemePaletteButton userId={currentUser.id} />
 
             {/* أيقونة المظهر (ليلي/نهاري) — جنب الإشعارات */}
             <ModeIconButton />
@@ -2504,6 +2550,7 @@ function App() {
             clients={filteredClients}
             leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)}
             callLogs={callLogs.filter((l: CallLog) => l.salesId === currentUser.id)}
+            feedbacks={dailyFeedbacks}
             searchTerm={searchTerm}
             onSearch={setSearchTerm}
             onSelect={setSelectedClient}
@@ -2555,7 +2602,7 @@ function App() {
             localStorage.setItem('crm_reminders', JSON.stringify(JSON.parse(localStorage.getItem('crm_reminders') || '[]').filter((r: Reminder) => r.id !== id)));
             void pushKey('crm_reminders');
           }} onAdd={() => setShowAddReminder(true)} />}
-          {activeTab === 'daily-feedback' && currentUser.role === 'sales' && <DailyFeedbackView feedbacks={dailyFeedbacks} clients={clients} currentUser={currentUser} onDelete={(id: string) => {
+          {activeTab === 'daily-feedback' && currentUser.role === 'sales' && <DailyFeedbackView feedbacks={dailyFeedbacks} clients={clients} currentUser={currentUser} callLogs={callLogs.filter((l: CallLog) => l.salesId === currentUser.id)} onDelete={(id: string) => {
             setDailyFeedbacks(dailyFeedbacks.filter(f => f.id !== id));
             localStorage.setItem('crm_daily_feedback', JSON.stringify(JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]').filter((f: DailyFeedback) => f.id !== id)));
             void pushKey('crm_daily_feedback');
@@ -3223,9 +3270,8 @@ function getTabGroups(role: string): NavGroup[] {
       label: 'لوحة العمل',
       items: [
         { id: 'dashboard', icon: Home, label: 'الرئيسية' },
-        // «أرقام جديدة»: الأرقام التي وصلته من الكامبينات قبل أن يضيفها لعملائه
-        { id: 'new-leads', icon: UserPlus, label: 'أرقام جديدة' },
-        { id: 'clients', icon: Users, label: 'العملاء' },
+        // أرقام الكامبين بقت جوه «عملاء كامبين» مع زر «أضف إلى عملائي»
+        { id: 'clients', icon: Users, label: 'عملاء كامبين' },
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
       ],
     },
@@ -4043,10 +4089,31 @@ const SOURCE_KINDS = {
 };
 const sourceKindOf = (text: string): keyof typeof SOURCE_KINDS => {
   const t = String(text || '').toLowerCase();
-  if (/campaign|كامبين|كامپين/.test(t)) return 'campaign';
-  if (/facebook|face ?book|\bfb\b|فيسبوك|فيس بوك/.test(t)) return 'facebook';
+  if (/campaign|كامبين|كامپين|رقم موزّع|استيراد/.test(t)) return 'campaign';
+  if (/facebook|face ?book|\bfb\b|فيسبوك|فيس بوك|instagram|إنستجرام|انستجرام/.test(t)) return 'facebook';
   if (/external|externe|خارجي|خارج/.test(t)) return 'external';
   return 'other';
+};
+
+// ===== اسم الفورم من وصف الرقم أو مصدر العميل =====
+// الوصف اللي بيجي من السحب: «استيراد تلقائي • المصدر: فيسبوك - فورم أكتوبر • التاريخ: …»
+// والمصدر بعد التحويل: «رقم موزّع — … المصدر: إنستجرام - فورم …»
+const formNameOf = (record: { source?: string; description?: string; formName?: string } | null | undefined): string => {
+  if (!record) return '';
+  if (record.formName && String(record.formName).trim()) return String(record.formName).trim();
+  const text = String(record.description || record.source || '');
+  if (!text) return '';
+  const labelled = text.match(/(?:المصدر|Form|فورم|نموذج)\s*[:：-]?\s*(?:فيسبوك|إنستجرام|انستجرام|Facebook|Instagram)?\s*[-–—:]?\s*([^•|]+)/i);
+  if (labelled && labelled[1] && labelled[1].trim()) return labelled[1].trim();
+  const dashed = text.match(/(?:فيسبوك|إنستجرام|انستجرام|Facebook|Instagram)\s*[-–—]\s*([^•|]+)/i);
+  if (dashed && dashed[1] && dashed[1].trim()) return dashed[1].trim();
+  return '';
+};
+
+// هل السجل أصله رقم اتسحب من الكامبين؟ (للعميل أو الرقم الموزّع)
+const isCampaignRecord = (record: any): boolean => {
+  const text = String(`${record?.source || ''} ${record?.description || ''} ${record?.formName || ''}`);
+  return /رقم موزّع|استيراد|campaign|كامبين|كامپين|فيسبوك|فيس بوك|facebook|إنستجرام|انستجرام|instagram|المصدر/i.test(text);
 };
 
 // ===== المرحلة التفصيلية ← أي زر من الأزرار الثلاثة (new / follow up / closed deal) يعبّر عنها =====
@@ -4322,13 +4389,180 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
   );
 }
 
+// ===== سجل كل تعليقات عميل واحد =====
+// يُفتح بالضغط على كارت الفيدباك أو زر الكومنتات — يعرض كل الكومنتات/المكالمات
+// مرتّبة بالأحدث، ومجمّعة باليوم، مع الوقت واسم الكاتب وحالة الفيدباك.
+function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }: any) {
+  const entries = useMemo(() => {
+    const digits = normalizeDigits(String(client?.phone || '')).replace(/\D/g, '');
+    const name = normalizeArabicText(String(client?.name || ''));
+
+    const list: Array<{ id: string; at: string; text: string; by?: string; status?: string; kind: string; result?: string }> = [];
+
+    for (const activity of client?.activities || []) {
+      if (!String(activity?.text || '').trim()) continue;
+      if (!/feedback|call|note|comment|فيدباك|اتصال|ملاحظة/i.test(String(activity.type || ''))) continue;
+      list.push({
+        id: `act-${activity.id}`,
+        at: activity.at,
+        text: activity.text,
+        by: activity.by,
+        status: activity.status,
+        kind: activity.type,
+      });
+    }
+
+    for (const feedback of feedbacks || []) {
+      const samePhone = digits && normalizeDigits(String(feedback.clientPhone || '')).replace(/\D/g, '') === digits;
+      const sameName = name && normalizeArabicText(String(feedback.clientName || '')) === name;
+      if (!samePhone && !sameName) continue;
+      if (!String(feedback.feedback || '').trim()) continue;
+      list.push({
+        id: `fb-${feedback.id}`,
+        at: feedback.date || feedback.createdAt,
+        text: feedback.feedback,
+        status: feedback.status,
+        kind: 'feedback',
+        result: feedback.callStatus,
+      });
+    }
+
+    for (const log of callLogs || []) {
+      const sameClient = String(log.clientId || '') === String(client?.id || '');
+      const samePhone = digits && normalizeDigits(String(log.clientPhone || '')).replace(/\D/g, '') === digits;
+      if (!sameClient && !samePhone) continue;
+      if (!String(log.comment || '').trim()) continue;
+      list.push({
+        id: `call-${log.id}`,
+        at: log.createdAt,
+        text: log.comment,
+        by: log.salesName,
+        kind: 'call',
+        result: log.result,
+        status: log.result === 'answered' ? 'follow-up' : 'no-answer',
+      });
+    }
+
+    // منع تكرار نفس الكومنت (الخط الزمني + سجل المكالمة)
+    const seen = new Set<string>();
+    return list
+      .filter((entry) => {
+        const key = `${String(entry.at).slice(0, 16)}|${String(entry.text).trim()}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  }, [client, callLogs, feedbacks]);
+
+  const days = useMemo(() => {
+    const map = new Map<string, typeof entries>();
+    for (const entry of entries) {
+      const date = new Date(entry.at);
+      const key = Number.isNaN(date.getTime())
+        ? 'غير معروف'
+        : date.toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      map.set(key, [...(map.get(key) || []), entry]);
+    }
+    return Array.from(map.entries());
+  }, [entries]);
+
+  const kindLabel = (kind: string): string => {
+    if (kind === 'call') return 'مكالمة';
+    if (kind === 'feedback') return 'فيدباك';
+    if (kind === 'note') return 'ملاحظة';
+    if (kind === 'reminder') return 'تذكير';
+    return 'تعليق';
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[80] flex items-center justify-center p-3 sm:p-4 bg-black/85"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.96, y: 10 }}
+        animate={{ scale: 1, y: 0 }}
+        exit={{ scale: 0.96, y: 10 }}
+        className="panel w-full max-w-2xl max-h-[92vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 p-4 border-b border-[var(--border)]">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="w-11 h-11 rounded-full gradient-primary flex items-center justify-center shrink-0 font-bold text-[var(--text-strong)]">
+              {String(client?.name || '؟').trim().charAt(0)}
+            </span>
+            <div className="min-w-0">
+              <h2 className="font-bold text-[var(--text-strong)] truncate">{client?.name || 'عميل'}</h2>
+              <p className="text-xs text-[var(--text-muted)]" dir="ltr">{client?.phone || ''}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="chip">{entries.length} تعليق</span>
+            <button type="button" onClick={onClose} title="إغلاق" className="icon-btn !w-9 !h-9">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {entries.length === 0 && (
+            <div className="text-center py-12 text-sm text-[var(--text-dim)]">
+              لا توجد تعليقات أو مكالمات مسجّلة لهذا العميل بعد.
+            </div>
+          )}
+          {days.map(([day, dayEntries]) => (
+            <div key={day}>
+              <p className="text-[11px] font-bold text-[var(--text-dim)] mb-2 sticky top-0 bg-[var(--surface)] py-1">
+                {day}
+              </p>
+              <div className="space-y-2">
+                {(dayEntries as typeof entries).map((entry) => (
+                  <div key={entry.id} className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--tint-2)] text-[var(--text-muted)]">
+                          {kindLabel(entry.kind)}
+                        </span>
+                        {entry.status && <FeedbackChip status={entry.status} />}
+                        {entry.result && (
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${entry.result === 'answered' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}`}>
+                            {entry.result === 'answered' ? 'تم الرد' : 'لم يرد'}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-[var(--text-dim)]">
+                        {formatDateTime(entry.at)}
+                        {entry.by ? ` • ${entry.by}` : ''}
+                      </span>
+                    </div>
+                    <p className="text-sm text-[var(--text)] leading-relaxed whitespace-pre-wrap">
+                      {String(entry.text).replace(/^فيدباك:\s*/, '').replace(/^من المكالمة:\s*/, '')}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 // ===== قائمة العملاء: وضعان (شريط / كروت مكدسة) + شرائح حالة ملونة + الأرقام الجديدة =====
 // قائمة العملاء للمندوب: الأرقام الواردة من الإدارة + عملاؤه في **قائمة واحدة** بلا أي تقسيم،
 // وكل كارت يحمل شريطاً لونياً وشارة توضح مصدر العميل (Facebook / Campaign / External…)
 // مع صندوق اختيارات سريع جمب الاسم: new / follow up / closed deal.
-function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTerm, onSearch, onSelect, onAdd, onCall, onConvert, onLeadViewed, onSetStage, onRefresh }: any) {
+function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedbacks = [], searchTerm, onSearch, onSelect, onAdd, onCall, onConvert, onLeadViewed, onSetStage, onRefresh }: any) {
   const [view, setView] = useState<'cards' | 'table'>(() => (localStorage.getItem('crm_clients_view') === 'table' ? 'table' : 'cards'));
   const [showComments, setShowComments] = useState(false);
+  // افتراضياً «عملاء كامبين» فقط — زر واحد يعرض كل العملاء (المضافين يدوياً أيضاً)
+  const [campaignOnly, setCampaignOnly] = useState(true);
+  const [commentsClient, setCommentsClient] = useState<Client | null>(null);
   // صندوق الفيدباك: حالة إلزامية + كومنت إلزامي — لا يُحفظ فيدباك ناقص
   const [composer, setComposer] = useState<{ key: string; clientId: string; status: string } | null>(null);
   const [commentText, setCommentText] = useState('');
@@ -4414,11 +4648,26 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
 
   // بحث واحد يشمل الأرقام والعملاء معاً
   const q = normalizeArabicText(searchTerm || '').trim();
+  const digitsOf = (value: any) => normalizeDigits(String(value || '')).replace(/\D/g, '');
+  // عملاء كامبين: الأرقام المسحوبة + العملاء اللي اتولدوا منها.
+  // الأرقام اللي عندها عميل بالفعل لا تتكرر ككارت رقم.
+  const clientPhones = new Set((clients || []).map((c: Client) => digitsOf(c.phone)).filter(Boolean));
+  const campaignClients = (clients || []).filter((c: Client) => !campaignOnly || isCampaignRecord(c));
+  const baseLeads = (leads || []).filter((l: AssignedLead) => {
+    if (l.status === 'closed') return false;
+    if (clientPhones.has(digitsOf(l.phone))) return false;
+    return !campaignOnly || isCampaignRecord(l);
+  });
   const visibleLeads = q
-    ? leads.filter((l: AssignedLead) =>
-        normalizeArabicText(`${l.name} ${l.phone} ${l.description || ''}`).includes(q)
+    ? baseLeads.filter((l: AssignedLead) =>
+        normalizeArabicText(`${l.name} ${l.phone} ${l.description || ''} ${formNameOf(l)}`).includes(q)
       )
-    : leads;
+    : baseLeads;
+  const visibleClients = q
+    ? campaignClients.filter((c: Client) =>
+        normalizeArabicText(`${c.name} ${c.phone} ${(c.phones || []).join(' ')} ${c.source || ''} ${formNameOf(c)}`).includes(q)
+      )
+    : campaignClients;
 
   // ===== قائمة موحّدة: الأرقام والعملاء مرصوصون معاً بالأحدث أولاً =====
   type FeedItem =
@@ -4427,19 +4676,35 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
   const feed: FeedItem[] = useMemo(() => {
     const items: FeedItem[] = [
       ...visibleLeads.map((lead: AssignedLead) => ({ kind: 'lead' as const, at: lead.createdAt || '', lead })),
-      ...clients.map((client: Client) => ({ kind: 'client' as const, at: client.updatedAt || client.createdAt || '', client })),
+      ...visibleClients.map((client: Client) => ({ kind: 'client' as const, at: client.updatedAt || client.createdAt || '', client })),
     ];
     return items.sort((a, b) => String(b.at).localeCompare(String(a.at)));
-  }, [visibleLeads, clients]);
-  const newLeadsCount = leads.filter((l: AssignedLead) => l.status === 'new').length;
+  }, [visibleLeads, visibleClients]);
+  const campaignItemsCount = visibleLeads.length + visibleClients.length;
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="page-intro">
+          <div>
+            <h2>عملاء كامبين</h2>
+            <p>كل الأرقام اللي اتسحبت من الكامبين — زوّدها لعملائك بضغطة، واسم الفورم ظاهر مع كل عميل.</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCampaignOnly((value) => !value)}
+          className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)]"
+        >
+          {campaignOnly ? 'عرض كل العملاء' : 'كامبين فقط'}
+        </button>
+      </div>
+
       {/* شريط البحث + الأدوات */}
       <div className="flex flex-col md:flex-row gap-3">
         <div className="flex-1 relative">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-[var(--text-muted)]" />
-          <input type="text" placeholder="ابحث بالاسم أو الرقم أو العقار أو المبلغ (مثال: مليون)" value={searchTerm} onChange={(e) => onSearch(e.target.value)}
+          <input type="text" placeholder="ابحث بالاسم أو الرقم أو اسم الفورم أو المبلغ..." value={searchTerm} onChange={(e) => onSearch(e.target.value)}
             className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] pr-10 pl-4 py-2.5 text-[13.5px] text-[var(--text-strong)]" />
         </div>
         <div className="flex items-center gap-2">
@@ -4461,8 +4726,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
 
       {/* سطر ملخص واحد — بلا أي تقسيم للقائمة */}
       <div className="clients-summary">
-        <span>الإجمالي: <b>{feed.length}</b></span>
-        <span className="cs-dim">مرتبة بالأحدث أولاً</span>
+        <span>عملاء كامبين: <b>{campaignItemsCount}</b></span>
+        <span className="cs-dim">{campaignOnly ? 'أرقام وعملاء من الكامبين فقط' : 'كل العملاء (كامبين + مضافين يدوياً)'} — مرتبة بالأحدث أولاً</span>
       </div>
 
       {/* قائمة واحدة: الأرقام الواردة والعملاء مرصوصون معاً */}
@@ -4495,6 +4760,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
               const src = SOURCE_KINDS[sourceKindOf(isLead ? lead!.description : `${client!.source} ${client!.status}`)];
               const SrcIcon = src.Icon;
               const sourceText = isLead ? (formatLeadDescription(lead!.description) || 'رقم وارد') : sourceLabelOf(client);
+              const formName = isLead ? formNameOf(lead) : (client!.formName || formNameOf(client));
               const comments = isLead ? 0 : commentCountOf(client);
               const last = isLead ? null : lastCommentOf(client);
               const open = composer?.key === (isLead ? `lead-${lead!.id}` : `client-${client!.id}`);
@@ -4515,6 +4781,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                     </span>
                     <span role="cell">
                       <span className={`cc-src ${src.cls}`} title={sourceText}><SrcIcon className="w-3 h-3" />{sourceText}</span>
+                      {formName && <span className="cc-form" title={`الفورم: ${formName}`}>فورم: {formName}</span>}
                     </span>
                     <span role="cell" className="ct-budget">{(!isLead && client!.budget) ? displayPrice(client!.budget) : '—'}</span>
                     <span role="cell">
@@ -4528,7 +4795,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                       <button
                         type="button"
                         title="الكومنتات وخط العميل الزمني"
-                        onClick={(e) => { e.stopPropagation(); if (!isLead) onSelect(client); }}
+                        onClick={(e) => { e.stopPropagation(); if (!isLead) setCommentsClient(client); }}
                       >
                         <MessageSquare className="w-3.5 h-3.5" />
                         <b>{comments}</b>
@@ -4541,7 +4808,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                           {onConvert && lead!.status !== 'closed' && (
                             <button onClick={() => onConvert(lead)} title="ينشئ عميلاً بهذا الرقم في قائمتك"
                               className="text-[10.5px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-2.5 py-1.5 rounded-[var(--r-sm)] font-bold hover:bg-emerald-500/30 whitespace-nowrap">
-                               أضف لعملائي
+                               أضف إلى عملائي
                             </button>
                           )}
                         </>
@@ -4580,6 +4847,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
             const src = SOURCE_KINDS[sourceKindOf(isLead ? lead!.description : `${client!.source} ${client!.status}`)];
             const SrcIcon = src.Icon;
             const sourceText = isLead ? (formatLeadDescription(lead!.description) || 'رقم وارد') : sourceLabelOf(client);
+            const formName = isLead ? formNameOf(lead) : (client!.formName || formNameOf(client));
             const comments = isLead ? 0 : commentCountOf(client);
             const last = isLead ? null : lastCommentOf(client);
             const facts = isLead
@@ -4589,6 +4857,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                   client!.property ? { k: 'العقار', v: client!.property } : null,
                   client!.monthlyInstallment ? { k: 'القسط', v: displayPrice(client!.monthlyInstallment) } : null,
                   client!.deliveryPeriod ? { k: 'التسليم', v: client!.deliveryPeriod } : null,
+                  formName ? { k: 'الفورم', v: formName } : null,
                 ].filter(Boolean) as Array<{ k: string; v: string }>);
             const open = composer?.key === (isLead ? `lead-${lead!.id}` : `client-${client!.id}`);
             void facts; void SrcIcon; void sourceText;
@@ -4634,13 +4903,15 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                     )}
 
                     {isLead && (
-                      <p className="cc-note">وصل من {sourceText} — {formatDateTime(lead!.createdAt)}</p>
+                      <p className="cc-note">
+                        وصل من {sourceText}{formName ? ` • فورم: ${formName}` : ''} — {formatDateTime(lead!.createdAt)}
+                      </p>
                     )}
                   </div>
 
                   <div className="cc-actions" onClick={(e) => e.stopPropagation()}>
-                    <button type="button" className="comments-pill" title="عدد الكومنتات — اضغط لعرضها"
-                      onClick={() => { if (!isLead) onSelect(client); }}>
+                    <button type="button" className="comments-pill" title="كل التعليقات بالتوقيت — اضغط لعرضها"
+                      onClick={() => { if (!isLead) setCommentsClient(client); }}>
                       <MessageSquare className="w-3.5 h-3.5" />
                       <b>{comments}</b>
                     </button>
@@ -4650,7 +4921,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
                         {onConvert && lead!.status !== 'closed' && (
                           <button onClick={() => onConvert(lead)} title="ينشئ عميلاً بهذا الرقم في قائمتك"
                             className="text-[10.5px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-2.5 py-1.5 rounded-[var(--r-sm)] font-bold hover:bg-emerald-500/30 whitespace-nowrap">
-                             أضف لعملائي
+                             أضف إلى عملائي
                           </button>
                         )}
                       </>
@@ -4674,6 +4945,9 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], searchTe
 
       <AnimatePresence>
         {showComments && <CommentsBoardModal clients={clients} callLogs={callLogs} onClose={() => setShowComments(false)} />}
+        {commentsClient && (
+          <ClientCommentsModal client={commentsClient} callLogs={callLogs} feedbacks={feedbacks} onClose={() => setCommentsClient(null)} />
+        )}
       </AnimatePresence>
     </div>
   );
@@ -5121,7 +5395,6 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
   const tabs = isSales
     ? [
         { id: 'reminders', label: 'التذكيرات', icon: Bell },
-        { id: 'leads', label: 'أرقام جديدة', icon: UserPlus },
         { id: 'messages', label: 'الرسائل', icon: MessageCircle },
       ]
     : [
@@ -5139,7 +5412,7 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
     onSeen(unseenIds.filter((x: string) => x.startsWith(prefix)));
   }, [tab, unseenIds.join('|')]);
 
-  const goTarget = tab === 'reminders' ? 'reminders' : tab === 'leads' ? 'new-leads' : tab === 'calls' ? (isSales ? 'daily-feedback' : 'admin-feedback') : (isSales ? 'chat' : 'admin-chat');
+  const goTarget = tab === 'reminders' ? 'reminders' : tab === 'calls' ? (isSales ? 'daily-feedback' : 'admin-feedback') : (isSales ? 'chat' : 'admin-chat');
 
   const now = Date.now();
   const empty = (text: string) => <p className="text-sm text-[var(--text-dim)] text-center py-10">{text}</p>;
@@ -6160,7 +6433,8 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: any)
 // ===== الفيدباك اليومي للمندوب: **كارت لكل رقم**، والكومنتات مرصوصة تحت بعضها =====
 // أى كومنت يكتبه المندوب على أى عميل (من تبويب العملاء أو من الاتصال أو من إضافة فيدباك)
 // ينزل هنا فوراً منسوباً لكاتبه — حتى لو كان العميل مسجلاً باسم الإدارة أو باسم مندوب آخر.
-function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd }: any) {
+function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd, callLogs = [] }: any) {
+  const [historyClient, setHistoryClient] = useState<Client | null>(null);
   const norm = (value: any) => normalizeDigits(String(value || '')).replace(/\D/g, '');
   const myPhones = new Set<string>((clients || []).map((c: Client) => norm(c.phone)).filter(Boolean));
   // كومنتاتي: ما كتبته بنفسي + أى كومنت على رقم من أرقامي (للبيانات القديمة المنسوبة لصاحب العميل)
@@ -6180,6 +6454,35 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd }:
       return { key, list: sorted, latest: Date.parse(sorted[0]?.date || sorted[0]?.createdAt) || 0 };
     })
     .sort((a, b) => b.latest - a.latest);
+
+  // فتح سجل كل التعليقات لصاحب الكارت (حتى لو العميل مش موجود في قائمة العملاء)
+  const openHistory = (group: { key: string; list: DailyFeedback[] }) => {
+    const first = group.list[0];
+    const found = (clients || []).find(
+      (c: Client) => norm(c.phone) === norm(first?.clientPhone) || normalizeArabicText(c.name) === normalizeArabicText(first?.clientName)
+    );
+    setHistoryClient(
+      found || ({
+        id: `phone-${group.key}`,
+        name: first?.clientName || 'عميل',
+        phone: first?.clientPhone || '',
+        userId: currentUser?.id || '',
+        phones: [],
+        property: '',
+        budget: '',
+        monthlyInstallment: '',
+        deliveryPeriod: '',
+        status: 'campaign',
+        stage: 'new',
+        feedback: '',
+        priority: 'medium',
+        source: '',
+        createdAt: '',
+        updatedAt: '',
+        activities: [],
+      } as Client)
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -6204,7 +6507,15 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd }:
 
       <div className="space-y-3">
         {groups.map((group) => (
-          <div key={group.key} className="fb-card">
+          <div
+            key={group.key}
+            className="fb-card cursor-pointer"
+            onClick={() => openHistory(group)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openHistory(group); }}
+            title="اضغط لعرض كل التعليقات بالتوقيت"
+          >
             <div className="fb-head">
               <span className="fb-avatar">{(group.list[0]?.clientName || '؟').trim().charAt(0)}</span>
               <div className="fb-who">
@@ -6226,7 +6537,7 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd }:
                       {feedback.callStatus === 'no-answer' ? ' • لم يرد ' : feedback.callStatus === 'called' ? ' • تم الرد ' : ''}
                     </p>
                   </div>
-                  <button onClick={() => onDelete(feedback.id)} title="حذف هذا الكومنت" className="fb-del">
+                  <button onClick={(e) => { e.stopPropagation(); onDelete(feedback.id); }} title="حذف هذا الكومنت" className="fb-del">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
@@ -6235,6 +6546,17 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd }:
           </div>
         ))}
       </div>
+
+      <AnimatePresence>
+        {historyClient && (
+          <ClientCommentsModal
+            client={historyClient}
+            callLogs={callLogs}
+            feedbacks={feedbacks}
+            onClose={() => setHistoryClient(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -8353,6 +8675,8 @@ const applyMode = (mode: AppMode) => {
   if (typeof document === 'undefined') return;
   document.documentElement.dataset.mode = mode;
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', MODE_META[mode]);
+  // أعد تطبيق ألوان المستخدم بعد تبديل الوضع (لكل وضع درجات مختلفة)
+  reapplyCurrentTheme();
 };
 
 // يطبّق الوضع و يحفظه، ويُبلّغ بقية المكوّنات (زر المظهر في الإعدادات أيضاً) فيبقى الزران متزامنين
@@ -8418,6 +8742,108 @@ function ModeIconButton() {
     >
       {mode === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
     </motion.button>
+  );
+}
+
+// زر ألوان الموقع: لون الهوية + لون الأيقونات — لكل مستخدم على حدة
+function ThemePaletteButton({ userId }: { userId?: string }) {
+  const [open, setOpen] = useState(false);
+  const [choice, setChoice] = useState<ThemeChoice>(() => readThemeChoice(userId));
+  const [mode] = useAppMode();
+
+  useEffect(() => {
+    setChoice(readThemeChoice(userId));
+    applyThemeForUser(userId);
+  }, [userId]);
+
+  useEffect(() => {
+    saveThemeChoice(choice, userId);
+    applyThemeForUser(userId);
+  }, [choice, userId]);
+
+  const pick = (kind: 'brand' | 'icons', id: string) =>
+    setChoice((prev) => ({ ...prev, [kind]: id }));
+
+  return (
+    <div className="relative">
+      <motion.button
+        whileHover={{ scale: 1.05 }}
+        onClick={() => setOpen((value) => !value)}
+        title="ألوان الموقع"
+        aria-label="ألوان الموقع"
+        className="icon-btn theme-palette-btn"
+      >
+        <Palette className="w-4 h-4" />
+      </motion.button>
+
+      <AnimatePresence>
+        {open && (
+          <>
+            <div className="fixed inset-0 z-[110]" onClick={() => setOpen(false)} />
+            <motion.div
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              className="theme-pop z-[120]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <p className="theme-pop-title">ألوان الموقع</p>
+                <button type="button" onClick={() => setOpen(false)} className="theme-pop-close" title="إغلاق">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <p className="theme-pop-label">لون الموقع</p>
+              <div className="theme-swatches">
+                {PALETTES.map((palette) => (
+                  <button
+                    key={palette.id}
+                    type="button"
+                    onClick={() => pick('brand', palette.id)}
+                    title={palette.label}
+                    aria-label={palette.label}
+                    className={`theme-swatch ${choice.brand === palette.id ? 'on' : ''}`}
+                    style={{ background: palette[mode].fill }}
+                  >
+                    {choice.brand === palette.id && <Check className="w-3.5 h-3.5" />}
+                  </button>
+                ))}
+              </div>
+
+              <p className="theme-pop-label mt-3">لون الأيقونات</p>
+              <div className="theme-swatches">
+                <button
+                  type="button"
+                  onClick={() => pick('icons', 'default')}
+                  title="ألوان الأيقونات الأصلية"
+                  className={`theme-swatch theme-swatch-auto ${choice.icons === 'default' ? 'on' : ''}`}
+                >
+                  الأصلي
+                </button>
+                {PALETTES.map((palette) => (
+                  <button
+                    key={palette.id}
+                    type="button"
+                    onClick={() => pick('icons', palette.id)}
+                    title={palette.label}
+                    aria-label={palette.label}
+                    className={`theme-swatch ${choice.icons === palette.id ? 'on' : ''}`}
+                    style={{ background: palette[mode].brand }}
+                  >
+                    {choice.icons === palette.id && <Check className="w-3.5 h-3.5" />}
+                  </button>
+                ))}
+              </div>
+
+              <p className="text-[10px] text-[var(--text-dim)] mt-3 leading-relaxed">
+                لون الموقع يخص الأزرار والهوية، ولون الأيقونات يخص أيقونات القائمة والشريط العلوي. يُحفظ على جهازك فقط.
+              </p>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 
@@ -10274,6 +10700,9 @@ function ClientDetailModal({ client, onClose, onSuccess, onCall }: any) {
             </p>
           )}
           {client.source && <p className="text-xs text-[var(--text-muted)]">المصدر: {client.source}</p>}
+          {(client.formName || formNameOf(client)) && (
+            <p className="text-xs text-[var(--brand)] font-bold">الفورم: {client.formName || formNameOf(client)}</p>
+          )}
         </div>
         <div className="flex flex-col sm:flex-row gap-2 mt-5">
           <button type="button"

@@ -3,6 +3,15 @@ self.addEventListener('install', () => self.skipWaiting());
 
 self.addEventListener('activate', (event) => event.waitUntil(clients.claim()));
 
+// التطبيق المثبّت: network-first لصفحة التطبيق حتى تظهر أي تعديلات فورًا
+// (الأصول نفسها مُبصومة بالـhash، فلا تحتاج كاش هنا)
+self.addEventListener('fetch', (event) => {
+  const request = event.request;
+  if (request.mode === 'navigate') {
+    event.respondWith(fetch(request, { cache: 'no-store' }).catch(() => fetch(request)));
+  }
+});
+
 const ICON = '/icon-192.png';
 
 // ===== إشعار يصل من السيرفر والموقع مقفول =====

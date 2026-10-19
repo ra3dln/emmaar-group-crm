@@ -50,6 +50,8 @@ export interface Client {
   assignedTo?: string;
   priority: 'high' | 'medium' | 'low';
   source: string;
+  // اسم فورم الكامبين الذي جاء منه الرقم (للعرض في «عملاء كامبين»)
+  formName?: string;
   createdAt: string;
   updatedAt: string;
   activities?: ClientActivity[];

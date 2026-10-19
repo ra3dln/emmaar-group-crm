@@ -2704,7 +2704,88 @@ html[data-mode="light"] .status-lost { color: #8f1b15; }
 }
 
 /* ================================================================
-   ٨) احترام تفضيل تقليل الحركة
+   ٨) تخصيص ألوان المستخدم: لون الأيقونات + لوحة الألوان
+   ================================================================ */
+.side-icon svg,
+.app-topbar .icon-btn > svg,
+.kpi-icon svg,
+.mode-toggle svg,
+.theme-palette-btn svg {
+  color: var(--icon-color, currentColor);
+}
+
+.theme-pop {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  width: 276px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16); }
+.theme-pop-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-strong);
+  margin: 0;
+}
+.theme-pop-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+}
+.theme-pop-close {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-xs);
+  color: var(--text-muted);
+}
+.theme-pop-close:hover { background: var(--tint-2); color: var(--text-strong); }
+.theme-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.theme-swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.theme-swatch:hover { transform: scale(1.08); }
+.theme-swatch.on { border-color: var(--text-strong); box-shadow: 0 0 0 2px var(--surface); }
+.theme-swatch-auto {
+  width: auto;
+  padding: 0 10px;
+  border-radius: var(--r-pill);
+  background: var(--tint-2);
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.theme-swatch-auto.on { border-color: var(--brand); color: var(--brand); }
+
+/* اسم فورم الكامبين أسفل شارة المصدر */
+.cc-form {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--brand);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 170px;
+}
+
+/* ================================================================
+   ٩) احترام تفضيل تقليل الحركة
    ================================================================ */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
