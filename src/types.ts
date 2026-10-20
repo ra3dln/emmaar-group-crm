@@ -171,4 +171,4 @@ export interface ChatMessage {
   readBy?: string[]; // من قرأها — تُستخدم في غرفة المدراء الجماعية
 }
 
-export type TabType = 'dashboard' | 'clients' | 'admin-clients' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'new-leads' | 'reports' | 'chat' | 'admin-users' | 'admin-feedback' | 'admin-leads' | 'admin-attendance' | 'admin-analytics' | 'admin-chat' | 'admin-settings';
+export type TabType = 'dashboard' | 'clients' | 'admin-clients' | 'admin-forms' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'new-leads' | 'reports' | 'chat' | 'admin-users' | 'admin-feedback' | 'admin-leads' | 'admin-attendance' | 'admin-analytics' | 'admin-chat' | 'admin-settings';

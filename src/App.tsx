@@ -1061,7 +1061,16 @@ const sendNotification = (title: string, body: string, tag?: string) => {
 
 function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+  // نبدأ من آخر تبويب محفوظ للحساب (بدل «الرئيسية» في كل ريفريش)، فالاستعادة
+  // بتحصل قبل الرسم الأول حتى ما يحصلش وميض ثم قفزة.
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    try {
+      const stored = localStorage.getItem('current_user');
+      return stored ? startTabFor(JSON.parse(stored) as User) : 'dashboard';
+    } catch {
+      return 'dashboard';
+    }
+  });
   
   const [clients, setClients] = useState<Client[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
@@ -1414,10 +1423,7 @@ function App() {
   useEffect(() => {
     if (!currentUser) return;
     // لو تغيّرت صلاحية الحساب أثناء فتح الصفحة، نرجع لتبويب مسموح بدل شاشة فاضية
-    const allowed = getTabGroups(currentUser.role)
-      .flatMap((group) => group.items)
-      .some((tab) => tab.id === activeTab);
-    if (!allowed) {
+    if (!isTabAllowed(currentUser.role, activeTab)) {
       setActiveTab(currentUser.role === 'sales' ? 'dashboard' : 'admin-users');
       return;
     }
@@ -2698,6 +2704,8 @@ function App() {
             onSelect={(c: Client) => setSelectedClient(c)}
             onCall={(c: Client) => setCallClient(c)}
           />}
+          {/* شيت الفورمات: كل فورم لوحده مع تصدير أرقامه وفيدباكه العام */}
+          {activeTab === 'admin-forms' && currentUser.role !== 'sales' && <AdminFormsSheetView clients={scopedClients} leads={scopedLeads} userId={currentUser.id} />}
           {/* الأرقام الجديدة التي وصلت للمندوب من الكامبينات — الكارت يفتح التفاصيل */}
           {activeTab === 'new-leads' && currentUser.role === 'sales' && <NewLeadsViewForSales
             assignedLeads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id && l.status !== 'closed')}
@@ -2721,7 +2729,7 @@ function App() {
           {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
           {activeTab === 'chat' && currentUser.role === 'sales' && <SalesChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} readOnly={!!impersonator} />}
           {activeTab === 'admin-chat' && currentUser.role !== 'sales' && <AdminChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} onGroupRead={handleMarkGroupRead} />}
-          {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} clients={scopedClients} leads={scopedLeads} users={scopedUsers} />}
+          {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} />}
         </AnimatePresence>
         </main>
         </div>
@@ -3371,6 +3379,8 @@ function getTabGroups(role: string): NavGroup[] {
       items: [
         // كل عملاء الشركة وعددهم في تبويب واحد، والكارت يفتح التفاصيل
         { id: 'admin-clients', icon: Users, label: 'عملاء كامبين' },
+        // شيت الفورمات: كل فورم لوحده وأرقامه وفيدباكه العام في ملف Excel
+        { id: 'admin-forms', icon: FileText, label: 'شيت الفورمات' },
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
         { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
         { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
@@ -3401,6 +3411,7 @@ function getTabGroups(role: string): NavGroup[] {
         label: 'متابعة العمل',
         items: [
           { id: 'admin-clients', icon: Users, label: 'عملاء كامبين' },
+          { id: 'admin-forms', icon: FileText, label: 'شيت الفورمات' },
           { id: 'pipeline', icon: Workflow, label: 'المراحل' },
           { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
           { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
@@ -3423,13 +3434,22 @@ function getTabGroups(role: string): NavGroup[] {
 // تبويب لم يعد مسموحاً (تغيّرت الصلاحية مثلاً) نرجع للافتراضي بدل شاشة فاضية.
 const tabKeyOf = (userId: string) => `crm_active_tab_${userId}`;
 
+// كل تبويب ممكن يفتحه الدور: تبويبات القائمة الجانبية + تبويبات بتفتح من كارت
+// جوه صفحة تانية من غير زر في القائمة (مثل «الأرقام الجديدة» للسيلز).
+// بلا القايمة الزيادة دي، أي تبويب من النوع ده كان بيتقفل فوراً وينط للرئيسية.
+const EXTRA_TABS: Record<string, TabType[]> = { sales: ['new-leads'] };
+
+function isTabAllowed(role: string, tab: string): boolean {
+  const inNav = getTabGroups(role).some((group) => group.items.some((item) => item.id === tab));
+  return inNav || (EXTRA_TABS[role] || []).includes(tab as TabType);
+}
+
 function startTabFor(user: User): TabType {
   const fallback: TabType = user.role === 'sales' ? 'dashboard' : 'admin-users';
   try {
     const saved = localStorage.getItem(tabKeyOf(user.id));
     if (!saved) return fallback;
-    const allowed = getTabGroups(user.role).flatMap((group) => group.items).some((tab) => tab.id === saved);
-    return allowed ? (saved as TabType) : fallback;
+    return isTabAllowed(user.role, saved) ? (saved as TabType) : fallback;
   } catch {
     return fallback;
   }
@@ -7503,86 +7523,182 @@ function SalesShareModal({ leads, users, onClose }: any) {
   );
 }
 
-// ===== شيت إكسيل لأرقام الكامبين مع الفيدباك =====
-// الفيدباك مش خانة واحدة: كل مرة يختار السيلز حالة ويكتب كومنت، الحدث بيتسجّل في خط
-// العميل الزمني. عشان كده الشيت بيجمع لكل رقم: حالته الحالية، وآخر كومنت مكتوب عليه
-// بتاريخه، وعدد الفيدباك، ومين مسؤوله — في ملف واحد يتبعت أو يتابع منه الفريق.
-const CAMPAIGN_SHEET_COLUMNS = [
-  'الاسم', 'الرقم', 'أرقام إضافية', 'الفورم', 'المصدر', 'المرحلة',
-  'حالة الفيدباك', 'آخر فيدباك', 'تاريخ آخر فيدباك', 'عدد الفيدباك',
-  'المسؤول', 'تاريخ الإضافة', 'النوع',
-];
+// ===== شيت فورم واحد: اسم الفورم + أرقام الناس + الفيدباك العام =====
+// مقصود إن الملف يبقى بسيط جداً: ٣ أعمدة بس (اسم الفورم، الرقم، الفيدباك العام)
+// عشان يتبعت لأي حد ويتقرا على الموبايل من غير شرح ولا أعمدة زايدة.
+const FORM_SHEET_HEADER = ['اسم الفورم', 'الأرقام', 'الفيدباك العام'];
 
-function campaignSheetBlob({ clients = [], leads = [], users = [], note = '' }: {
-  clients?: Client[];
-  leads?: AssignedLead[];
-  users?: User[];
-  note?: string;
-}): Blob {
-  const digitsOf = (value: any) => String(value || '').replace(/\D/g, '');
-  const nameOf = (id?: string) => users.find((u) => u.id === id)?.name || 'غير مخصص';
-  const orDash = (value?: string) => (value && String(value).trim()) || '—';
-  // الأرقام اللي اتحوّلت لعميل مسجّل موجودة في قائمة العملاء، فنستبعدها من قائمة
-  // «توزيع الأرقام» حتى لا يظهر نفس الرقم مرتين في الشيت.
-  const knownPhones = new Set(clients.map((c) => digitsOf(c.phone)).filter(Boolean));
+type FormSheetRow = { phone: string; feedback: string };
 
-  const clientRows = clients.map((c) => {
-    const statusMeta = FEEDBACK_STATUS_BY_ID[latestFeedbackStatusOf(c)];
-    const last = lastCommentOf(c);
-    return [
-      orDash(c.name),
-      orDash(c.phone),
-      orDash((c.phones || []).filter((p) => p && p !== c.phone).join(' • ')),
-      orDash(formNameOf(c)),
-      orDash(sourceLabelOf(c)),
-      orDash(STAGE_META[c.stage]?.label || c.stage),
-      statusMeta ? statusMeta.label : '—',
-      orDash(last?.text),
-      last?.at ? formatDateTime(last.at) : '—',
-      commentCountOf(c),
-      nameOf(c.assignedTo || c.userId),
-      c.createdAt ? formatDateTime(c.createdAt) : '—',
-      'عميل مسجّل',
-    ];
-  });
-
-  const leadRows = leads
-    .filter((l) => l.status !== 'closed' && !knownPhones.has(digitsOf(l.phone)))
-    .map((l) => [
-      l.name && String(l.name).trim() ? l.name : 'بدون اسم',
-      orDash(l.phone),
-      '—',
-      orDash(formNameOf(l)),
-      orDash(formatLeadDescription(l.description) || 'رقم كامبين'),
-      orDash(LEAD_STATUS_META[l.status]?.label || l.status),
-      '—',
-      '—',
-      '—',
-      0,
-      nameOf(l.salesId),
-      l.createdAt ? formatDateTime(l.createdAt) : '—',
-      'رقم في التوزيع',
-    ]);
-
-  const data = [...clientRows, ...leadRows];
-  const summary = `${data.length} رقم • ${clientRows.length} عميل مسجّل • ${leadRows.length} لسه في «توزيع الأرقام»`;
-  const summaryRow = data.length + 4; // عنوان + سطر التصدير + عنوان الجدول + البيانات
-  const exportedAt = formatDateTime(new Date().toISOString());
-
+function formSheetBlob(formName: string, rows: FormSheetRow[]): Blob {
+  const label = String(formName || '').trim() || 'بدون اسم فورم';
+  const sheetName = label.replace(/[\\[\]:*?/\\]/g, ' ').trim().slice(0, 31) || 'فورم';
+  const sheetRows = rows.length
+    ? rows.map((row) => [label, row.phone || '—', row.feedback || '—'])
+    : [];
   return buildXlsx({
-    sheetName: 'أرقام الكامبين',
+    sheetName,
     rows: [
-      [`أرقام الكامبين وفيدباكها — ${data.length} رقم`],
-      [`تاريخ التصدير: ${exportedAt}${note ? ` • ${note}` : ''}`],
-      CAMPAIGN_SHEET_COLUMNS,
-      ...data,
-      [summary],
+      [`شيت أرقام الفورم — ${label} (${rows.length} رقم)`],
+      [`تاريخ التصدير: ${formatDateTime(new Date().toISOString())}`],
+      FORM_SHEET_HEADER,
+      ...sheetRows,
     ],
     headerRows: [3],
     titleRows: [1],
-    columnWidths: [20, 15, 16, 20, 20, 14, 18, 46, 22, 12, 18, 22, 16],
-    merges: ['A1:M1', 'A2:M2', `A${summaryRow}:M${summaryRow}`],
+    columnWidths: [26, 18, 60],
+    merges: ['A1:C1', 'A2:C2'],
   });
+}
+
+// تجميع أرقام الكامبين حسب اسم الفورم — مصدر واحد لتبويب «شيت الفورمات»
+function campaignFormsOf(clients: Client[] = [], leads: AssignedLead[] = []) {
+  const digitsOf = (value: any) => String(value || '').replace(/\D/g, '');
+  const grouped = new Map<string, FormSheetRow[]>();
+  const push = (name: string, row: FormSheetRow) => {
+    const key = String(name || '').trim() || 'بدون اسم فورم';
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(row);
+  };
+
+  const campaignClients = clients.filter((c) => isCampaignRecord(c) || !!formNameOf(c));
+  const knownPhones = new Set(campaignClients.map((c) => digitsOf(c.phone)).filter(Boolean));
+  for (const c of campaignClients) {
+    push(formNameOf(c), { phone: c.phone, feedback: lastCommentOf(c)?.text || c.feedback || '—' });
+  }
+  // أرقام لسه في «توزيع الأرقام» مالهاش فيدباك بعد، لكن بتظهر عشان الشيت يكون كامل
+  for (const lead of leads) {
+    if (lead.status === 'closed' || knownPhones.has(digitsOf(lead.phone))) continue;
+    push(formNameOf(lead), { phone: lead.phone, feedback: '—' });
+  }
+
+  return [...grouped.entries()]
+    .map(([name, rows]) => ({ name, rows }))
+    .sort((a, b) => b.rows.length - a.rows.length);
+}
+
+// ===== تبويب «شيت الفورمات» =====
+// كل فورم لوحده: تختار الفورم من الأزرار، واسم الفورم المتفعّل بيظهر في العنوان
+// وجمبه زر «تصدير». الملف بينزل ٣ أعمدة بس: اسم الفورم، الأرقام، الفيدباك العام.
+function AdminFormsSheetView({ clients = [], leads = [], userId = '' }: {
+  clients?: Client[];
+  leads?: AssignedLead[];
+  userId?: string;
+}) {
+  const forms = useMemo(() => campaignFormsOf(clients, leads), [clients, leads]);
+  // الفورم المتفعّل بيتحفظ للحساب، فلو عملت ريفريش ترجع لنفس الفورم مش لأول واحد
+  const formKey = userId ? `crm_active_form_${userId}` : '';
+  const [picked, setPicked] = useState(() => {
+    try {
+      return formKey ? localStorage.getItem(formKey) || '' : '';
+    } catch {
+      return '';
+    }
+  });
+  const pickForm = (name: string) => {
+    setPicked(name);
+    try {
+      if (formKey) localStorage.setItem(formKey, name);
+    } catch {
+      /* التخزين قد يكون معطّلاً — الاختيار شغّال في الصفحة */
+    }
+  };
+  const activeName = forms.some((form) => form.name === picked) ? picked : forms[0]?.name || '';
+  const active = forms.find((form) => form.name === activeName);
+  const rows = active?.rows || [];
+
+  const exportSheet = () => {
+    if (!active) return;
+    const safeName = active.name.replace(/[\\/:*?"<>|]/g, '-');
+    downloadBlob(formSheetBlob(active.name, active.rows), `شيت-${safeName}-${todayKey()}.xlsx`);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="page-intro">
+        <div>
+          <h2>شيت الفورمات</h2>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            كل فورم لوحده: اختار الفورم المتفعّل، وبجوار اسمه زر تصدير ينزّل شيت Excel
+            فيه اسم الفورم وأرقام الناس والفيدباك العام.
+          </p>
+        </div>
+      </div>
+
+      {forms.length === 0 ? (
+        <div className="text-center py-16">
+          <FileText className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
+          <p className="text-[var(--text-muted)]">لا توجد أرقام كامبين بعد — اسحب أرقاماً من تبويب «فريق العمل».</p>
+        </div>
+      ) : (
+        <>
+          {/* اختيار الفورم — بزر لكل فورم بعدد أرقامه */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] font-bold text-[var(--text-dim)]">الفورمات:</span>
+            {forms.map((form) => (
+              <button
+                key={form.name}
+                type="button"
+                onClick={() => pickForm(form.name)}
+                className={`text-xs font-bold px-3 py-2 rounded-[var(--r-md)] border transition-colors ${
+                  activeName === form.name
+                    ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
+                    : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
+                }`}
+              >
+                {form.name} ({form.rows.length})
+              </button>
+            ))}
+          </div>
+
+          <div className="panel p-4 sm:p-5 space-y-4">
+            {/* اسم الفورم المتفعّل بجواره زر التصدير */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0 flex items-start gap-2">
+                <Megaphone className="w-5 h-5 text-[var(--brand)] mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <h3 className="font-extrabold text-lg text-[var(--text-strong)] truncate">{activeName}</h3>
+                  <p className="text-[11.5px] text-[var(--text-muted)]">
+                    <b className="text-[var(--text)]" dir="ltr">{rows.length}</b> رقم في هذا الفورم
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={exportSheet}
+                disabled={rows.length === 0}
+                className="gradient-primary text-[var(--text-strong)] px-4 py-2.5 rounded-[var(--r-md)] text-sm font-bold inline-flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Download className="w-4 h-4" /> تصدير
+              </button>
+            </div>
+
+            {/* معاينة: نفس اللي في الملف بالظبط — رقم وكومنت */}
+            <div className="rounded-[var(--r-md)] border border-[var(--border)] overflow-hidden">
+              <div className="grid grid-cols-[1fr_2fr] gap-3 px-3.5 py-2.5 bg-[var(--tint-1)] text-[11px] font-bold text-[var(--text-muted)]">
+                <span>الأرقام</span>
+                <span>الفيدباك العام</span>
+              </div>
+              <div className="divide-y divide-[var(--border)] max-h-[420px] overflow-auto">
+                {rows.map((row, index) => (
+                  <div key={`${row.phone}-${index}`} className="grid grid-cols-[1fr_2fr] gap-3 px-3.5 py-2.5 text-[12px] items-start">
+                    <a href={`tel:${row.phone}`} className="text-[var(--brand)] font-bold" dir="ltr">{row.phone || '—'}</a>
+                    <span className="text-[var(--text)] leading-relaxed">{row.feedback || '—'}</span>
+                  </div>
+                ))}
+                {rows.length === 0 && (
+                  <p className="px-3.5 py-6 text-center text-xs text-[var(--text-dim)]">لا أرقام في هذا الفورم</p>
+                )}
+              </div>
+            </div>
+            <p className="text-[11px] text-[var(--text-dim)]">
+              الملف بينزل بثلاثة أعمدة: اسم الفورم، الرقم، والفيدباك العام المسجّل على الرقم.
+            </p>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 // ===== تبويب «العملاء» للإدارة =====
@@ -7629,19 +7745,6 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
   const leadStatusLabel = (status: string) =>
     status === 'viewed' ? 'تم العرض' : status === 'contacted' ? 'تم التواصل' : status === 'closed' ? 'مغلق' : 'جديد';
 
-  // تصدير نفس الأرقام الظاهرة (بعد البحث والفلترة) مع فيدباك كل رقم
-  const exportCampaignSheet = () => {
-    const note = [
-      campaignOnly ? 'أرقام الكامبين فقط' : 'كل العملاء',
-      stage === 'all' ? 'كل المراحل' : `المرحلة: ${STAGE_META[stage]?.label || stage}`,
-      query.trim() ? `بحث: ${query.trim()}` : '',
-    ].filter(Boolean).join(' • ');
-    downloadBlob(
-      campaignSheetBlob({ clients: visible, leads: visibleLeads, users, note: `المعروض حالياً — ${note}` }),
-      `أرقام-الكامبين-${todayKey()}.xlsx`
-    );
-  };
-
   const chips: { id: 'all' | Client['stage']; label: string }[] = [
     { id: 'all', label: 'الكل' },
     ...(['new', 'contacted', 'meeting', 'negotiation', 'closed', 'lost'] as Client['stage'][]).map((id) => ({
@@ -7652,7 +7755,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
 
   // ===== كل فورم لوحده =====
   // الفورم هو اللي الفريق بيتابع عليه فعلاً (فورم أكتوبر، فورم التجمع…)؛ فبنقسّم
-  // الأرقام الظاهرة بقسم لكل فورم بعدده وحالته، ولكل قسم شيت Excel خاص بيه.
+  // الأرقام الظاهرة بقسم لكل فورم بعدده وحالته. الشيت نفسه في تبويب «شيت الفورمات».
   type CampaignGroup = { name: string; clients: Client[]; leads: AssignedLead[] };
   const groupMap = new Map<string, CampaignGroup>();
   const groupOf = (name: string) => {
@@ -7670,42 +7773,23 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
   const activeForm = form !== 'all' && formGroups.some((g) => g.name === form) ? form : 'all';
   const shownGroups = activeForm === 'all' ? formGroups : formGroups.filter((g) => g.name === activeForm);
 
-  const exportFormSheet = (group: CampaignGroup) => {
-    const safeName = group.name.replace(/[\\/:*?"<>|]/g, '-');
-    downloadBlob(
-      campaignSheetBlob({ clients: group.clients, leads: group.leads, users, note: `الفورم: ${group.name}` }),
-      `أرقام-${safeName}-${todayKey()}.xlsx`
-    );
-  };
-
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div>
           <div className="page-intro"><div><h2>عملاء كامبين</h2></div></div>
           <p className="text-xs text-[var(--text-muted)] mt-1">
-            أرقام الكامبين مقسومة فورم فورم: كل فورم في قسم لوحده بعدده وحالته، ومعاه شيت Excel
-            بكل أرقامه وفيدباكها. اضغط على الكارت لعرض التفاصيل الكاملة.
+            أرقام الكامبين مقسومة فورم فورم: كل فورم في قسم لوحده بعدده وحالته.
+            تصدير شيت كل فورم بقى في تبويب «شيت الفورمات». اضغط على الكارت لعرض التفاصيل الكاملة.
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
-          <button
-            type="button"
-            onClick={exportCampaignSheet}
-            disabled={visible.length + visibleLeads.length === 0}
-            className="text-[11.5px] font-bold gradient-primary text-[var(--text-strong)] px-3.5 py-2 rounded-[var(--r-sm)] inline-flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
-            title="شيت فيه كل رقم مع حالة الفيدباك وآخر كومنت"
-          >
-            <Download className="w-4 h-4" /> تصدير Excel (الفيدباك)
-          </button>
-          <button
-            type="button"
-            onClick={() => setCampaignOnly((value) => !value)}
-            className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)]"
-          >
-            {campaignOnly ? 'عرض كل العملاء' : 'كامبين فقط'}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setCampaignOnly((value) => !value)}
+          className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)] self-start sm:self-auto"
+        >
+          {campaignOnly ? 'عرض كل العملاء' : 'كامبين فقط'}
+        </button>
       </div>
 
       {/* العدد الحالي — ثلاث خانات تكفي للنظرة السريعة */}
@@ -7791,7 +7875,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
 
       {shownGroups.map((group) => (
         <section key={group.name} className="space-y-3">
-          {/* رأس الفورم: اسمه وعدده وزرار شيت خاص بأرقامه */}
+          {/* رأس الفورم: اسمه وعدده */}
           <div className="panel p-3.5 flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0 flex items-start gap-2">
               <Megaphone className="w-4 h-4 text-[var(--brand)] mt-0.5 shrink-0" />
@@ -7803,14 +7887,6 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
                 </p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => exportFormSheet(group)}
-              className="text-[11px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)] inline-flex items-center gap-1.5"
-              title={`شيت Excel بأرقام «${group.name}» وفيدباكها`}
-            >
-              <Download className="w-3.5 h-3.5" /> شيت الفورم
-            </button>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -9157,24 +9233,10 @@ function AppearanceSettings({ userId }: { userId?: string }) {
   );
 }
 
-// الإعدادات: مكان واحد لإعدادات النظام فقط (الألوان + النسخة الاحتياطية + شيت أرقام الكامبين).
+// الإعدادات: مكان واحد لإعدادات النظام فقط (الألوان + النسخة الاحتياطية).
 // إدارة الحسابات انتقلت كلها إلى تبويب «فريق العمل» حتى لا يتكرر نفس الشغل في مكانين.
-function AdminSettingsView({ currentUser, clients = [], leads = [], users = [] }: {
-  currentUser?: User;
-  clients?: Client[];
-  leads?: AssignedLead[];
-  users?: User[];
-}) {
-  // كل أرقام الكامبين (مسجّلة ولسه في التوزيع) في شيت واحد مع فيدباكها
-  const campaignClients = clients.filter((c) => isCampaignRecord(c));
-  const campaignTotal = campaignClients.length +
-    leads.filter((l) => l.status !== 'closed' && !campaignClients.some((c) => c.phone === l.phone)).length;
-  const handleExportCampaigns = () => {
-    downloadBlob(
-      campaignSheetBlob({ clients: campaignClients, leads, users, note: 'كل أرقام الكامبين' }),
-      `أرقام-الكامبين-${todayKey()}.xlsx`
-    );
-  };
+// وشيت أرقام الكامبين انتقل إلى تبويب مستقل باسم «شيت الفورمات».
+function AdminSettingsView({ currentUser }: { currentUser?: User }) {
   const handleExportData = () => {
     const data = {
       clients: JSON.parse(localStorage.getItem('crm_clients') || '[]'),
@@ -9221,31 +9283,12 @@ function AdminSettingsView({ currentUser, clients = [], leads = [], users = [] }
         <AppearanceSettings userId={currentUser?.id} />
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="glass-card rounded-[var(--r-md)] p-6">
-          <h3 className="text-lg font-bold text-[var(--text-strong)] mb-2">النسخ الاحتياطي</h3>
-          <p className="text-xs text-[var(--text-muted)] mb-4">نزّل نسخة من كل البيانات (عملاء، عقارات، حسابات، حضور).</p>
-          <button onClick={handleExportData} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">
-            تصدير البيانات
-          </button>
-        </div>
-
-        <div className="glass-card rounded-[var(--r-md)] p-6">
-          <h3 className="text-lg font-bold text-[var(--text-strong)] mb-2">أرقام الكامبين (Excel)</h3>
-          <p className="text-xs text-[var(--text-muted)] mb-4 leading-relaxed">
-            شيت فيه كل رقم اتسحب من الكامبين مع حالته وآخر فيدباك مكتوب عليه والتاريخ والمسؤول — جاهز
-            للمتابعة مع الفريق أو للإدارة بدل ما تلف على الكروت واحدة واحدة.
-          </p>
-          <button onClick={handleExportCampaigns} disabled={campaignTotal === 0}
-            className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-40 disabled:cursor-not-allowed">
-            تنزيل شيت الأرقام
-          </button>
-          <p className="text-[11px] text-[var(--text-dim)] mt-3">
-            {campaignTotal > 0
-              ? `${campaignTotal} رقم في الشيت — تحديث لحظي من بيانات الموقع.`
-              : 'لا توجد أرقام كامبين بعد — اسحب أرقاماً من تبويب «فريق العمل».'}
-          </p>
-        </div>
+      <div className="glass-card rounded-[var(--r-md)] p-6">
+        <h3 className="text-lg font-bold text-[var(--text-strong)] mb-2">النسخ الاحتياطي</h3>
+        <p className="text-xs text-[var(--text-muted)] mb-4">نزّل نسخة من كل البيانات (عملاء، عقارات، حسابات، حضور).</p>
+        <button onClick={handleExportData} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">
+          تصدير البيانات
+        </button>
       </div>
     </div>
   );
