@@ -1398,7 +1398,8 @@ function App() {
         if (!stored) return;
         const restored: User = JSON.parse(stored);
         setCurrentUser(restored);
-        setActiveTab(restored.role === 'sales' ? 'dashboard' : 'admin-users');
+        // نفس الصفحة اللي كان عليها قبل الريفريش
+        setActiveTab(startTabFor(restored));
       } catch {
         localStorage.removeItem('current_user');
       }
@@ -1407,6 +1408,25 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  // نحفظ الصفحة الحالية مع كل تنقل — مثال: من «توزيع الأرقام» إلى «الإعدادات»
+  // فلو عملت ريفريش ترجع لنفس المكان، ولو قفلت الموقع وفتحته تاني كذلك.
+  useEffect(() => {
+    if (!currentUser) return;
+    // لو تغيّرت صلاحية الحساب أثناء فتح الصفحة، نرجع لتبويب مسموح بدل شاشة فاضية
+    const allowed = getTabGroups(currentUser.role)
+      .flatMap((group) => group.items)
+      .some((tab) => tab.id === activeTab);
+    if (!allowed) {
+      setActiveTab(currentUser.role === 'sales' ? 'dashboard' : 'admin-users');
+      return;
+    }
+    try {
+      localStorage.setItem(tabKeyOf(currentUser.id), activeTab);
+    } catch {
+      /* التخزين قد يكون معطّلاً — التنقل يعمل عادي بلا حفظ */
+    }
+  }, [activeTab, currentUser?.id, currentUser?.role]);
 
   // السيرفر رفض أي طلب بيانات (لا جلسة) => نخفي كل شيء ونعرض شاشة الدخول فوراً
   useEffect(() => {
@@ -1704,7 +1724,8 @@ function App() {
     setImpersonator(null);
     setCurrentUser(restored);
     localStorage.setItem('current_user', JSON.stringify(restored));
-    setActiveTab(restored.role === 'sales' ? 'dashboard' : 'admin-users');
+    // نرجع المدير لنفس الصفحة التي كان فيها قبل الدخول لحساب السيلز
+    setActiveTab(startTabFor(restored));
     setLoginAnimation(restored);
   };
 
@@ -2053,8 +2074,8 @@ function App() {
     return <LoginScreen onLogin={(user) => {
       setCurrentUser(user);
       localStorage.setItem('current_user', JSON.stringify(user));
-      // الإدارة تبدأ من تبويب فريق العمل، والسيلز من الرئيسية
-      setActiveTab(user.role === 'sales' ? 'dashboard' : 'admin-users');
+      // نكمل من آخر صفحة فتحها هذا الحساب، وأول مرة: الإدارة من فريق العمل والسيلز من الرئيسية
+      setActiveTab(startTabFor(user));
       setLoginAnimation(user);
     }} />;
   }
@@ -2700,7 +2721,7 @@ function App() {
           {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
           {activeTab === 'chat' && currentUser.role === 'sales' && <SalesChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} readOnly={!!impersonator} />}
           {activeTab === 'admin-chat' && currentUser.role !== 'sales' && <AdminChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} onGroupRead={handleMarkGroupRead} />}
-          {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} />}
+          {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} clients={scopedClients} leads={scopedLeads} users={scopedUsers} />}
         </AnimatePresence>
         </main>
         </div>
@@ -3394,6 +3415,24 @@ function getTabGroups(role: string): NavGroup[] {
   }
 
   return role === 'sales' ? salesGroups : adminGroups;
+}
+
+// ===== آخر صفحة فتحها كل مستخدم =====
+// بلا هذا، كل ريفريش (أو فتح للموقع من جديد) يرجع للرئيسية ويضيّع مكانه.
+// المفتاح لكل حساب على حدة، والقيمة تُفحص مقابل تبويبات دوره: لو كان محفوظاً
+// تبويب لم يعد مسموحاً (تغيّرت الصلاحية مثلاً) نرجع للافتراضي بدل شاشة فاضية.
+const tabKeyOf = (userId: string) => `crm_active_tab_${userId}`;
+
+function startTabFor(user: User): TabType {
+  const fallback: TabType = user.role === 'sales' ? 'dashboard' : 'admin-users';
+  try {
+    const saved = localStorage.getItem(tabKeyOf(user.id));
+    if (!saved) return fallback;
+    const allowed = getTabGroups(user.role).flatMap((group) => group.items).some((tab) => tab.id === saved);
+    return allowed ? (saved as TabType) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 // Animated screen shown right after a successful login (admin & sales)
@@ -7464,6 +7503,88 @@ function SalesShareModal({ leads, users, onClose }: any) {
   );
 }
 
+// ===== شيت إكسيل لأرقام الكامبين مع الفيدباك =====
+// الفيدباك مش خانة واحدة: كل مرة يختار السيلز حالة ويكتب كومنت، الحدث بيتسجّل في خط
+// العميل الزمني. عشان كده الشيت بيجمع لكل رقم: حالته الحالية، وآخر كومنت مكتوب عليه
+// بتاريخه، وعدد الفيدباك، ومين مسؤوله — في ملف واحد يتبعت أو يتابع منه الفريق.
+const CAMPAIGN_SHEET_COLUMNS = [
+  'الاسم', 'الرقم', 'أرقام إضافية', 'الفورم', 'المصدر', 'المرحلة',
+  'حالة الفيدباك', 'آخر فيدباك', 'تاريخ آخر فيدباك', 'عدد الفيدباك',
+  'المسؤول', 'تاريخ الإضافة', 'النوع',
+];
+
+function campaignSheetBlob({ clients = [], leads = [], users = [], note = '' }: {
+  clients?: Client[];
+  leads?: AssignedLead[];
+  users?: User[];
+  note?: string;
+}): Blob {
+  const digitsOf = (value: any) => String(value || '').replace(/\D/g, '');
+  const nameOf = (id?: string) => users.find((u) => u.id === id)?.name || 'غير مخصص';
+  const orDash = (value?: string) => (value && String(value).trim()) || '—';
+  // الأرقام اللي اتحوّلت لعميل مسجّل موجودة في قائمة العملاء، فنستبعدها من قائمة
+  // «توزيع الأرقام» حتى لا يظهر نفس الرقم مرتين في الشيت.
+  const knownPhones = new Set(clients.map((c) => digitsOf(c.phone)).filter(Boolean));
+
+  const clientRows = clients.map((c) => {
+    const statusMeta = FEEDBACK_STATUS_BY_ID[latestFeedbackStatusOf(c)];
+    const last = lastCommentOf(c);
+    return [
+      orDash(c.name),
+      orDash(c.phone),
+      orDash((c.phones || []).filter((p) => p && p !== c.phone).join(' • ')),
+      orDash(formNameOf(c)),
+      orDash(sourceLabelOf(c)),
+      orDash(STAGE_META[c.stage]?.label || c.stage),
+      statusMeta ? statusMeta.label : '—',
+      orDash(last?.text),
+      last?.at ? formatDateTime(last.at) : '—',
+      commentCountOf(c),
+      nameOf(c.assignedTo || c.userId),
+      c.createdAt ? formatDateTime(c.createdAt) : '—',
+      'عميل مسجّل',
+    ];
+  });
+
+  const leadRows = leads
+    .filter((l) => l.status !== 'closed' && !knownPhones.has(digitsOf(l.phone)))
+    .map((l) => [
+      l.name && String(l.name).trim() ? l.name : 'بدون اسم',
+      orDash(l.phone),
+      '—',
+      orDash(formNameOf(l)),
+      orDash(formatLeadDescription(l.description) || 'رقم كامبين'),
+      orDash(LEAD_STATUS_META[l.status]?.label || l.status),
+      '—',
+      '—',
+      '—',
+      0,
+      nameOf(l.salesId),
+      l.createdAt ? formatDateTime(l.createdAt) : '—',
+      'رقم في التوزيع',
+    ]);
+
+  const data = [...clientRows, ...leadRows];
+  const summary = `${data.length} رقم • ${clientRows.length} عميل مسجّل • ${leadRows.length} لسه في «توزيع الأرقام»`;
+  const summaryRow = data.length + 4; // عنوان + سطر التصدير + عنوان الجدول + البيانات
+  const exportedAt = formatDateTime(new Date().toISOString());
+
+  return buildXlsx({
+    sheetName: 'أرقام الكامبين',
+    rows: [
+      [`أرقام الكامبين وفيدباكها — ${data.length} رقم`],
+      [`تاريخ التصدير: ${exportedAt}${note ? ` • ${note}` : ''}`],
+      CAMPAIGN_SHEET_COLUMNS,
+      ...data,
+      [summary],
+    ],
+    headerRows: [3],
+    titleRows: [1],
+    columnWidths: [20, 15, 16, 20, 20, 14, 18, 46, 22, 12, 18, 22, 16],
+    merges: ['A1:M1', 'A2:M2', `A${summaryRow}:M${summaryRow}`],
+  });
+}
+
 // ===== تبويب «العملاء» للإدارة =====
 // كل عملاء الشركة في مكان واحد: العدد الحالي في المقدمة، وكارت لكل عميل يفتح
 // نافذة التفاصيل نفسها المستخدمة في «المراحل» (البيانات + الخط الزمني + الاتصال).
@@ -7508,6 +7629,19 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
   const leadStatusLabel = (status: string) =>
     status === 'viewed' ? 'تم العرض' : status === 'contacted' ? 'تم التواصل' : status === 'closed' ? 'مغلق' : 'جديد';
 
+  // تصدير نفس الأرقام الظاهرة (بعد البحث والفلترة) مع فيدباك كل رقم
+  const exportCampaignSheet = () => {
+    const note = [
+      campaignOnly ? 'أرقام الكامبين فقط' : 'كل العملاء',
+      stage === 'all' ? 'كل المراحل' : `المرحلة: ${STAGE_META[stage]?.label || stage}`,
+      query.trim() ? `بحث: ${query.trim()}` : '',
+    ].filter(Boolean).join(' • ');
+    downloadBlob(
+      campaignSheetBlob({ clients: visible, leads: visibleLeads, users, note: `المعروض حالياً — ${note}` }),
+      `أرقام-الكامبين-${todayKey()}.xlsx`
+    );
+  };
+
   const chips: { id: 'all' | Client['stage']; label: string }[] = [
     { id: 'all', label: 'الكل' },
     ...(['new', 'contacted', 'meeting', 'negotiation', 'closed', 'lost'] as Client['stage'][]).map((id) => ({
@@ -7516,22 +7650,62 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
     })),
   ];
 
+  // ===== كل فورم لوحده =====
+  // الفورم هو اللي الفريق بيتابع عليه فعلاً (فورم أكتوبر، فورم التجمع…)؛ فبنقسّم
+  // الأرقام الظاهرة بقسم لكل فورم بعدده وحالته، ولكل قسم شيت Excel خاص بيه.
+  type CampaignGroup = { name: string; clients: Client[]; leads: AssignedLead[] };
+  const groupMap = new Map<string, CampaignGroup>();
+  const groupOf = (name: string) => {
+    const key = name || 'بدون اسم فورم';
+    if (!groupMap.has(key)) groupMap.set(key, { name: key, clients: [], leads: [] });
+    return groupMap.get(key)!;
+  };
+  visible.forEach((c: Client) => groupOf(formNameOf(c)).clients.push(c));
+  visibleLeads.forEach((l: AssignedLead) => groupOf(formNameOf(l)).leads.push(l));
+  const formGroups = [...groupMap.values()].sort(
+    (a, b) => b.clients.length + b.leads.length - (a.clients.length + a.leads.length)
+  );
+  // فلتر الفورم: لو الفورم المختار مابقاش ظاهر (بعد بحث أو تصفية) نرجع لـ«كل الفورمات»
+  const [form, setForm] = useState('all');
+  const activeForm = form !== 'all' && formGroups.some((g) => g.name === form) ? form : 'all';
+  const shownGroups = activeForm === 'all' ? formGroups : formGroups.filter((g) => g.name === activeForm);
+
+  const exportFormSheet = (group: CampaignGroup) => {
+    const safeName = group.name.replace(/[\\/:*?"<>|]/g, '-');
+    downloadBlob(
+      campaignSheetBlob({ clients: group.clients, leads: group.leads, users, note: `الفورم: ${group.name}` }),
+      `أرقام-${safeName}-${todayKey()}.xlsx`
+    );
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div>
           <div className="page-intro"><div><h2>عملاء كامبين</h2></div></div>
           <p className="text-xs text-[var(--text-muted)] mt-1">
-            كل العملاء اللي أرقامهم اتسحبت من الكامبين — اسم الفورم ظاهر مع كل عميل. اضغط على الكارت لعرض التفاصيل الكاملة.
+            أرقام الكامبين مقسومة فورم فورم: كل فورم في قسم لوحده بعدده وحالته، ومعاه شيت Excel
+            بكل أرقامه وفيدباكها. اضغط على الكارت لعرض التفاصيل الكاملة.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setCampaignOnly((value) => !value)}
-          className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)] self-start sm:self-auto"
-        >
-          {campaignOnly ? 'عرض كل العملاء' : 'كامبين فقط'}
-        </button>
+        <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={exportCampaignSheet}
+            disabled={visible.length + visibleLeads.length === 0}
+            className="text-[11.5px] font-bold gradient-primary text-[var(--text-strong)] px-3.5 py-2 rounded-[var(--r-sm)] inline-flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="شيت فيه كل رقم مع حالة الفيدباك وآخر كومنت"
+          >
+            <Download className="w-4 h-4" /> تصدير Excel (الفيدباك)
+          </button>
+          <button
+            type="button"
+            onClick={() => setCampaignOnly((value) => !value)}
+            className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)]"
+          >
+            {campaignOnly ? 'عرض كل العملاء' : 'كامبين فقط'}
+          </button>
+        </div>
       </div>
 
       {/* العدد الحالي — ثلاث خانات تكفي للنظرة السريعة */}
@@ -7583,74 +7757,132 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {visible.map((client: Client) => {
-          const meta = STAGE_META[client.stage] || STAGE_META.new;
-          return (
-            <motion.div
-              key={client.id}
-              whileHover={{ scale: 1.01 }}
-              onClick={() => onSelect(client)}
-              className="panel p-4 cursor-pointer"
+      {/* فلتر الفورمات: كل فورم بزرّ بدده — وتحتيه أقسام مستقلة */}
+      {formGroups.length > 1 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] font-bold text-[var(--text-dim)]">الفورمات:</span>
+          <button
+            type="button"
+            onClick={() => setForm('all')}
+            className={`text-xs font-bold px-3 py-2 rounded-[var(--r-md)] border transition-colors ${
+              activeForm === 'all'
+                ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
+                : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
+            }`}
+          >
+            كل الفورمات ({visible.length + visibleLeads.length})
+          </button>
+          {formGroups.map((group) => (
+            <button
+              key={group.name}
+              type="button"
+              onClick={() => setForm(group.name)}
+              className={`text-xs font-bold px-3 py-2 rounded-[var(--r-md)] border transition-colors ${
+                activeForm === group.name
+                  ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
+                  : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
+              }`}
             >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <h4 className="font-bold text-[var(--text-strong)] truncate">{client.name}</h4>
-                  <p className="text-[var(--brand)] text-sm mt-0.5" dir="ltr">{client.phone}</p>
-                </div>
-                <span className={meta.cls}>{meta.label}</span>
-              </div>
-              <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1 text-[11.5px] text-[var(--text-muted)]">
-                <p>المسؤول: <span className="text-[var(--text)] font-bold">{ownerName(client)}</span></p>
-                <p className="truncate">المصدر: {client.source || '—'}</p>
-                {formNameOf(client) && (
-                  <p className="truncate text-[var(--brand)] font-bold">الفورم: {formNameOf(client)}</p>
-                )}
-                <p>{formatDateTime(client.createdAt)}</p>
-              </div>
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); onCall?.(client); }}
-                className="icon-btn !w-9 !h-9 text-emerald-300 mt-3"
-                title="الاتصال بالعميل"
-              >
-                <PhoneCall className="w-4 h-4" />
-              </button>
-            </motion.div>
-          );
-        })}
+              {group.name} ({group.clients.length + group.leads.length})
+            </button>
+          ))}
+        </div>
+      )}
 
-        {/* أرقام الكامبين اللي لسه في «توزيع الأرقام» — تظهر هنا أيضًا */}
-        {visibleLeads.map((lead: AssignedLead) => (
-          <motion.div key={`lead-${lead.id}`} className="panel p-4 border border-dashed border-[var(--brand-primary-soft)]">
-            <div className="flex items-start justify-between gap-2">
+      {shownGroups.map((group) => (
+        <section key={group.name} className="space-y-3">
+          {/* رأس الفورم: اسمه وعدده وزرار شيت خاص بأرقامه */}
+          <div className="panel p-3.5 flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0 flex items-start gap-2">
+              <Megaphone className="w-4 h-4 text-[var(--brand)] mt-0.5 shrink-0" />
               <div className="min-w-0">
-                <h4 className="font-bold text-[var(--text-strong)] truncate">{lead.name || 'بدون اسم'}</h4>
-                <p className="text-[var(--brand)] text-sm mt-0.5" dir="ltr">{lead.phone}</p>
+                <h3 className="font-extrabold text-[var(--text-strong)] truncate">{group.name}</h3>
+                <p className="text-[11px] text-[var(--text-muted)]">
+                  <b className="text-[var(--text)]" dir="ltr">{group.clients.length + group.leads.length}</b> رقم •{' '}
+                  {group.clients.length} عميل مسجّل • {group.leads.length} لسه في «توزيع الأرقام»
+                </p>
               </div>
-              <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-[var(--brand-primary-softer)] text-[var(--brand)] whitespace-nowrap">
-                رقم كامبين • {leadStatusLabel(lead.status)}
-              </span>
             </div>
-            <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1 text-[11.5px] text-[var(--text-muted)]">
-              <p>المسؤول: <span className="text-[var(--text)] font-bold">{userName(lead.salesId)}</span></p>
-              <p className="truncate">المصدر: {formatLeadDescription(lead.description) || 'رقم كامبين'}</p>
-              {formNameOf(lead) && (
-                <p className="truncate text-[var(--brand)] font-bold">الفورم: {formNameOf(lead)}</p>
-              )}
-              <p>{formatDateTime(lead.createdAt)}</p>
-              <p className="text-[10.5px] text-[var(--text-dim)]">لسه ما اتحوّلش لسجل عميل — موجود في «توزيع الأرقام».</p>
-            </div>
-            <a
-              href={`tel:${lead.phone}`}
-              className="icon-btn !w-9 !h-9 text-emerald-300 mt-3 inline-flex"
-              title="الاتصال بالرقم"
+            <button
+              type="button"
+              onClick={() => exportFormSheet(group)}
+              className="text-[11px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)] inline-flex items-center gap-1.5"
+              title={`شيت Excel بأرقام «${group.name}» وفيدباكها`}
             >
-              <PhoneCall className="w-4 h-4" />
-            </a>
-          </motion.div>
-        ))}
-      </div>
+              <Download className="w-3.5 h-3.5" /> شيت الفورم
+            </button>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {group.clients.map((client: Client) => {
+              const meta = STAGE_META[client.stage] || STAGE_META.new;
+              return (
+                <motion.div
+                  key={client.id}
+                  whileHover={{ scale: 1.01 }}
+                  onClick={() => onSelect(client)}
+                  className="panel p-4 cursor-pointer"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h4 className="font-bold text-[var(--text-strong)] truncate">{client.name}</h4>
+                      <p className="text-[var(--brand)] text-sm mt-0.5" dir="ltr">{client.phone}</p>
+                    </div>
+                    <span className={meta.cls}>{meta.label}</span>
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1 text-[11.5px] text-[var(--text-muted)]">
+                    <p>المسؤول: <span className="text-[var(--text)] font-bold">{ownerName(client)}</span></p>
+                    <p className="truncate">المصدر: {client.source || '—'}</p>
+                    {formNameOf(client) && (
+                      <p className="truncate text-[var(--brand)] font-bold">الفورم: {formNameOf(client)}</p>
+                    )}
+                    <p>{formatDateTime(client.createdAt)}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onCall?.(client); }}
+                    className="icon-btn !w-9 !h-9 text-emerald-300 mt-3"
+                    title="الاتصال بالعميل"
+                  >
+                    <PhoneCall className="w-4 h-4" />
+                  </button>
+                </motion.div>
+              );
+            })}
+
+            {/* أرقام الكامبين اللي لسه في «توزيع الأرقام» — تظهر هنا أيضًا */}
+            {group.leads.map((lead: AssignedLead) => (
+              <motion.div key={`lead-${lead.id}`} className="panel p-4 border border-dashed border-[var(--brand-primary-soft)]">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h4 className="font-bold text-[var(--text-strong)] truncate">{lead.name || 'بدون اسم'}</h4>
+                    <p className="text-[var(--brand)] text-sm mt-0.5" dir="ltr">{lead.phone}</p>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-[var(--brand-primary-softer)] text-[var(--brand)] whitespace-nowrap">
+                    رقم كامبين • {leadStatusLabel(lead.status)}
+                  </span>
+                </div>
+                <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1 text-[11.5px] text-[var(--text-muted)]">
+                  <p>المسؤول: <span className="text-[var(--text)] font-bold">{userName(lead.salesId)}</span></p>
+                  <p className="truncate">المصدر: {formatLeadDescription(lead.description) || 'رقم كامبين'}</p>
+                  {formNameOf(lead) && (
+                    <p className="truncate text-[var(--brand)] font-bold">الفورم: {formNameOf(lead)}</p>
+                  )}
+                  <p>{formatDateTime(lead.createdAt)}</p>
+                  <p className="text-[10.5px] text-[var(--text-dim)]">لسه ما اتحوّلش لسجل عميل — موجود في «توزيع الأرقام».</p>
+                </div>
+                <a
+                  href={`tel:${lead.phone}`}
+                  className="icon-btn !w-9 !h-9 text-emerald-300 mt-3 inline-flex"
+                  title="الاتصال بالرقم"
+                >
+                  <PhoneCall className="w-4 h-4" />
+                </a>
+              </motion.div>
+            ))}
+          </div>
+        </section>
+      ))}
 
       {campaignClients.length === 0 && campaignLeads.length === 0 && (
         <div className="text-center py-16">
@@ -8925,9 +9157,24 @@ function AppearanceSettings({ userId }: { userId?: string }) {
   );
 }
 
-// الإعدادات: مكان واحد لإعدادات النظام فقط (الألوان + النسخة الاحتياطية + حالة البيانات).
+// الإعدادات: مكان واحد لإعدادات النظام فقط (الألوان + النسخة الاحتياطية + شيت أرقام الكامبين).
 // إدارة الحسابات انتقلت كلها إلى تبويب «فريق العمل» حتى لا يتكرر نفس الشغل في مكانين.
-function AdminSettingsView({ currentUser }: { currentUser?: User }) {
+function AdminSettingsView({ currentUser, clients = [], leads = [], users = [] }: {
+  currentUser?: User;
+  clients?: Client[];
+  leads?: AssignedLead[];
+  users?: User[];
+}) {
+  // كل أرقام الكامبين (مسجّلة ولسه في التوزيع) في شيت واحد مع فيدباكها
+  const campaignClients = clients.filter((c) => isCampaignRecord(c));
+  const campaignTotal = campaignClients.length +
+    leads.filter((l) => l.status !== 'closed' && !campaignClients.some((c) => c.phone === l.phone)).length;
+  const handleExportCampaigns = () => {
+    downloadBlob(
+      campaignSheetBlob({ clients: campaignClients, leads, users, note: 'كل أرقام الكامبين' }),
+      `أرقام-الكامبين-${todayKey()}.xlsx`
+    );
+  };
   const handleExportData = () => {
     const data = {
       clients: JSON.parse(localStorage.getItem('crm_clients') || '[]'),
@@ -8984,14 +9231,19 @@ function AdminSettingsView({ currentUser }: { currentUser?: User }) {
         </div>
 
         <div className="glass-card rounded-[var(--r-md)] p-6">
-          <h3 className="text-lg font-bold text-[var(--text-strong)] mb-2">البيانات المشتركة</h3>
-          <p className="text-xs text-[var(--text-muted)] leading-relaxed">
-            كل البيانات تُحفظ في ملف <span className="text-[var(--text)] font-bold" dir="ltr">data/db.json</span> على جهاز
-            السيرفر، وتتزامن تلقائياً بين كل الأجهزة المتصلة بنفس الشبكة كل ثانيتين — بلا إنترنت ولا اشتراك.
+          <h3 className="text-lg font-bold text-[var(--text-strong)] mb-2">أرقام الكامبين (Excel)</h3>
+          <p className="text-xs text-[var(--text-muted)] mb-4 leading-relaxed">
+            شيت فيه كل رقم اتسحب من الكامبين مع حالته وآخر فيدباك مكتوب عليه والتاريخ والمسؤول — جاهز
+            للمتابعة مع الفريق أو للإدارة بدل ما تلف على الكروت واحدة واحدة.
           </p>
+          <button onClick={handleExportCampaigns} disabled={campaignTotal === 0}
+            className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-40 disabled:cursor-not-allowed">
+            تنزيل شيت الأرقام
+          </button>
           <p className="text-[11px] text-[var(--text-dim)] mt-3">
-            * تأكد أن جهاز السيرفر يعمل وأن شارة «مشترك» في الأعلى خضراء. لمتابعة حالة الاتصال من أي جهاز افتح
-            <span className="text-[var(--brand)]" dir="ltr"> /api/store (only if Redis is connected)</span>.
+            {campaignTotal > 0
+              ? `${campaignTotal} رقم في الشيت — تحديث لحظي من بيانات الموقع.`
+              : 'لا توجد أرقام كامبين بعد — اسحب أرقاماً من تبويب «فريق العمل».'}
           </p>
         </div>
       </div>
