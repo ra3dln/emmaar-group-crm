@@ -2705,7 +2705,7 @@ function App() {
             onCall={(c: Client) => setCallClient(c)}
           />}
           {/* شيت الفورمات: كل فورم لوحده مع تصدير أرقامه وفيدباكه العام */}
-          {activeTab === 'admin-forms' && currentUser.role !== 'sales' && <AdminFormsSheetView clients={scopedClients} leads={scopedLeads} userId={currentUser.id} />}
+          {activeTab === 'admin-forms' && currentUser.role !== 'sales' && <AdminFormsSheetView clients={scopedClients} leads={scopedLeads} />}
           {/* الأرقام الجديدة التي وصلت للمندوب من الكامبينات — الكارت يفتح التفاصيل */}
           {activeTab === 'new-leads' && currentUser.role === 'sales' && <NewLeadsViewForSales
             assignedLeads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id && l.status !== 'closed')}
@@ -7523,179 +7523,100 @@ function SalesShareModal({ leads, users, onClose }: any) {
   );
 }
 
-// ===== شيت فورم واحد: اسم الفورم + أرقام الناس + الفيدباك العام =====
-// مقصود إن الملف يبقى بسيط جداً: ٣ أعمدة بس (اسم الفورم، الرقم، الفيدباك العام)
-// عشان يتبعت لأي حد ويتقرا على الموبايل من غير شرح ولا أعمدة زايدة.
-const FORM_SHEET_HEADER = ['اسم الفورم', 'الأرقام', 'الفيدباك العام'];
+// ===== شيت فورم واحد: اسم الفورم + اسم العميل + الرقم + الفيدباك العام =====
+const FORM_SHEET_HEADER = ['اسم الفورم', 'اسم العميل', 'الأرقام', 'الفيدباك العام'];
 
-type FormSheetRow = { phone: string; feedback: string };
+type FormSheetRow = { name: string; phone: string; feedback: string };
 
 function formSheetBlob(formName: string, rows: FormSheetRow[]): Blob {
   const label = String(formName || '').trim() || 'بدون اسم فورم';
   const sheetName = label.replace(/[\\[\]:*?/\\]/g, ' ').trim().slice(0, 31) || 'فورم';
-  const sheetRows = rows.length
-    ? rows.map((row) => [label, row.phone || '—', row.feedback || '—'])
-    : [];
   return buildXlsx({
     sheetName,
     rows: [
-      [`شيت أرقام الفورم — ${label} (${rows.length} رقم)`],
+      [`شيت أرقام الفورم — ${label}`],
       [`تاريخ التصدير: ${formatDateTime(new Date().toISOString())}`],
       FORM_SHEET_HEADER,
-      ...sheetRows,
+      ...rows.map((row) => [label, row.name || '—', row.phone || '—', row.feedback || '—']),
     ],
     headerRows: [3],
     titleRows: [1],
-    columnWidths: [26, 18, 60],
-    merges: ['A1:C1', 'A2:C2'],
+    columnWidths: [26, 24, 18, 60],
+    merges: ['A1:D1', 'A2:D2'],
   });
 }
 
-// تجميع أرقام الكامبين حسب اسم الفورم — مصدر واحد لتبويب «شيت الفورمات»
+// تجميع أرقام الكامبين حسب اسم الفورم، مرتّبة من الأحدث للأقدم
+// (الأحدث = آخر حركة/فيدباك/إضافة على أي رقم جوه الفورم).
 function campaignFormsOf(clients: Client[] = [], leads: AssignedLead[] = []) {
   const digitsOf = (value: any) => String(value || '').replace(/\D/g, '');
-  const grouped = new Map<string, FormSheetRow[]>();
-  const push = (name: string, row: FormSheetRow) => {
+  const timeOf = (value?: string) => {
+    const time = Date.parse(String(value || ''));
+    return Number.isFinite(time) ? time : 0;
+  };
+  const grouped = new Map<string, { rows: FormSheetRow[]; latest: number }>();
+  const push = (name: string, row: FormSheetRow, at: number) => {
     const key = String(name || '').trim() || 'بدون اسم فورم';
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key)!.push(row);
+    if (!grouped.has(key)) grouped.set(key, { rows: [], latest: 0 });
+    const group = grouped.get(key)!;
+    group.rows.push(row);
+    group.latest = Math.max(group.latest, at);
   };
 
   const campaignClients = clients.filter((c) => isCampaignRecord(c) || !!formNameOf(c));
   const knownPhones = new Set(campaignClients.map((c) => digitsOf(c.phone)).filter(Boolean));
   for (const c of campaignClients) {
-    push(formNameOf(c), { phone: c.phone, feedback: lastCommentOf(c)?.text || c.feedback || '—' });
+    const lastActivity = Math.max(0, ...(c.activities || []).map((a) => timeOf(a.at)));
+    push(
+      formNameOf(c),
+      { name: c.name, phone: c.phone, feedback: lastCommentOf(c)?.text || c.feedback || '—' },
+      Math.max(timeOf(c.createdAt), timeOf(c.updatedAt), lastActivity)
+    );
   }
   // أرقام لسه في «توزيع الأرقام» مالهاش فيدباك بعد، لكن بتظهر عشان الشيت يكون كامل
   for (const lead of leads) {
     if (lead.status === 'closed' || knownPhones.has(digitsOf(lead.phone))) continue;
-    push(formNameOf(lead), { phone: lead.phone, feedback: '—' });
+    push(formNameOf(lead), { name: lead.name || '—', phone: lead.phone, feedback: '—' }, timeOf(lead.createdAt));
   }
 
   return [...grouped.entries()]
-    .map(([name, rows]) => ({ name, rows }))
-    .sort((a, b) => b.rows.length - a.rows.length);
+    .map(([name, group]) => ({ name, rows: group.rows, latest: group.latest }))
+    .sort((a, b) => b.latest - a.latest);
 }
 
 // ===== تبويب «شيت الفورمات» =====
-// كل فورم لوحده: تختار الفورم من الأزرار، واسم الفورم المتفعّل بيظهر في العنوان
-// وجمبه زر «تصدير». الملف بينزل ٣ أعمدة بس: اسم الفورم، الأرقام، الفيدباك العام.
-function AdminFormsSheetView({ clients = [], leads = [], userId = '' }: {
-  clients?: Client[];
-  leads?: AssignedLead[];
-  userId?: string;
-}) {
+// سطر لكل فورم: اسم الفورم وجمبه زر «تصدير» بس — بلا تفاصيل ولا أرقام.
+// الفورمات فوق بعضها مرتّبة من الأحدث للأقدم (آخر حركة على أي رقم جوه الفورم).
+function AdminFormsSheetView({ clients = [], leads = [] }: { clients?: Client[]; leads?: AssignedLead[] }) {
   const forms = useMemo(() => campaignFormsOf(clients, leads), [clients, leads]);
-  // الفورم المتفعّل بيتحفظ للحساب، فلو عملت ريفريش ترجع لنفس الفورم مش لأول واحد
-  const formKey = userId ? `crm_active_form_${userId}` : '';
-  const [picked, setPicked] = useState(() => {
-    try {
-      return formKey ? localStorage.getItem(formKey) || '' : '';
-    } catch {
-      return '';
-    }
-  });
-  const pickForm = (name: string) => {
-    setPicked(name);
-    try {
-      if (formKey) localStorage.setItem(formKey, name);
-    } catch {
-      /* التخزين قد يكون معطّلاً — الاختيار شغّال في الصفحة */
-    }
-  };
-  const activeName = forms.some((form) => form.name === picked) ? picked : forms[0]?.name || '';
-  const active = forms.find((form) => form.name === activeName);
-  const rows = active?.rows || [];
 
-  const exportSheet = () => {
-    if (!active) return;
-    const safeName = active.name.replace(/[\\/:*?"<>|]/g, '-');
-    downloadBlob(formSheetBlob(active.name, active.rows), `شيت-${safeName}-${todayKey()}.xlsx`);
+  const exportSheet = (form: { name: string; rows: FormSheetRow[] }) => {
+    const safeName = form.name.replace(/[\\/:*?"<>|]/g, '-');
+    downloadBlob(formSheetBlob(form.name, form.rows), `شيت-${safeName}-${todayKey()}.xlsx`);
   };
 
   return (
     <div className="space-y-4">
-      <div className="page-intro">
-        <div>
-          <h2>شيت الفورمات</h2>
-          <p className="text-xs text-[var(--text-muted)] mt-1">
-            كل فورم لوحده: اختار الفورم المتفعّل، وبجوار اسمه زر تصدير ينزّل شيت Excel
-            فيه اسم الفورم وأرقام الناس والفيدباك العام.
-          </p>
-        </div>
-      </div>
+      <div className="page-intro"><div><h2>شيت الفورمات</h2></div></div>
 
       {forms.length === 0 ? (
         <div className="text-center py-16">
           <FileText className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
-          <p className="text-[var(--text-muted)]">لا توجد أرقام كامبين بعد — اسحب أرقاماً من تبويب «فريق العمل».</p>
+          <p className="text-[var(--text-muted)]">لا توجد فورمات بعد</p>
         </div>
       ) : (
-        <>
-          {/* اختيار الفورم — بزر لكل فورم بعدد أرقامه */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[11px] font-bold text-[var(--text-dim)]">الفورمات:</span>
-            {forms.map((form) => (
-              <button
-                key={form.name}
-                type="button"
-                onClick={() => pickForm(form.name)}
-                className={`text-xs font-bold px-3 py-2 rounded-[var(--r-md)] border transition-colors ${
-                  activeName === form.name
-                    ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
-                    : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
-                }`}
-              >
-                {form.name} ({form.rows.length})
-              </button>
-            ))}
+        forms.map((form) => (
+          <div key={form.name} className="panel p-4 flex items-center justify-between gap-3">
+            <h3 className="font-extrabold text-[var(--text-strong)] truncate">{form.name}</h3>
+            <button
+              type="button"
+              onClick={() => exportSheet(form)}
+              className="shrink-0 gradient-primary text-[var(--text-strong)] px-4 py-2.5 rounded-[var(--r-md)] text-sm font-bold inline-flex items-center gap-2"
+            >
+              <Download className="w-4 h-4" /> تصدير
+            </button>
           </div>
-
-          <div className="panel p-4 sm:p-5 space-y-4">
-            {/* اسم الفورم المتفعّل بجواره زر التصدير */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="min-w-0 flex items-start gap-2">
-                <Megaphone className="w-5 h-5 text-[var(--brand)] mt-0.5 shrink-0" />
-                <div className="min-w-0">
-                  <h3 className="font-extrabold text-lg text-[var(--text-strong)] truncate">{activeName}</h3>
-                  <p className="text-[11.5px] text-[var(--text-muted)]">
-                    <b className="text-[var(--text)]" dir="ltr">{rows.length}</b> رقم في هذا الفورم
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={exportSheet}
-                disabled={rows.length === 0}
-                className="gradient-primary text-[var(--text-strong)] px-4 py-2.5 rounded-[var(--r-md)] text-sm font-bold inline-flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <Download className="w-4 h-4" /> تصدير
-              </button>
-            </div>
-
-            {/* معاينة: نفس اللي في الملف بالظبط — رقم وكومنت */}
-            <div className="rounded-[var(--r-md)] border border-[var(--border)] overflow-hidden">
-              <div className="grid grid-cols-[1fr_2fr] gap-3 px-3.5 py-2.5 bg-[var(--tint-1)] text-[11px] font-bold text-[var(--text-muted)]">
-                <span>الأرقام</span>
-                <span>الفيدباك العام</span>
-              </div>
-              <div className="divide-y divide-[var(--border)] max-h-[420px] overflow-auto">
-                {rows.map((row, index) => (
-                  <div key={`${row.phone}-${index}`} className="grid grid-cols-[1fr_2fr] gap-3 px-3.5 py-2.5 text-[12px] items-start">
-                    <a href={`tel:${row.phone}`} className="text-[var(--brand)] font-bold" dir="ltr">{row.phone || '—'}</a>
-                    <span className="text-[var(--text)] leading-relaxed">{row.feedback || '—'}</span>
-                  </div>
-                ))}
-                {rows.length === 0 && (
-                  <p className="px-3.5 py-6 text-center text-xs text-[var(--text-dim)]">لا أرقام في هذا الفورم</p>
-                )}
-              </div>
-            </div>
-            <p className="text-[11px] text-[var(--text-dim)]">
-              الملف بينزل بثلاثة أعمدة: اسم الفورم، الرقم، والفيدباك العام المسجّل على الرقم.
-            </p>
-          </div>
-        </>
+        ))
       )}
     </div>
   );
