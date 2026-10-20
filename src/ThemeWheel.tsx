@@ -5,10 +5,12 @@
 // الشريط العلوي وفي تبويب الإعدادات.
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, Palette, X } from 'lucide-react';
+import { Check, Palette, RotateCcw, X } from 'lucide-react';
 import {
   AUTO_BACKGROUND,
   BACKGROUND_PRESETS,
+  DEFAULT_THEME,
+  ORIGINAL_BRAND,
   PRESET_COLORS,
   ThemeChoice,
   applyThemeChoice,
@@ -173,17 +175,34 @@ export function ThemeEditor({
   // البكرة الكبيرة تلوّن الموقع كله: لون الهوية + خلفية بنفس الدرجة
   const applyWholeSite = (hex: string) => onPick({ brand: hex, background: hex });
 
+  // «الأصلي» = لا هوية مخصّصة ولا خلفية ولا أيقونات — ألوان المنصة كما صُمّمت
+  const isOriginal =
+    !normalizeHex(choice.brand) && !normalizeHex(choice.background) && !normalizeHex(choice.icons);
+
   return (
     <div className="theme-editor">
       <div className="theme-hero">
         <ColorWheel
           label="لون الموقع كله"
           value={choice.brand}
-          onChange={applyWholeSite}
+          onChange={(hex) => (hex === ORIGINAL_BRAND ? onPick({ ...DEFAULT_THEME }) : applyWholeSite(hex))}
+          autoLabel="الأصلي"
+          autoValue={ORIGINAL_BRAND}
+          placeholder="الأصلي"
           size="lg"
         />
       </div>
       <p className="theme-pop-note">اسحب داخل الدائرة واختار الدرجة — الأزرار والخلفية والأيقونات تتلوّن معاً.</p>
+
+      <button
+        type="button"
+        onClick={() => onPick({ ...DEFAULT_THEME })}
+        className={`theme-reset ${isOriginal ? 'on' : ''}`}
+        title="رجّع ألوان الموقع الأصلية (الأزرار والخلفية والأيقونات)"
+      >
+        <RotateCcw className="w-3.5 h-3.5" />
+        الألوان الأصلية
+      </button>
 
       <p className="theme-pop-label">لوحات جاهزة</p>
       <div className="theme-swatches">

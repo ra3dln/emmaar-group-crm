@@ -14,8 +14,14 @@ export type ThemeChoice = {
 // خلفية «تلقائية» = نفس ألوان الوضع الحالي (ليلي/نهاري) بلا تلوين
 export const AUTO_BACKGROUND = 'auto';
 
+// لون هوية «أصلي» = ألوان المنصة كما هي في CSS بلا أي تخصيص.
+// نميّزه بقيمة خاصة عن أي HEX، لأن أقرب لون تركوازي ليس هو اللون الأصلي بالضبط
+// (الأصلي يختلف بين الليلي والنهاري).
+export const ORIGINAL_BRAND = 'original';
+
+// الألوان الأصلية — تُستخدم في زر «الألوان الأصلية» وفي أول تشغيل
 export const DEFAULT_THEME: ThemeChoice = {
-  brand: '#0d8184',
+  brand: ORIGINAL_BRAND,
   icons: 'default',
   background: AUTO_BACKGROUND,
 };
@@ -151,7 +157,7 @@ export function readThemeChoice(userId?: string): ThemeChoice {
     const raw = JSON.parse(localStorage.getItem(keyOf(userId)) || '{}');
     const icons = raw?.icons === 'default' ? 'default' : toColorChoice(raw?.icons, 'default');
     return {
-      brand: toColorChoice(raw?.brand, DEFAULT_THEME.brand),
+      brand: raw?.brand === ORIGINAL_BRAND ? ORIGINAL_BRAND : toColorChoice(raw?.brand, ORIGINAL_BRAND),
       icons,
       background: toColorChoice(raw?.background, AUTO_BACKGROUND),
     };
@@ -170,50 +176,63 @@ export function saveThemeChoice(choice: ThemeChoice, userId?: string): void {
 
 let lastUserId = '';
 
-// المتغيّرات التي نكتبها داخل <html> — نمسحها كلها عند العودة للخلفية الأصلية
+// المتغيّرات التي نكتبها داخل <html> — نمسحها كلها عند العودة للألوان الأصلية
+// (CSS يعرّف القيم الافتراضية لكل منها، فالرجوع = مسح التخصيص فقط)
 const BG_VARS = ['--bg', '--bg-deep', '--surface', '--surface-2', '--surface-solid', '--surface-raised'];
+const BRAND_VARS = [
+  '--brand', '--brand-strong', '--brand-fill', '--brand-deep', '--brand-accent', '--brand-gradient',
+  '--primary', '--primary-dark', '--primary-light',
+  '--brand-primary', '--brand-primary-dark', '--brand-primary-light',
+  '--brand-primary-soft', '--brand-primary-softer', '--brand-primary-glow',
+  '--bg-grad-1', '--on-brand', '--glow',
+];
 
 export function applyThemeChoice(choice: ThemeChoice): void {
   if (typeof document === 'undefined') return;
   const mode: ThemeMode = document.documentElement.dataset.mode === 'light' ? 'light' : 'dark';
   const root = document.documentElement.style;
 
-  const brand = normalizeHex(choice.brand) || DEFAULT_THEME.brand;
-  const brandLum = luminance(brand);
+  const brand = normalizeHex(choice.brand);
+  if (!brand) {
+    // «الألوان الأصلية»: نمسح تخصيص الهوية لترجع ألوان CSS كما صُمّمت
+    for (const name of BRAND_VARS) root.removeProperty(name);
+  } else {
+    const brandLum = luminance(brand);
 
-  // لون الهوية كنص/حدود: نرفع تباينه لو بعيد جداً عن خلفية الوضع
-  const brandText =
-    mode === 'dark'
-      ? brandLum < 0.22
-        ? lighten(brand, 38)
-        : brand
-      : brandLum > 0.5
-        ? darken(brand, 34)
-        : brand;
+    // لون الهوية كنص/حدود: نرفع تباينه لو بعيد جداً عن خلفية الوضع
+    const brandText =
+      mode === 'dark'
+        ? brandLum < 0.22
+          ? lighten(brand, 38)
+          : brand
+        : brandLum > 0.5
+          ? darken(brand, 34)
+          : brand;
 
-  // تعبئة الأزرار: في النهاري نغمّقها قليلاً حتى يبان النص الأبيض
-  const fill = mode === 'light' && brandLum > 0.62 ? darken(brand, 18) : brand;
-  const deep = darken(fill, 16);
-  const light = lighten(brand, 18);
+    // تعبئة الأزرار: في النهاري نغمّقها قليلاً حتى يبان النص الأبيض
+    const fill = mode === 'light' && brandLum > 0.62 ? darken(brand, 18) : brand;
+    const deep = darken(fill, 16);
+    const light = lighten(brand, 18);
 
-  root.setProperty('--brand', brandText);
-  root.setProperty('--brand-strong', brandText);
-  root.setProperty('--brand-fill', fill);
-  root.setProperty('--brand-deep', deep);
-  root.setProperty('--brand-accent', light);
-  root.setProperty('--brand-gradient', fill);
-  root.setProperty('--primary', brandText);
-  root.setProperty('--primary-dark', deep);
-  root.setProperty('--primary-light', light);
-  root.setProperty('--brand-primary', brandText);
-  root.setProperty('--brand-primary-dark', deep);
-  root.setProperty('--brand-primary-light', light);
-  root.setProperty('--brand-primary-soft', rgba(brandText, 0.22));
-  root.setProperty('--brand-primary-softer', rgba(brandText, 0.14));
-  root.setProperty('--brand-primary-glow', rgba(brandText, 0.45));
-  root.setProperty('--bg-grad-1', rgba(brandText, mode === 'dark' ? 0.14 : 0.09));
-  root.setProperty('--on-brand', readableOn(fill));
-  root.setProperty('--glow', `0 0 0 1px ${rgba(brandText, 0.35)}`);
+    root.setProperty('--brand', brandText);
+    root.setProperty('--brand-strong', brandText);
+    root.setProperty('--brand-fill', fill);
+    root.setProperty('--brand-deep', deep);
+    root.setProperty('--brand-accent', light);
+    root.setProperty('--brand-gradient', fill);
+    root.setProperty('--primary', brandText);
+    root.setProperty('--primary-dark', deep);
+    root.setProperty('--primary-light', light);
+    root.setProperty('--brand-primary', brandText);
+    root.setProperty('--brand-primary-dark', deep);
+    root.setProperty('--brand-primary-light', light);
+    root.setProperty('--brand-primary-soft', rgba(brandText, 0.22));
+    root.setProperty('--brand-primary-softer', rgba(brandText, 0.14));
+    root.setProperty('--brand-primary-glow', rgba(brandText, 0.45));
+    root.setProperty('--bg-grad-1', rgba(brandText, mode === 'dark' ? 0.14 : 0.09));
+    root.setProperty('--on-brand', readableOn(fill));
+    root.setProperty('--glow', `0 0 0 1px ${rgba(brandText, 0.35)}`);
+  }
 
   // ---- لون الخلفية: نأخذ درجة اللون المختار ونبني منها خلفية الوضع الحالي ----
   // التلوين بنفس «الإضاءة» يحفظ تباين النصوص مهما اخترت لوناً فاتحاً أو لغامقاً،
