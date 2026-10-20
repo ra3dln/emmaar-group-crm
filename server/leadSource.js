@@ -31,6 +31,7 @@ const CHANNEL_DEFAULTS = {
   token: '', // توكن المستخدم (للاستكشاف)
   pages: [], // [{ id, name, token }] — توكن كل صفحة (يُكتشف تلقائياً)
   forms: [], // [{ id, pageId, name }] — النماذج المختارة
+  formCursors: {}, // [{ formId: آخر وقت سحب }] — مؤشر مستقل لكل فورم
   intervalMinutes: 5,
   cursorTime: 0, // آخر وقت سُحبت عنده أرقام من ميتا
   assignCursor: 0, // موضع المناوبة في توزيع الأرقام
@@ -297,49 +298,73 @@ async function fetchFromMeta(config, channel = 'facebook') {
   // نموذج بمعرّفه فقط: يكفي توكن المستخدم (أو توكن الصفحة العامة) للسحب من /{form-id}/leads
   const fallbackToken = String(config.token || '').trim();
   const leads = [];
-  let maxTime = Number(config.cursorTime) || 0;
+  const errors = [];
+  let succeeded = 0;
+  const baseCursor = Number(config.cursorTime) || 0;
+  const cursors = { ...(config.formCursors || {}) };
 
   for (const form of config.forms) {
     const token = pageToken(form.pageId) || String(form.token || '').trim() || fallbackToken;
-    if (!token) throw new Error(`لا يوجد توكن لسحب النموذج «${form.name || form.id}» — الصق توكن فيسبوك أولاً`);
+    if (!token) {
+      errors.push(`لا يوجد توكن لسحب النموذج «${form.name || form.id}»`);
+      continue;
+    }
+
+    // مؤشر مستقل لكل فورم: سحب فورم جديد لا يتأثر بمؤشر فورم آخر.
+    // الإعداد القديم (فورم واحد) يستخدم cursorTime العام مرة واحدة.
+    const hasCursor = Object.prototype.hasOwnProperty.call(cursors, form.id);
+    const formCursor = hasCursor
+      ? Number(cursors[form.id]) || 0
+      : (config.forms.length === 1 ? baseCursor : 0);
 
     const params = { fields: 'created_time,field_data', limit: '200', access_token: token };
-    // نطلب من فيسبوك الأرقام الأحدث من آخر سحب فقط (إن وُجد مؤشر)
-    if (maxTime) {
-      params.filtering = JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: maxTime }]);
+    // نطلب من فيسبوك الأرقام الأحدث من آخر سحب لهذا الفورم فقط
+    if (formCursor) {
+      params.filtering = JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: formCursor }]);
     }
-    let json;
+
     try {
-      json = await graphGet(`/${form.id}/leads`, params);
+      let json;
+      try {
+        json = await graphGet(`/${form.id}/leads`, params);
+      } catch (error) {
+        // لو الصلاحية منعت الفلترة، نجلب الأرقام بدون فلتر (التكرار مرفوض لاحقاً تلقائياً)
+        if (!isPermissionError(error)) throw error;
+        json = await graphGet(`/${form.id}/leads`, { fields: 'created_time,field_data', limit: '200', access_token: token });
+      }
+
+      let formMax = formCursor;
+      for (const lead of json.data || []) {
+        const created = toUnixSeconds(lead.created_time);
+        if (created > formMax) formMax = created;
+
+        const rawName = readField(lead.field_data, ['full_name', 'name', 'الاسم', 'اسم']);
+        const rawPhone = readField(lead.field_data, ['phone_number', 'phone', 'رقم الهاتف', 'الهاتف', 'الموبايل', 'الجوال']);
+        const test = isTestLeadValue(rawPhone) || isTestLeadValue(rawName);
+
+        // ليد تجريبي: نولّد رقماً صالحاً من معرّف الليد ليجرّب المستخدم الدورة كاملة
+        // (لا يُرفض إلا لو أُوقف صراحةً — قبوله هو الأصل حتى لو الإعداد لم يُكتب بعد)
+        if (test && config.acceptTestLeads === false) continue;
+
+        leads.push({
+          name: isTestLeadValue(rawName) || !String(rawName || '').trim() ? (test ? 'عميل تجريبي' : 'عميل بدون اسم') : rawName,
+          phone: test ? demoPhoneFor(lead.id) : normalizeEgyptPhone(rawPhone),
+          source: `${label} - ${form.name || form.id}${test ? ' • تجريبي' : ''}`,
+          date: created ? readableDateTime(new Date(created * 1000)) : '',
+          test,
+        });
+      }
+      cursors[form.id] = formMax;
+      succeeded += 1;
     } catch (error) {
-      // لو الصلاحية منعت الفلترة، نجلب الأرقام بدون فلتر (التكرار مرفوض لاحقاً تلقائياً)
-      if (!isPermissionError(error)) throw error;
-      json = await graphGet(`/${form.id}/leads`, { fields: 'created_time,field_data', limit: '200', access_token: token });
-    }
-
-    for (const lead of json.data || []) {
-      const created = toUnixSeconds(lead.created_time);
-      if (created > maxTime) maxTime = created;
-
-      const rawName = readField(lead.field_data, ['full_name', 'name', 'الاسم', 'اسم']);
-      const rawPhone = readField(lead.field_data, ['phone_number', 'phone', 'رقم الهاتف', 'الهاتف', 'الموبايل', 'الجوال']);
-      const test = isTestLeadValue(rawPhone) || isTestLeadValue(rawName);
-
-      // ليد تجريبي: نولّد رقماً صالحاً من معرّف الليد ليجرّب المستخدم الدورة كاملة
-      // (لا يُرفض إلا لو أُوقف صراحةً — قبوله هو الأصل حتى لو الإعداد لم يُكتب بعد)
-      if (test && config.acceptTestLeads === false) continue;
-
-      leads.push({
-        name: isTestLeadValue(rawName) || !String(rawName || '').trim() ? (test ? 'عميل تجريبي' : 'عميل بدون اسم') : rawName,
-        phone: test ? demoPhoneFor(lead.id) : normalizeEgyptPhone(rawPhone),
-        source: `${label} - ${form.name || form.id}${test ? ' • تجريبي' : ''}`,
-        date: created ? readableDateTime(new Date(created * 1000)) : '',
-        test,
-      });
+      // فشل فورم واحد لا يوقف بقية الفورمات — تُسحب الباقية ويُعرض الخطأ لو فشل الكل
+      errors.push(`${form.name || form.id}: ${String(error?.message || error)}`);
     }
   }
 
-  config.cursorTime = maxTime;
+  config.formCursors = cursors;
+  config.cursorTime = Math.max(baseCursor, ...Object.values(cursors).map((value) => Number(value) || 0));
+  if (!succeeded && errors.length) throw new Error(errors.join(' | '));
   return leads;
 }
 
@@ -480,17 +505,12 @@ export const publicConfig = (config = {}) => ({
   instagram: publicChannel(config.instagram || DEFAULTS.instagram),
 });
 
-// --- التنظيف + المناوبة على المندوبين (بلا أي تخزين) ---
-// نفس المنطق يعمل في مكانين: سيرفر الشركة (يحفظ في ملف البيانات) ووظيفة الاستضافة
-// (Vercel بلا قاعدة بيانات — تُعيد الأرقام جاهزة ليحفظها متصفح المدير).
-// وجوده في مكان واحد يمنع اختلاف السلوك بين النسختين.
-export function buildAssignments({ fetched, sales, config = {}, knownPhones = [], at = new Date().toISOString() }) {
-  const limit = Number(config.perSalesLimit) > 0 ? Number(config.perSalesLimit) : Infinity;
-  const team = Array.isArray(sales) ? sales.filter((u) => u && u.id) : [];
-  let assignCursor = Number(config.assignCursor) || 0;
-
+// --- التنظيف والحفظ بلا أي تخزين ---
+// الرقم يدخل دائماً «غير مخصص» (salesId = '')، ولا يُوزَّع على أحد تلقائياً.
+// كان هنا توزيع بالتناوب على السيلز، وأُزيل لأن الرقم كان يصل لمندوب لم يطلبه
+// قبل أن تراه الإدارة — والتوزيع الآن قرار بشري من تبويب «توزيع الأرقام».
+export function buildAssignments({ fetched, knownPhones = [], at = new Date().toISOString() }) {
   const seen = new Set((knownPhones || []).map((p) => normalizeEgyptPhone(p)).filter(Boolean));
-  const counts = new Map();
   const added = [];
   let duplicates = 0;
   let invalid = 0;
@@ -507,16 +527,6 @@ export function buildAssignments({ fetched, sales, config = {}, knownPhones = []
     }
     seen.add(row.phone);
 
-    let owner = null;
-    for (let hop = 0; hop < team.length; hop += 1) {
-      const candidate = team[(assignCursor + hop) % team.length];
-      if ((counts.get(candidate.id) || 0) < limit) {
-        owner = candidate;
-        assignCursor = (assignCursor + hop + 1) % team.length;
-        break;
-      }
-    }
-    // الكل وصل حده الأقصى — نحفظ الرقم غير موزّع بدل فقدانه، والإدارة توزّعه لاحقاً
     const baseLead = {
       id: crypto.randomUUID(),
       adminId: 'auto-import',
@@ -531,22 +541,19 @@ export function buildAssignments({ fetched, sales, config = {}, knownPhones = []
         .join(' • '),
       status: 'new',
       createdAt: at,
+      salesId: '',
     };
-    if (!owner) {
-      added.push({ ...baseLead, salesId: '' });
-      continue;
-    }
-    counts.set(owner.id, (counts.get(owner.id) || 0) + 1);
 
-    added.push({ ...baseLead, salesId: owner.id });
+    added.push(baseLead);
   }
 
   return {
     added,
     duplicates,
     invalid,
-    assignCursor,
-    perUser: team.filter((u) => counts.has(u.id)).map((u) => ({ name: u.name, count: counts.get(u.id) })),
+    assignCursor: 0,
+    unassigned: added.length,
+    perUser: [],
   };
 }
 
@@ -642,11 +649,6 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       throw new Error(channels[active[0]].error || 'تعذّر السحب من كل القنوات المفعّلة');
     }
 
-    const users = Array.isArray(data.crm_users) ? data.crm_users : [];
-    const sales = users.filter((u) => u.isActive && (u.role === 'sales' || u.role === 'supervisor'));
-    // لو مفيش سيلز: نحفظ الأرقام غير موزّعة بدل فقدانها، والإدارة توزّعها بعد إضافة الفريق.
-    const noSalesWarning = sales.length ? '' : 'لا يوجد سيلز مفعّل — الأرقام محفوظة غير موزّعة';
-
     const assigned = Array.isArray(data.crm_assigned_leads) ? data.crm_assigned_leads : [];
     const clients = Array.isArray(data.crm_clients) ? data.crm_clients : [];
     const knownPhones = [
@@ -654,7 +656,7 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       ...clients.flatMap((c) => [c.phone, ...(c.phones || [])]),
     ];
 
-    const built = buildAssignments({ fetched, sales, config, knownPhones, at });
+    const built = buildAssignments({ fetched, knownPhones, at });
 
     if (built.added.length) {
       data.crm_assigned_leads = [...built.added, ...assigned];
@@ -671,8 +673,8 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       duplicates: built.duplicates,
       invalid: built.invalid,
       perUser: built.perUser,
+      unassigned: built.unassigned,
       channels,
-      ...(noSalesWarning ? { warning: noSalesWarning, unassigned: built.added.filter((lead) => !lead.salesId).length } : {}),
     };
     config.assignCursor = built.assignCursor;
     // مؤشر "آخر سحب" يُحفظ في القناة نفسها حتى تعرض كل تبويب نتيجته بصدق
@@ -738,7 +740,10 @@ export function applyChannelPatch(config, body = {}) {
   }
   if (typeof body.token === 'string' && body.token.trim()) patch.token = body.token.trim();
   if (body.clearToken) patch.token = '';
-  if (body.resetCursor) patch.cursorTime = 0;
+  if (body.resetCursor) {
+    patch.cursorTime = 0;
+    patch.formCursors = {};
+  }
 
   const minutes = Number(body.intervalMinutes);
   if (Number.isFinite(minutes)) patch.intervalMinutes = Math.min(Math.max(Math.round(minutes), 1), 1440);
@@ -753,6 +758,9 @@ export function applyChannelPatch(config, body = {}) {
   // واحدة وإلا صارت بلا أثر (التوزيع يجري مرة واحدة على الدفعة المجمّعة).
   const perSales = Number(body.perSalesLimit);
   if (Number.isFinite(perSales)) next.perSalesLimit = Math.min(Math.max(Math.round(perSales), 0), 1000);
+
+  // لا يوجد توزيع تلقائي إطلاقاً: كل رقم يدخل «غير مخصص» وتوزّعه الإدارة بنفسها.
+  delete next.autoAssign;
 
   return next;
 }

@@ -30,7 +30,17 @@ import {
   roomsFromText,
 } from './arabicNumbers';
 import { buildXlsx, downloadBlob } from './xlsx';
-import { PALETTES, applyThemeForUser, readThemeChoice, reapplyCurrentTheme, saveThemeChoice, type ThemeChoice } from './theme';
+import {
+  AUTO_BACKGROUND,
+  BACKGROUND_PRESETS,
+  PRESET_COLORS,
+  applyThemeForUser,
+  normalizeHex,
+  readThemeChoice,
+  reapplyCurrentTheme,
+  saveThemeChoice,
+  type ThemeChoice,
+} from './theme';
 import {
   ATTENDANCE_END_DEFAULT,
   ATTENDANCE_GRACE_DEFAULT,
@@ -7715,6 +7725,22 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
           <button onClick={() => setShowShare(true)} className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 hover:bg-[var(--brand-primary-soft)] transition-colors">
             <BarChart3 className="w-4 h-4" /> الأرقام لكل سيلز
           </button>
+          {/* إصلاح أي توزيع قديم: سحب كل الأرقام من عهدة السيلز مرة واحدة */}
+          {assignedLeads.some((l: AssignedLead) => l.salesId) && (
+            <button
+              onClick={() => {
+                const ids = assignedLeads.filter((l: AssignedLead) => l.salesId).map((l: AssignedLead) => l.id);
+                if (!ids.length) return;
+                if (!window.confirm(`إرجاع ${ids.length} رقم من عهدة السيلز إلى «غير مخصص»؟`)) return;
+                onAssign?.(ids, '');
+                setFlash(`تم إرجاع ${ids.length} رقم إلى «غير مخصص» ✓`);
+              }}
+              className="bg-amber-500/10 border border-amber-400/40 text-amber-200 px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 hover:bg-amber-500/20 transition-colors"
+              title="يسحب كل الأرقام من عهدة السيلز ويرجعها لقائمة غير المخصصة"
+            >
+              <Undo2 className="w-4 h-4" /> إرجاع كل الأرقام
+            </button>
+          )}
           <button onClick={onImport} className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--brand)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 hover:bg-[var(--brand-primary-soft)] transition-colors">
             <Upload className="w-4 h-4" /> استيراد ملف أرقام
           </button>
@@ -8384,7 +8410,14 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر جلب النماذج');
-      setForms(json.forms);
+      // دمج نماذج الصفحة مع النماذج المختارة من صفحات أخرى — لا نستبدل اختياراتك
+      setForms((prev) => {
+        const merged = [...prev];
+        for (const f of json.forms) {
+          if (!merged.some((m: any) => m.id === f.id)) merged.push({ ...f });
+        }
+        return merged;
+      });
       if (!json.forms.length) setNotice('هذه الصفحة لا تحتوي على نماذج تسجيل (Instant Forms) بعد');
     } catch (error: any) {
       setNotice(error?.message || 'تعذّر جلب النماذج');
@@ -8396,24 +8429,28 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
   // الصفحات المتاحة للإضافة اليدوية (المكتشفة أو المحفوظة)
   const pageOptions = (pages.length ? pages : channelViewOf(config, channel).pages || []).map((p: any) => ({ id: p.id, name: p.name }));
 
+  // يقبل أكثر من معرّف في نفس المرة: كل واحد في سطر، أو مفصولاً بفاصلة/مسافة
   const addManualForm = () => {
-    const id = manual.formId.trim();
+    const ids = [...new Set(
+      manual.formId
+        .split(/[\s,،;]+/)
+        .map((part) => part.trim())
+        .filter(Boolean)
+    )];
     // Form ID فقط كافٍ: لو مافيش صفحة مكتشفة نستخدم توكن القناة مباشرة على /{form-id}/leads
     const pageId = manual.pageId || pageOptions[0]?.id || '';
-    if (!id) return setNotice('اكتب معرّف النموذج أولاً');
-    if (forms.some((f) => f.id === id)) return setNotice('هذا النموذج مضاف بالفعل');
-    setForms([...forms, { id, pageId, name: `نموذج ${id}` }]);
-    setSelected((prev) => ({ ...prev, [id]: true }));
+    if (!ids.length) return setNotice('اكتب معرّف النموذج أولاً');
+    const fresh = ids.filter((id) => !forms.some((f) => f.id === id));
+    if (!fresh.length) return setNotice('كل هذه النماذج مضافة بالفعل');
+    setForms([...forms, ...fresh.map((id) => ({ id, pageId, name: `نموذج ${id}` }))]);
+    setSelected((prev) => ({ ...prev, ...Object.fromEntries(fresh.map((id) => [id, true])) }));
     setManual({ pageId, formId: '' });
+    const count = fresh.length > 1 ? `${fresh.length} نماذج` : 'النموذج';
     const hasSavedToken = !!channelViewOf(config, channel)?.hasToken;
     if (!form.token.trim() && !hasSavedToken) {
-      setNotice('أُضيف النموذج ✓ — لكن الصق توكن فيسبوك أولاً ثم اضغط «حفظ الإعدادات»');
+      setNotice(`أُضيف ${count} ✓ — لكن الصق توكن فيسبوك أولاً ثم اضغط «حفظ الإعدادات»`);
     } else {
-      setNotice(
-        pageId
-          ? 'أُضيف النموذج ✓ — اضغط «حفظ الإعدادات» ليعمل السحب'
-          : 'أُضيف النموذج بمعرّفه ✓ — سيُسحب بالتوكن مباشرة بدون صفحات. اضغط «حفظ الإعدادات»'
-      );
+      setNotice(`أُضيف ${count} ✓ — اضغط «حفظ الإعدادات» ليعمل السحب من كل النماذج المحددة`);
     }
   };
 
@@ -8515,6 +8552,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
   if (!config) return null;
   const view = channelViewOf(config, channel);
   const last = view.lastRun;
+  const selectedCount = forms.filter((f) => selected[f.id]).length;
 
   return (
     <div className="glass-card rounded-[var(--r-md)] p-6">
@@ -8533,7 +8571,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
         </button>
       </div>
       <p className="text-xs text-[var(--text-muted)] leading-relaxed mb-2">
-        يقرأ النظام الأرقام من مصدر هذه القناة من نفسه كل بضع دقائق، ينظّفها ويحذف المكرر ويوزّعها على السيلز — بلا أي ضغطة زر.
+        يقرأ النظام الأرقام من مصدر هذه القناة من نفسه كل بضع دقائق، ينظّفها ويحذف المكرر ويحفظها «غير مخصصة» — والتوزيع على السيلز بيدك من تبويب «توزيع الأرقام».
       </p>
       <p className="text-[11px] text-[var(--text-dim)] leading-relaxed mb-4">{meta.hint}</p>
 
@@ -8638,7 +8676,28 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
 
           {forms.length > 0 && (
             <div>
-              <label className="block text-xs text-[var(--text)] mb-1">النماذج التي تُسحب منها الأرقام (اضغط للاختيار)</label>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                <label className="block text-xs text-[var(--text)]">
+                  النماذج التي تُسحب منها الأرقام — السحب يعمل من كل المحدد في نفس الوقت
+                  <span className="text-[var(--brand)] font-bold"> (مختار {selectedCount})</span>
+                </label>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSelected(Object.fromEntries(forms.map((f: any) => [f.id, true])))}
+                    className="text-[10px] font-bold px-2.5 py-1 rounded-[var(--r-xs)] border border-[var(--border)] bg-[var(--tint-1)] text-[var(--text-muted)] hover:bg-[var(--tint-2)] transition-colors"
+                  >
+                    تحديد الكل
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelected({})}
+                    className="text-[10px] font-bold px-2.5 py-1 rounded-[var(--r-xs)] border border-[var(--border)] bg-[var(--tint-1)] text-[var(--text-muted)] hover:bg-[var(--tint-2)] transition-colors"
+                  >
+                    إلغاء الكل
+                  </button>
+                </div>
+              </div>
               <div className="space-y-1.5">
                 {forms.map((f: any) => {
                   const checked = !!selected[f.id];
@@ -8663,10 +8722,12 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
 
           {/* إضافة نموذج بمعرّفه: يعمل حتى لو منع فيسبوك عرض قائمة النماذج */}
           <div className="border border-[var(--border)] rounded-[var(--r-md)] p-3 space-y-2">
-            <label className="block text-xs text-[var(--text)]">أو أضف النموذج بمعرّفه فقط (Form ID)</label>
+            <label className="block text-xs text-[var(--text)]">أو أضف نموذجاً أو أكثر بمعرّفه فقط (Form ID)</label>
             <p className="text-[11px] text-[var(--text-dim)]">
               لو معاك Form ID ومش عايز تستكشف الصفحات: الصق توكن فيسبوك في الأعلى، واكتب معرّف النموذج هنا.
-              السحب يتم مباشرة من <span dir="ltr">/{'{'}form-id{'}'}/leads</span> — الصفحة مش مطلوبة.
+              تقدر تلصق <span className="text-[var(--text)] font-bold">عدة معرّفات معاً</span> (كل واحد في سطر أو مفصولين بفاصلة)
+              والسحب يشتغل من كلهم في نفس الوقت. السحب يتم مباشرة من{' '}
+              <span dir="ltr">/{'{'}form-id{'}'}/leads</span> — الصفحة مش مطلوبة.
               تقدر تلاقي الرقم في رابط الفورم داخل Meta Business Suite (id أو asset_id).
             </p>
             <div className="flex flex-col sm:flex-row gap-2">
@@ -8674,7 +8735,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
                 dir="ltr"
                 value={manual.formId}
                 onChange={(e) => setManual({ ...manual, formId: e.target.value })}
-                placeholder="Form ID — مثال 123456789012345"
+                placeholder="معرّف أو أكثر — مثال 123456789012345, 987654321098765"
                 className="flex-1 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-2.5 text-[var(--text-strong)] text-sm"
               />
               {pageOptions.length > 1 && (
@@ -8725,6 +8786,13 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
           )}
           {last && !last.ok && <p className="text-red-400">{last.error}</p>}
         </div>
+      </div>
+
+      <div className="mt-4 rounded-[var(--r-md)] px-4 py-3 text-xs border bg-emerald-500/10 border-emerald-400/30 text-emerald-200">
+        <span className="font-bold">التوزيع يدوي بالكامل — مفيش توزيع تلقائي</span>
+        <span className="block text-[11px] text-[var(--text-dim)] mt-0.5">
+          كل رقم جديد يدخل «غير مخصص» ويستنى في «توزيع الأرقام» لحد ما توزعه بنفسك على اللي تختاره.
+        </span>
       </div>
 
       <button
@@ -8843,11 +8911,84 @@ function ModeIconButton() {
   );
 }
 
-// زر ألوان الموقع: لون الهوية + لون الأيقونات — لكل مستخدم على حدة
+// بكرة ألوان كاملة: تفتح منتقي ألوان النظام (كل الألوان) + كتابة كود HEX يدوياً
+function ColorWheel({
+  label,
+  value,
+  onChange,
+  autoLabel,
+  autoValue,
+  placeholder = '#0D8184',
+}: {
+  label: string;
+  value: string;
+  onChange: (hex: string) => void;
+  autoLabel?: string;
+  autoValue?: string;
+  placeholder?: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const hex = normalizeHex(value);
+  const [draft, setDraft] = useState(hex || '');
+  useEffect(() => setDraft(hex || ''), [hex]);
+
+  const commit = (text: string) => {
+    setDraft(text);
+    const next = normalizeHex(text);
+    if (next) onChange(next);
+  };
+
+  return (
+    <div className="theme-wheel-row">
+      <button
+        type="button"
+        onClick={() => inputRef.current?.click()}
+        title={`${label} — اضغط لاختيار أي لون`}
+        aria-label={label}
+        className="theme-wheel"
+      >
+        <span className="theme-wheel-dot" style={{ background: hex || 'var(--tint-3)' }} />
+      </button>
+      <input
+        ref={inputRef}
+        type="color"
+        value={hex || '#0d8184'}
+        onChange={(e) => onChange(e.target.value)}
+        className="theme-color-input"
+        tabIndex={-1}
+        aria-hidden="true"
+      />
+      <div className="theme-wheel-body">
+        <p className="theme-pop-label">{label}</p>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <input
+            dir="ltr"
+            value={draft}
+            onChange={(e) => commit(e.target.value)}
+            maxLength={7}
+            placeholder={placeholder}
+            aria-label={label}
+            className="theme-hex"
+          />
+          {autoLabel && autoValue && (
+            <button
+              type="button"
+              onClick={() => onChange(autoValue)}
+              className={`theme-swatch-auto ${hex ? '' : 'on'}`}
+            >
+              {autoLabel}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// زر ألوان الموقع: لون الهوية + الخلفية + الأيقونات — لكل مستخدم على حدة
 function ThemePaletteButton({ userId }: { userId?: string }) {
   const [open, setOpen] = useState(false);
   const [choice, setChoice] = useState<ThemeChoice>(() => readThemeChoice(userId));
-  const [mode] = useAppMode();
 
   useEffect(() => {
     setChoice(readThemeChoice(userId));
@@ -8859,8 +9000,8 @@ function ThemePaletteButton({ userId }: { userId?: string }) {
     applyThemeForUser(userId);
   }, [choice, userId]);
 
-  const pick = (kind: 'brand' | 'icons', id: string) =>
-    setChoice((prev) => ({ ...prev, [kind]: id }));
+  const pick = (kind: 'brand' | 'icons' | 'background', value: string) =>
+    setChoice((prev) => ({ ...prev, [kind]: value }));
 
   return (
     <div className="relative">
@@ -8892,50 +9033,63 @@ function ThemePaletteButton({ userId }: { userId?: string }) {
                 </button>
               </div>
 
-              <p className="theme-pop-label">لون الموقع</p>
-              <div className="theme-swatches">
-                {PALETTES.map((palette) => (
+              <ColorWheel
+                label="لون الهوية (الأزرار والعناوين)"
+                value={choice.brand}
+                onChange={(color) => pick('brand', color)}
+              />
+              <div className="theme-swatches theme-swatches-sm mt-2">
+                {PRESET_COLORS.map((preset) => (
                   <button
-                    key={palette.id}
+                    key={preset.hex}
                     type="button"
-                    onClick={() => pick('brand', palette.id)}
-                    title={palette.label}
-                    aria-label={palette.label}
-                    className={`theme-swatch ${choice.brand === palette.id ? 'on' : ''}`}
-                    style={{ background: palette[mode].fill }}
-                  >
-                    {choice.brand === palette.id && <Check className="w-3.5 h-3.5" />}
-                  </button>
+                    onClick={() => pick('brand', preset.hex)}
+                    title={preset.label}
+                    aria-label={preset.label}
+                    className={`theme-swatch theme-swatch-sm ${normalizeHex(choice.brand) === preset.hex ? 'on' : ''}`}
+                    style={{ background: preset.hex }}
+                  />
                 ))}
               </div>
 
-              <p className="theme-pop-label mt-3">لون الأيقونات</p>
-              <div className="theme-swatches">
-                <button
-                  type="button"
-                  onClick={() => pick('icons', 'default')}
-                  title="ألوان الأيقونات الأصلية"
-                  className={`theme-swatch theme-swatch-auto ${choice.icons === 'default' ? 'on' : ''}`}
-                >
-                  الأصلي
-                </button>
-                {PALETTES.map((palette) => (
-                  <button
-                    key={palette.id}
-                    type="button"
-                    onClick={() => pick('icons', palette.id)}
-                    title={palette.label}
-                    aria-label={palette.label}
-                    className={`theme-swatch ${choice.icons === palette.id ? 'on' : ''}`}
-                    style={{ background: palette[mode].brand }}
-                  >
-                    {choice.icons === palette.id && <Check className="w-3.5 h-3.5" />}
-                  </button>
-                ))}
+              <div className="mt-3">
+                <ColorWheel
+                  label="خلفية الموقع"
+                  value={choice.background}
+                  autoLabel="الأصلية"
+                  autoValue={AUTO_BACKGROUND}
+                  placeholder="تلقائي"
+                  onChange={(color) => pick('background', color)}
+                />
+                <div className="theme-swatches theme-swatches-sm mt-2">
+                  {BACKGROUND_PRESETS.map((preset) => (
+                    <button
+                      key={preset.hex}
+                      type="button"
+                      onClick={() => pick('background', preset.hex)}
+                      title={preset.label}
+                      aria-label={preset.label}
+                      className={`theme-swatch theme-swatch-sm ${normalizeHex(choice.background) === preset.hex ? 'on' : ''}`}
+                      style={{ background: preset.hex }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-3">
+                <ColorWheel
+                  label="أيقونات القائمة والشريط العلوي"
+                  value={choice.icons}
+                  autoLabel="الأصلية"
+                  autoValue="default"
+                  placeholder="الأصلي"
+                  onChange={(color) => pick('icons', color)}
+                />
               </div>
 
               <p className="text-[10px] text-[var(--text-dim)] mt-3 leading-relaxed">
-                لون الموقع يخص الأزرار والهوية، ولون الأيقونات يخص أيقونات القائمة والشريط العلوي. يُحفظ على جهازك فقط.
+                البكرة فيها كل الألوان — اضغطها واختر أي درجة، أو اكتب كود اللون. لون الهوية يخص الأزرار والروابط،
+                والخلفية تلوّن أرضية الموقع مع بقاء النصوص مقروءة. يُحفظ على جهازك فقط.
               </p>
             </motion.div>
           </>

@@ -2718,8 +2718,10 @@ html[data-mode="light"] .status-lost { color: #8f1b15; }
   position: absolute;
   top: calc(100% + 10px);
   left: 0;
-  width: 276px;
-  padding: 12px;
+  width: 300px;
+  max-height: min(78vh, 620px);
+  overflow-y: auto;
+  padding: 14px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-md);
@@ -2771,6 +2773,61 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
   font-weight: 700;
 }
 .theme-swatch-auto.on { border-color: var(--brand); color: var(--brand); }
+.theme-swatch-sm { width: 28px; height: 28px; min-width: 28px; border-width: 1px; }
+.theme-swatches-sm { display: flex; flex-wrap: wrap; gap: 5px; }
+/* أزرار الشريط العلوي لها حد أدنى 32px — نستثني دوائر الألوان داخل اللوحة */
+.theme-pop .theme-swatch { min-width: 0; }
+.theme-pop .theme-swatch-sm { min-width: 28px; }
+.theme-pop .theme-swatch-auto { min-width: 0; }
+
+/* بكرة الألوان: دائرة طيف كاملة تفتح منتقي النظام عند الضغط */
+.theme-wheel-row { display: flex; align-items: center; gap: 10px; }
+.theme-wheel {
+  position: relative;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: conic-gradient(
+    from 0deg,
+    #ff2d55, #ff9500, #ffcc00, #34c759, #00c7be,
+    #32ade6, #007aff, #5856d6, #af52de, #ff2d95, #ff2d55
+  );
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.theme-wheel:hover { transform: scale(1.05); box-shadow: var(--glow); }
+.theme-wheel-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+.theme-color-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.theme-wheel-body { flex: 1; min-width: 0; }
+.theme-hex {
+  width: 96px;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--tint-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  color: var(--text-strong);
+  text-align: center;
+}
 
 /* اسم فورم الكامبين أسفل شارة المصدر */
 .cc-form {

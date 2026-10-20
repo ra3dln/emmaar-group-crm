@@ -1,7 +1,7 @@
 // ===== اختبار حقيقي للمسار السحابي بالكامل (بلا أي حساب أو تكلفة) =====
 // نشغّل «محاكي Upstash Redis REST» على منفذ محلي + سيرفر CSV وهمي (بديل Google Sheet)،
 // ثم نستدعي نفس دوال الاستضافة (api/store.js و api/lead-source.js و api/cron.js)
-// ونتأكد أن: البيانات تُحفظ وتُقرأ، والتوزيع يوزّع الأرقام فعلاً، والتشغيل الدوري يعمل،
+// ونتأكد أن: البيانات تُحفظ وتُقرأ، والأرقام تدخل غير موزّعةً دائماً، والتشغيل الدوري يعمل،
 // والمكرر لا يُضاف، والمفتاح السري يحمي الرابط.
 // وداخل القناتين: فيسبوك وإنستجرام كل قناة بمصدرها ومؤشرها، وفشل إحداهما لا يوقف الأخرى.
 //
@@ -11,19 +11,24 @@ import http from 'node:http';
 import assert from 'node:assert/strict';
 import { buildAssignments } from '../server/leadSource.js';
 
-// الحصة الممتلئة لا تُسقط الرقم: يُحفظ غير موزّع حتى توزّعه الإدارة
-const limitBuilt = buildAssignments({
+// ===== لا توزيع تلقائي إطلاقاً =====
+// حتى لو وصل إعداد قديم autoAssign=true وقائمة سيلز، كل رقم يدخل «غير مخصّص»
+// والتوزيع قرار الإدارة من تبويب «توزيع الأرقام».
+const noAutoAssign = buildAssignments({
   fetched: [
     { phone: '01000000001', name: 'أول' },
     { phone: '01000000002', name: 'ثاني' },
+    { phone: '01000000002', name: 'ثاني مكرر' },
   ],
   sales: [{ id: 's1', name: 'سيلز واحد' }],
-  config: { perSalesLimit: 1 },
+  config: { autoAssign: true, perSalesLimit: 1 },
   knownPhones: [],
 });
-assert.equal(limitBuilt.added.length, 2);
-assert.equal(limitBuilt.added[0].salesId, 's1');
-assert.equal(limitBuilt.added[1].salesId, '');
+assert.equal(noAutoAssign.added.length, 2);
+assert.deepEqual(noAutoAssign.added.map((lead) => lead.salesId), ['', '']);
+assert.equal(noAutoAssign.unassigned, 2);
+assert.deepEqual(noAutoAssign.perUser, []);
+assert.equal(noAutoAssign.duplicates, 1);
 
 // ---------- محاكي Redis REST (نفس عقد Upstash: POST /pipeline) ----------
 const redisData = new Map();
@@ -347,17 +352,17 @@ try {
   check('السحب ينجح ويسجل النتيجة', run.status === 200 && summary?.ok === true, JSON.stringify(summary));
   check('عدد الأرقام المسحوبة = ٢', summary?.added === 2, JSON.stringify(summary?.perUser));
   check(
-    'التوزيع نزل على السيلز المفعّلين فقط (لا مدير)',
-    summary?.perUser?.length === 2 && summary.perUser.every((p) => p.count === 1),
-    JSON.stringify(summary?.perUser)
+    'لا توزيع تلقائي على أي مندوب — الأرقام تنتظر الإدارة',
+    Array.isArray(summary?.perUser) && summary.perUser.length === 0 && summary?.unassigned === 2,
+    JSON.stringify({ perUser: summary?.perUser, unassigned: summary?.unassigned })
   );
 
   const afterRun = await call(storeApi);
   const assigned = afterRun.json?.data?.crm_assigned_leads || [];
   check('الأرقام اتكتبت في قاعدة البيانات مش المتصفح', assigned.length === 2);
   check(
-    'كل رقم لمندوب مختلف (مناوبة)',
-    assigned[0].salesId !== assigned[1].salesId,
+    'كل الأرقام المحفوظة بلا salesId (غير مخصّصة)',
+    assigned.every((lead) => !lead.salesId),
     JSON.stringify(assigned.map((a) => a.salesId))
   );
 

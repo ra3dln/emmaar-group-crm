@@ -223,7 +223,8 @@ async function statelessHandler(req, res, url) {
 
     if (action === 'run') {
       const config = { ...(body.config || {}), instagram: { ...((body.config || {}).instagram || {}) } };
-      const sales = Array.isArray(body.sales) ? body.sales.filter((u) => u && u.id) : [];
+      // الأرقام تدخل غير موزّعة دائماً — التوزيع قرار الإدارة من «توزيع الأرقام»
+
 
       // نفس محرك السيرفر: كل قناة مفعّلة تُسحب على حدة، وفشل إحداهما لا يوقف الأخرى
       const { rows: fetched, channels } = await collectLeads(config);
@@ -243,7 +244,7 @@ async function statelessHandler(req, res, url) {
         });
       }
 
-      const built = buildAssignments({ fetched, sales, config, knownPhones: body.knownPhones || [] });
+      const built = buildAssignments({ fetched, knownPhones: body.knownPhones || [] });
 
       return reply(res, 200, {
         ok: true,
@@ -257,8 +258,8 @@ async function statelessHandler(req, res, url) {
           duplicates: built.duplicates,
           invalid: built.invalid,
           perUser: built.perUser,
+          unassigned: built.unassigned,
           channels,
-          ...(sales.length ? {} : { warning: 'لا يوجد سيلز مفعّل — الأرقام محفوظة غير موزّعة', unassigned: built.added.filter((l) => !l.salesId).length }),
         },
         // مؤشرات كل قناة ليعيد المتصفح كتابتها في إعداداته المحلية فلا تتكرر الأرقام
         cursorTime: Number(config.cursorTime) || 0,
