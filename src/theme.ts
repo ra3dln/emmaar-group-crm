@@ -98,7 +98,8 @@ export const lighten = (hex: string, percent: number): string => mix(hex, '#ffff
 export const darken = (hex: string, percent: number): string => mix(hex, '#000000', percent / 100);
 
 // تحويل HEX ↔ HSL — نحتاجه لبناء خلفية بنفس درجة اللون المختار وإضاءة الوضع الحالي
-const rgbToHsl = (hex: string): [number, number, number] => {
+// (مُصدّران أيضاً لأن بكرة الألوان في الواجهة تحسب منهما موضع المؤشر)
+export const rgbToHsl = (hex: string): [number, number, number] => {
   const [r, g, b] = toRgb(hex).map((v) => v / 255) as [number, number, number];
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
@@ -113,7 +114,7 @@ const rgbToHsl = (hex: string): [number, number, number] => {
   return [(h * 60 + 360) % 360, s, l];
 };
 
-const hslToHex = (h: number, s: number, l: number): string => {
+export const hslToHex = (h: number, s: number, l: number): string => {
   const hue = ((h % 360) + 360) % 360;
   const c = (1 - Math.abs(2 * l - 1)) * clamp(s, 0, 1);
   const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));

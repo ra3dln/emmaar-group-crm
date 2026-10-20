@@ -30,17 +30,8 @@ import {
   roomsFromText,
 } from './arabicNumbers';
 import { buildXlsx, downloadBlob } from './xlsx';
-import {
-  AUTO_BACKGROUND,
-  BACKGROUND_PRESETS,
-  PRESET_COLORS,
-  applyThemeForUser,
-  normalizeHex,
-  readThemeChoice,
-  reapplyCurrentTheme,
-  saveThemeChoice,
-  type ThemeChoice,
-} from './theme';
+import { applyThemeForUser, reapplyCurrentTheme } from './theme';
+import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import {
   ATTENDANCE_END_DEFAULT,
   ATTENDANCE_GRACE_DEFAULT,
@@ -2709,7 +2700,7 @@ function App() {
           {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
           {activeTab === 'chat' && currentUser.role === 'sales' && <SalesChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} readOnly={!!impersonator} />}
           {activeTab === 'admin-chat' && currentUser.role !== 'sales' && <AdminChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} onGroupRead={handleMarkGroupRead} />}
-          {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView />}
+          {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} />}
         </AnimatePresence>
         </main>
         </div>
@@ -8911,203 +8902,9 @@ function ModeIconButton() {
   );
 }
 
-// بكرة ألوان كاملة: تفتح منتقي ألوان النظام (كل الألوان) + كتابة كود HEX يدوياً
-function ColorWheel({
-  label,
-  value,
-  onChange,
-  autoLabel,
-  autoValue,
-  placeholder = '#0D8184',
-}: {
-  label: string;
-  value: string;
-  onChange: (hex: string) => void;
-  autoLabel?: string;
-  autoValue?: string;
-  placeholder?: string;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const hex = normalizeHex(value);
-  const [draft, setDraft] = useState(hex || '');
-  useEffect(() => setDraft(hex || ''), [hex]);
-
-  const commit = (text: string) => {
-    setDraft(text);
-    const next = normalizeHex(text);
-    if (next) onChange(next);
-  };
-
-  return (
-    <div className="theme-wheel-row">
-      <button
-        type="button"
-        onClick={() => inputRef.current?.click()}
-        title={`${label} — اضغط لاختيار أي لون`}
-        aria-label={label}
-        className="theme-wheel"
-      >
-        <span className="theme-wheel-dot" style={{ background: hex || 'var(--tint-3)' }} />
-      </button>
-      <input
-        ref={inputRef}
-        type="color"
-        value={hex || '#0d8184'}
-        onChange={(e) => onChange(e.target.value)}
-        className="theme-color-input"
-        tabIndex={-1}
-        aria-hidden="true"
-      />
-      <div className="theme-wheel-body">
-        <p className="theme-pop-label">{label}</p>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <input
-            dir="ltr"
-            value={draft}
-            onChange={(e) => commit(e.target.value)}
-            maxLength={7}
-            placeholder={placeholder}
-            aria-label={label}
-            className="theme-hex"
-          />
-          {autoLabel && autoValue && (
-            <button
-              type="button"
-              onClick={() => onChange(autoValue)}
-              className={`theme-swatch-auto ${hex ? '' : 'on'}`}
-            >
-              {autoLabel}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// زر ألوان الموقع: لون الهوية + الخلفية + الأيقونات — لكل مستخدم على حدة
-function ThemePaletteButton({ userId }: { userId?: string }) {
-  const [open, setOpen] = useState(false);
-  const [choice, setChoice] = useState<ThemeChoice>(() => readThemeChoice(userId));
-
-  useEffect(() => {
-    setChoice(readThemeChoice(userId));
-    applyThemeForUser(userId);
-  }, [userId]);
-
-  useEffect(() => {
-    saveThemeChoice(choice, userId);
-    applyThemeForUser(userId);
-  }, [choice, userId]);
-
-  const pick = (kind: 'brand' | 'icons' | 'background', value: string) =>
-    setChoice((prev) => ({ ...prev, [kind]: value }));
-
-  return (
-    <div className="relative">
-      <motion.button
-        whileHover={{ scale: 1.05 }}
-        onClick={() => setOpen((value) => !value)}
-        title="ألوان الموقع"
-        aria-label="ألوان الموقع"
-        className="icon-btn theme-palette-btn"
-      >
-        <Palette className="w-4 h-4" />
-      </motion.button>
-
-      <AnimatePresence>
-        {open && (
-          <>
-            <div className="fixed inset-0 z-[110]" onClick={() => setOpen(false)} />
-            <motion.div
-              initial={{ opacity: 0, y: -6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              className="theme-pop z-[120]"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <p className="theme-pop-title">ألوان الموقع</p>
-                <button type="button" onClick={() => setOpen(false)} className="theme-pop-close" title="إغلاق">
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <ColorWheel
-                label="لون الهوية (الأزرار والعناوين)"
-                value={choice.brand}
-                onChange={(color) => pick('brand', color)}
-              />
-              <div className="theme-swatches theme-swatches-sm mt-2">
-                {PRESET_COLORS.map((preset) => (
-                  <button
-                    key={preset.hex}
-                    type="button"
-                    onClick={() => pick('brand', preset.hex)}
-                    title={preset.label}
-                    aria-label={preset.label}
-                    className={`theme-swatch theme-swatch-sm ${normalizeHex(choice.brand) === preset.hex ? 'on' : ''}`}
-                    style={{ background: preset.hex }}
-                  />
-                ))}
-              </div>
-
-              <div className="mt-3">
-                <ColorWheel
-                  label="خلفية الموقع"
-                  value={choice.background}
-                  autoLabel="الأصلية"
-                  autoValue={AUTO_BACKGROUND}
-                  placeholder="تلقائي"
-                  onChange={(color) => pick('background', color)}
-                />
-                <div className="theme-swatches theme-swatches-sm mt-2">
-                  {BACKGROUND_PRESETS.map((preset) => (
-                    <button
-                      key={preset.hex}
-                      type="button"
-                      onClick={() => pick('background', preset.hex)}
-                      title={preset.label}
-                      aria-label={preset.label}
-                      className={`theme-swatch theme-swatch-sm ${normalizeHex(choice.background) === preset.hex ? 'on' : ''}`}
-                      style={{ background: preset.hex }}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="mt-3">
-                <ColorWheel
-                  label="أيقونات القائمة والشريط العلوي"
-                  value={choice.icons}
-                  autoLabel="الأصلية"
-                  autoValue="default"
-                  placeholder="الأصلي"
-                  onChange={(color) => pick('icons', color)}
-                />
-              </div>
-
-              <p className="text-[10px] text-[var(--text-dim)] mt-3 leading-relaxed">
-                البكرة فيها كل الألوان — اضغطها واختر أي درجة، أو اكتب كود اللون. لون الهوية يخص الأزرار والروابط،
-                والخلفية تلوّن أرضية الموقع مع بقاء النصوص مقروءة. يُحفظ على جهازك فقط.
-              </p>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
 // إعدادات المظهر — داخل تبويب الإعدادات بالكامل
-function AppearanceSettings() {
+function AppearanceSettings({ userId }: { userId?: string }) {
   const [mode] = useAppMode();
-
-  const swatches = [
-    { label: 'الخلفية', value: 'var(--bg)' },
-    { label: 'البطاقات', value: 'var(--surface-solid)' },
-    { label: 'اللون الأساسي', value: 'var(--primary)' },
-  ];
 
   return (
     <div className="space-y-5">
@@ -9120,13 +8917,9 @@ function AppearanceSettings() {
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        {swatches.map((swatch) => (
-          <div key={swatch.label} className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3">
-            <span className="block h-10 rounded-[var(--r-sm)] mb-2 border border-[var(--border)]" style={{ background: swatch.value }} />
-            <span className="text-[11px] text-[var(--text-muted)]">{swatch.label}</span>
-          </div>
-        ))}
+      {/* نفس بكرة الألوان اللي في الشريط العلوي — ظاهرة هنا كمان عشان تبقى سهلة الوصول */}
+      <div className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-4">
+        <ThemeSettingsPanel userId={userId} />
       </div>
     </div>
   );
@@ -9134,7 +8927,7 @@ function AppearanceSettings() {
 
 // الإعدادات: مكان واحد لإعدادات النظام فقط (الألوان + النسخة الاحتياطية + حالة البيانات).
 // إدارة الحسابات انتقلت كلها إلى تبويب «فريق العمل» حتى لا يتكرر نفس الشغل في مكانين.
-function AdminSettingsView(_props: any) {
+function AdminSettingsView({ currentUser }: { currentUser?: User }) {
   const handleExportData = () => {
     const data = {
       clients: JSON.parse(localStorage.getItem('crm_clients') || '[]'),
@@ -9178,7 +8971,7 @@ function AdminSettingsView(_props: any) {
         <p className="text-xs text-[var(--text-muted)] mb-4">
           اختر الوضع الذي يريحك: ليلي هادئ للإضاءة المنخفضة، أو نهاري مريح للضوء القوي. التغيير فوري ويُحفظ على هذا الجهاز.
         </p>
-        <AppearanceSettings />
+        <AppearanceSettings userId={currentUser?.id} />
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">

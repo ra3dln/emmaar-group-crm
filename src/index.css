@@ -2780,42 +2780,91 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
 .theme-pop .theme-swatch-sm { min-width: 28px; }
 .theme-pop .theme-swatch-auto { min-width: 0; }
 
-/* بكرة الألوان: دائرة طيف كاملة تفتح منتقي النظام عند الضغط */
-.theme-wheel-row { display: flex; align-items: center; gap: 10px; }
-.theme-wheel {
+/* ===== بكرة ألوان حقيقية داخل الصفحة =====
+   دائرة طيف مرسومة بالـCSS: الزاوية = درجة اللون، والبُعد عن المركز = التشبّع.
+   شريط أسفلها للإضاءة، وكتابة HEX تحت البكرة. لا تعتمد على منتقي النظام. */
+.theme-editor { display: grid; gap: 10px; max-width: 340px; margin-inline: auto; }
+.theme-hero { display: flex; justify-content: center; }
+.cw { display: flex; align-items: center; gap: 12px; }
+.cw-lg { flex-direction: column; align-items: center; gap: 10px; }
+.cw-lg .cw-body { width: 100%; }
+.cw-lg .theme-hex { width: 108px; }
+.cw-disc {
   position: relative;
   flex: none;
-  width: 48px;
-  height: 48px;
+  width: 62px;
+  height: 62px;
   border-radius: 50%;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
+  cursor: crosshair;
+  touch-action: none;
   border: 1px solid var(--border-strong);
   background: conic-gradient(
-    from 0deg,
-    #ff2d55, #ff9500, #ffcc00, #34c759, #00c7be,
-    #32ade6, #007aff, #5856d6, #af52de, #ff2d95, #ff2d55
+    from 90deg,
+    #ff3b30, #ff9500, #ffcc00, #34c759, #00c7be,
+    #32ade6, #007aff, #5856d6, #af52de, #ff2d95, #ff3b30
   );
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  transition: box-shadow 0.12s ease;
 }
-.theme-wheel:hover { transform: scale(1.05); box-shadow: var(--glow); }
-.theme-wheel-dot {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: 3px solid var(--surface);
-  box-shadow: 0 0 0 1px var(--border-strong);
-}
-.theme-color-input {
+.cw-lg .cw-disc { width: 136px; height: 136px; box-shadow: 0 0 0 4px var(--tint-1); }
+.cw-disc:focus-visible { outline: 2px solid var(--brand-fill); outline-offset: 3px; }
+.cw-disc:hover { box-shadow: 0 0 0 1px var(--border-strong); }
+.cw-lg .cw-disc:hover { box-shadow: 0 0 0 4px var(--tint-2); }
+.cw-mask {
   position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, #fff 0%, rgba(255, 255, 255, 0) 72%);
   pointer-events: none;
 }
-.theme-wheel-body { flex: 1; min-width: 0; }
+.cw-marker {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.cw-lg .cw-marker { width: 18px; height: 18px; border-width: 3px; }
+.cw-body { flex: 1; min-width: 0; display: grid; gap: 6px; }
+.cw-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* شريط الإضاءة: التدرّج يعرض فعلياً من الأسود إلى اللون ثم الأبيض */
+.cw-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 8px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  direction: ltr;
+}
+.cw-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--border-strong), 0 1px 3px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+.cw-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--border-strong);
+  cursor: pointer;
+}
+.theme-pop-note { margin: 0; font-size: 10px; line-height: 1.6; color: var(--text-dim); }
+.theme-pop-note-dim { font-size: 9.5px; }
+.theme-adv { display: grid; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+/* كود HEX: يُكتب من الشمال لليمين حتى لا يظهر # في آخر الكود */
 .theme-hex {
+  direction: ltr;
   width: 96px;
   padding: 5px 8px;
   font-size: 11px;
@@ -2828,6 +2877,7 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
   color: var(--text-strong);
   text-align: center;
 }
+.theme-editor .theme-pop-label { margin: 0 0 2px; }
 
 /* اسم فورم الكامبين أسفل شارة المصدر */
 .cc-form {
