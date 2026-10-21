@@ -350,6 +350,9 @@ async function fetchFromMeta(config, channel = 'facebook') {
           name: isTestLeadValue(rawName) || !String(rawName || '').trim() ? (test ? 'عميل تجريبي' : 'عميل بدون اسم') : rawName,
           phone: test ? demoPhoneFor(lead.id) : normalizeEgyptPhone(rawPhone),
           source: `${label} - ${form.name || form.id}${test ? ' • تجريبي' : ''}`,
+          // اسم الفورم يُخزَّن صريحاً مع الرقم: التقسيم في «عملاء كامبين» والتوزيع
+          // يعتمد عليه، وليس على تحليل نص الوصف (اسم فيه | أو - كان يقتطع).
+          formName: String(form.name || form.id),
           date: created ? readableDateTime(new Date(created * 1000)) : '',
           test,
         });
@@ -542,6 +545,7 @@ export function buildAssignments({ fetched, knownPhones = [], at = new Date().to
       status: 'new',
       createdAt: at,
       salesId: '',
+      ...(row.formName ? { formName: String(row.formName) } : {}),
     };
 
     added.push(baseLead);

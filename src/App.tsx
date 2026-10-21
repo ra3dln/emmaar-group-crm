@@ -30,6 +30,7 @@ import {
   roomsFromText,
 } from './arabicNumbers';
 import { buildXlsx, downloadBlob } from './xlsx';
+import { formNameOf, formKeyOf, activeFormNamesOf, UNKNOWN_FORM } from './campaignForms';
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import {
@@ -2092,6 +2093,10 @@ function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [sidebarOpen]);
 
+  // أسماء الفورمات المفعّلة في إعدادات السحب — تُغذّي القوائم المسندلة في
+  // «عملاء كامبين» و«توزيع الأرقام» (قبل أي return شرطي احتراماً لقواعد الـ Hooks)
+  const activeCampaignForms = useActiveCampaignForms(!!currentUser && currentUser.role !== 'sales');
+
   if (!currentUser) {
     return <LoginScreen onLogin={(user) => {
       setCurrentUser(user);
@@ -2737,6 +2742,7 @@ function App() {
             clients={scopedClients}
             leads={scopedLeads}
             users={scopedUsers}
+            activeForms={activeCampaignForms}
             onSelect={(c: Client) => setSelectedClient(c)}
             onCall={(c: Client) => setCallClient(c)}
           />}
@@ -2755,7 +2761,7 @@ function App() {
               void pushKey('crm_assigned_leads');
             }}
           />}
-          {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={scopedLeads} users={scopedUsers} currentUser={currentUser} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
+          {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={scopedLeads} users={scopedUsers} currentUser={currentUser} activeForms={activeCampaignForms} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
             const updated = assignedLeads.filter(l => l.id !== id);
             setAssignedLeads(updated);
             localStorage.setItem('crm_assigned_leads', JSON.stringify(updated));
@@ -4253,19 +4259,41 @@ const sourceKindOf = (text: string): keyof typeof SOURCE_KINDS => {
   return 'other';
 };
 
-// ===== اسم الفورم من وصف الرقم أو مصدر العميل =====
-// الوصف اللي بيجي من السحب: «استيراد تلقائي • المصدر: فيسبوك - فورم أكتوبر • التاريخ: …»
-// والمصدر بعد التحويل: «رقم موزّع — … المصدر: إنستجرام - فورم …»
-const formNameOf = (record: { source?: string; description?: string; formName?: string } | null | undefined): string => {
-  if (!record) return '';
-  if (record.formName && String(record.formName).trim()) return String(record.formName).trim();
-  const text = String(record.description || record.source || '');
-  if (!text) return '';
-  const labelled = text.match(/(?:المصدر|Form|فورم|نموذج)\s*[:：-]?\s*(?:فيسبوك|إنستجرام|انستجرام|Facebook|Instagram)?\s*[-–—:]?\s*([^•|]+)/i);
-  if (labelled && labelled[1] && labelled[1].trim()) return labelled[1].trim();
-  const dashed = text.match(/(?:فيسبوك|إنستجرام|انستجرام|Facebook|Instagram)\s*[-–—]\s*([^•|]+)/i);
-  if (dashed && dashed[1] && dashed[1].trim()) return dashed[1].trim();
-  return '';
+// ===== أسماء الفورمات المفعّلة (من إعدادات سحب الأرقام) =====
+// «عملاء كامبين» و«توزيع الأرقام» يقرآن قائمتهما المسندلة من هنا: الفورم الجديد
+// يظهر فيهما بمجرد تفعيله وحفظ الإعدادات، حتى قبل وصول أي رقم منه.
+const ACTIVE_FORMS_EVENT = 'crm-forms-updated';
+
+const useActiveCampaignForms = (enabled: boolean) => {
+  const [forms, setForms] = useState<string[]>([]);
+  useEffect(() => {
+    if (!enabled) {
+      setForms([]);
+      return;
+    }
+    let stopped = false;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/lead-source', { cache: 'no-store', credentials: 'same-origin' });
+        if (!res.ok) return; // بلا صلاحية/شبكة: القوائم تكمل بالفورمات الموجودة في السجلات
+        const json = await res.json();
+        const config = json.stateless ? localSourceView(readLocalSource()) : json.config || {};
+        if (!stopped) setForms(activeFormNamesOf(config));
+      } catch {
+        /* لا شيء */
+      }
+    };
+    void load();
+    const refresh = () => void load();
+    window.addEventListener(ACTIVE_FORMS_EVENT, refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      stopped = true;
+      window.removeEventListener(ACTIVE_FORMS_EVENT, refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [enabled]);
+  return forms;
 };
 
 // هل السجل أصله رقم اتسحب من الكامبين؟ (للعميل أو الرقم الموزّع)
@@ -7684,7 +7712,7 @@ function AdminFormsSheetView({ clients = [], leads = [] }: { clients?: Client[];
 // ===== تبويب «العملاء» للإدارة =====
 // كل عملاء الشركة في مكان واحد: العدد الحالي في المقدمة، وكارت لكل عميل يفتح
 // نافذة التفاصيل نفسها المستخدمة في «المراحل» (البيانات + الخط الزمني + الاتصال).
-function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any) {
+function AdminClientsView({ clients, leads = [], users, onSelect, onCall, activeForms = [] }: any) {
   const [query, setQuery] = useState('');
   const [stage, setStage] = useState<'all' | Client['stage']>('all');
   // افتراضياً عملاء الكامبين فقط — وزر واحد يعرض كل العملاء (بما فيهم المضافون يدوياً)
@@ -7748,10 +7776,35 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
   const formGroups = [...groupMap.values()].sort(
     (a, b) => b.clients.length + b.leads.length - (a.clients.length + a.leads.length)
   );
+
+  // ===== القائمة المسندلة للفورمات =====
+  // كل فورم مفعّل في الإعدادات يظهر في القائمة ولو لم يصل منه رقم بعد (بعدد ٠)،
+  // ومعاه أي فورم موجود في السجلات القديمة حتى لا يختفي أي رقم من الشاشة.
+  const formCounts = new Map<string, { clients: number; leads: number }>();
+  const bump = (name: string, kind: 'clients' | 'leads') => {
+    const key = name || UNKNOWN_FORM;
+    const cell = formCounts.get(key) || { clients: 0, leads: 0 };
+    cell[kind] += 1;
+    formCounts.set(key, cell);
+  };
+  campaignClients.filter(matches).forEach((c: Client) => bump(formNameOf(c), 'clients'));
+  campaignLeads.filter(matchesLead).forEach((l: AssignedLead) => bump(formNameOf(l), 'leads'));
+  const formOptions = [...new Set([
+    ...(activeForms || []).map((name: string) => String(name || '').trim()).filter(Boolean),
+    ...formCounts.keys(),
+  ])]
+    .map((name) => ({ name, ...(formCounts.get(name) || { clients: 0, leads: 0 }) }))
+    .sort((a, b) => b.clients + b.leads - (a.clients + a.leads));
+
   // فلتر الفورم: لو الفورم المختار مابقاش ظاهر (بعد بحث أو تصفية) نرجع لـ«كل الفورمات»
   const [form, setForm] = useState('all');
-  const activeForm = form !== 'all' && formGroups.some((g) => g.name === form) ? form : 'all';
-  const shownGroups = activeForm === 'all' ? formGroups : formGroups.filter((g) => g.name === activeForm);
+  const activeForm = form === 'all' || formOptions.some((option) => option.name === form) ? form : 'all';
+  const selectedCounts = formOptions.find((option) => option.name === activeForm);
+  // الفورم المختار يظهر له قسم حتى لو لم يصل منه أي رقم بعد
+  const shownGroups =
+    activeForm === 'all'
+      ? formGroups
+      : [formGroups.find((g) => g.name === activeForm) || { name: activeForm, clients: [], leads: [] }];
 
   return (
     <div className="space-y-4">
@@ -7821,37 +7874,51 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
         </div>
       </div>
 
-      {/* فلتر الفورمات: كل فورم بزرّ بدده — وتحتيه أقسام مستقلة */}
-      {formGroups.length > 1 && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[11px] font-bold text-[var(--text-dim)]">الفورمات:</span>
-          <button
-            type="button"
-            onClick={() => setForm('all')}
-            className={`text-xs font-bold px-3 py-2 rounded-[var(--r-md)] border transition-colors ${
-              activeForm === 'all'
-                ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
-                : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
-            }`}
+      {/* ===== قائمة الفورمات المسندلة =====
+          كل فورم مفعّل في إعدادات السحب يظهر هنا تلقائياً، واختياره يعرض أرقامه
+          وعدده فقط. العدد المكتوب جوه القائمة هو عدد العملاء المسجّلين في الفورم. */}
+      <div className="panel p-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+          <label htmlFor="campaign-form-select" className="text-[11px] font-bold text-[var(--text-dim)] shrink-0">
+            الفورم
+          </label>
+          <select
+            id="campaign-form-select"
+            value={activeForm}
+            onChange={(e) => setForm(e.target.value)}
+            className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
           >
-            كل الفورمات ({visible.length + visibleLeads.length})
-          </button>
-          {formGroups.map((group) => (
-            <button
-              key={group.name}
-              type="button"
-              onClick={() => setForm(group.name)}
-              className={`text-xs font-bold px-3 py-2 rounded-[var(--r-md)] border transition-colors ${
-                activeForm === group.name
-                  ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
-                  : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
-              }`}
-            >
-              {group.name} ({group.clients.length + group.leads.length})
-            </button>
-          ))}
+            <option value="all" className="bg-gray-900">كل الفورمات ({totalCampaign})</option>
+            {formOptions.map((option) => (
+              <option key={option.name} value={option.name} className="bg-gray-900">
+                {option.name} — {option.clients} عميل مسجّل • {option.leads} في التوزيع
+              </option>
+            ))}
+          </select>
         </div>
-      )}
+
+        {activeForm === 'all' ? (
+          <p className="text-[11px] text-[var(--text-dim)] mt-2">
+            اختر فورم من القائمة لعرض أرقامه وعدد العملاء المسجّلين فيه. الفورمات المفعّلة
+            في إعدادات السحب تظهر هنا تلقائياً.
+          </p>
+        ) : (
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <div className="rounded-[var(--r-md)] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] px-3 py-2.5">
+              <p className="text-[10.5px] text-[var(--text-muted)]">عملاء مسجّلون</p>
+              <p className="text-2xl font-extrabold text-[var(--brand)] leading-tight" dir="ltr">{selectedCounts?.clients || 0}</p>
+            </div>
+            <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] px-3 py-2.5">
+              <p className="text-[10.5px] text-[var(--text-muted)]">في توزيع الأرقام</p>
+              <p className="text-2xl font-extrabold text-[var(--text-strong)] leading-tight" dir="ltr">{selectedCounts?.leads || 0}</p>
+            </div>
+            <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] px-3 py-2.5">
+              <p className="text-[10.5px] text-[var(--text-muted)]">إجمالي الفورم</p>
+              <p className="text-2xl font-extrabold text-[var(--text-strong)] leading-tight" dir="ltr">{(selectedCounts?.clients || 0) + (selectedCounts?.leads || 0)}</p>
+            </div>
+          </div>
+        )}
+      </div>
 
       {shownGroups.map((group) => (
         <section key={group.name} className="space-y-3">
@@ -7868,6 +7935,15 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
               </div>
             </div>
           </div>
+
+          {group.clients.length + group.leads.length === 0 && (
+            <div className="rounded-[var(--r-md)] border border-dashed border-[var(--border)] px-4 py-6 text-center">
+              <p className="text-sm text-[var(--text-muted)]">لا توجد أرقام في هذا الفورم بعد</p>
+              <p className="text-[11px] text-[var(--text-dim)] mt-1">
+                الفورم مفعّل في الإعدادات — أول ما يوصل منه رقم يظهر هنا وفي «توزيع الأرقام» تلقائياً.
+              </p>
+            </div>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {group.clients.map((client: Client) => {
@@ -7955,19 +8031,39 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall }: any)
   );
 }
 
-function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onImport, onAssign }: any) {
+function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onImport, onAssign, activeForms = [] }: any) {
   const salesUsers = users.filter((u: User) => (u.role === 'sales' || u.role === 'supervisor') && u.isActive);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'unassigned'>('all');
 
+  // ===== الفورمات: القائمة المسندلة تحدد نطاق التوزيع =====
+  // اختيار فورم يحصر الأرقام المعروضة في هذا الفورم فقط، وكل توزيع من هذا التبويب
+  // (فردي أو دفعة أو جماعي) يقع على أرقام الفورم المختار وحده.
+  const [form, setForm] = useState('all');
+  const formCounts = new Map<string, number>();
+  for (const lead of assignedLeads) {
+    const key = formKeyOf(lead);
+    formCounts.set(key, (formCounts.get(key) || 0) + 1);
+  }
+  const formOptions = [...new Set([
+    ...(activeForms || []).map((name: string) => String(name || '').trim()).filter(Boolean),
+    ...formCounts.keys(),
+  ])]
+    .map((name) => ({ name, count: formCounts.get(name) || 0 }))
+    .sort((a, b) => b.count - a.count);
+  const activeForm = form === 'all' || formOptions.some((option) => option.name === form) ? form : 'all';
+  const formLeads = activeForm === 'all'
+    ? assignedLeads
+    : assignedLeads.filter((lead: AssignedLead) => formKeyOf(lead) === activeForm);
+
   const nameOf = (id?: string) => users.find((u: User) => u.id === id)?.name || 'غير مخصص';
   const q = normalizeArabicText(query).trim();
-  const visible = assignedLeads
+  const visible = formLeads
     .filter((l: AssignedLead) => (filter === 'unassigned' ? !salesUsers.some((u: User) => u.id === l.salesId) : true))
     .filter((l: AssignedLead) =>
-      !q || normalizeArabicText(`${l.name} ${l.phone} ${nameOf(l.salesId)} ${l.description || ''}`).includes(q)
+      !q || normalizeArabicText(`${l.name} ${l.phone} ${nameOf(l.salesId)} ${l.description || ''} ${formNameOf(l)}`).includes(q)
     );
-  const unassignedCount = assignedLeads.filter((l: AssignedLead) => !salesUsers.some((u: User) => u.id === l.salesId)).length;
+  const unassignedCount = formLeads.filter((l: AssignedLead) => !salesUsers.some((u: User) => u.id === l.salesId)).length;
 
   // حصة كل سيلز: نافذة تعرض كل السيلز وعدد الأرقام لكل واحد
   const [showShare, setShowShare] = useState(false);
@@ -7995,9 +8091,12 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
         <div>
           <div className="page-intro"><div><h2>توزيع الأرقام</h2></div></div>
           <p className="text-xs text-[var(--text-muted)] mt-1">
-            إجمالي الأرقام: <span className="text-[var(--brand)] font-bold">{assignedLeads.length}</span>
+            إجمالي الأرقام: <span className="text-[var(--brand)] font-bold">{formLeads.length}</span>
             {' '}• غير مخصصة: <span className="text-amber-300 font-bold">{unassignedCount}</span>
             {' '}• عدد السيلز: {salesUsers.length}
+            {activeForm !== 'all' && (
+              <> {' '}• الفورم: <span className="text-[var(--text)] font-bold">{activeForm}</span></>
+            )}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -8005,10 +8104,10 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
             <BarChart3 className="w-4 h-4" /> الأرقام لكل سيلز
           </button>
           {/* إصلاح أي توزيع قديم: سحب كل الأرقام من عهدة السيلز مرة واحدة */}
-          {assignedLeads.some((l: AssignedLead) => l.salesId) && (
+          {formLeads.some((l: AssignedLead) => l.salesId) && (
             <button
               onClick={() => {
-                const ids = assignedLeads.filter((l: AssignedLead) => l.salesId).map((l: AssignedLead) => l.id);
+                const ids = formLeads.filter((l: AssignedLead) => l.salesId).map((l: AssignedLead) => l.id);
                 if (!ids.length) return;
                 if (!window.confirm(`إرجاع ${ids.length} رقم من عهدة السيلز إلى «غير مخصص»؟`)) return;
                 onAssign?.(ids, '');
@@ -8029,6 +8128,34 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
         </div>
       </div>
 
+      {/* ===== الفورم: قائمة مسندلة تعرض كل فورم مفعّل وعدد أرقامه =====
+          اختيار فورم يفتح أرقامه وحدها، والتوزيع بعدها يقع على أرقام هذا الفورم فقط. */}
+      <div className="panel p-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+          <label htmlFor="lead-form-select" className="text-[11px] font-bold text-[var(--text-dim)] shrink-0">
+            الفورم
+          </label>
+          <select
+            id="lead-form-select"
+            value={activeForm}
+            onChange={(e) => setForm(e.target.value)}
+            className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
+          >
+            <option value="all" className="bg-gray-900">كل الفورمات ({assignedLeads.length})</option>
+            {formOptions.map((option) => (
+              <option key={option.name} value={option.name} className="bg-gray-900">
+                {option.name} ({option.count} رقم)
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="text-[11px] text-[var(--text-dim)] mt-2">
+          {activeForm === 'all'
+            ? 'اختر فورم لتوزيع أرقامه وحدها على السيلز. الفورمات المفعّلة في إعدادات السحب تظهر هنا تلقائياً.'
+            : `كل توزيع من هذه الشاشة يقع على أرقام «${activeForm}» فقط — ${formLeads.length} رقم.`}
+        </p>
+      </div>
+
       {/* أدوات التوزيع: بحث + تصفية + توزيع جماعي */}
       <div className="panel p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
         <div className="relative flex-1">
@@ -8039,7 +8166,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => setFilter('all')}
             className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${filter === 'all' ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
-            الكل ({assignedLeads.length})
+            الكل ({formLeads.length})
           </button>
           <button onClick={() => setFilter('unassigned')}
             className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${filter === 'unassigned' ? 'bg-amber-500/20 border-amber-400/50 text-amber-200' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
@@ -8072,7 +8199,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
               <option value="" className="bg-gray-900">— اختر السيلز —</option>
               {salesUsers.map((u: User) => (
                 <option key={u.id} value={u.id} className="bg-gray-900">
-                  {u.name} (عنده {assignedLeads.filter((l: AssignedLead) => l.salesId === u.id).length})
+                  {u.name} (عنده {formLeads.filter((l: AssignedLead) => l.salesId === u.id).length} من هذا الفورم)
                 </option>
               ))}
             </select>
@@ -8162,12 +8289,17 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
           <p className="text-[var(--text-muted)]">لا يوجد أرقام موزعة</p>
         </div>
       )}
-      {assignedLeads.length > 0 && visible.length === 0 && (
+      {activeForm !== 'all' && formLeads.length === 0 && assignedLeads.length > 0 && (
+        <p className="text-center text-sm text-[var(--text-dim)] py-8">
+          لا توجد أرقام في هذا الفورم بعد — أول ما يوصل منه رقم يظهر هنا تلقائياً
+        </p>
+      )}
+      {formLeads.length > 0 && visible.length === 0 && (
         <p className="text-center text-sm text-[var(--text-dim)] py-8">لا نتائج مطابقة للبحث أو التصفية</p>
       )}
 
       {/* حصة كل سيلز: كل السيلز وعدد الأرقام لكل واحد، والضغط على الاسم يفتح أرقامه */}
-      {showShare && <SalesShareModal leads={assignedLeads} users={users} onClose={() => setShowShare(false)} />}
+      {showShare && <SalesShareModal leads={formLeads} users={users} onClose={() => setShowShare(false)} />}
     </div>
   );
 }
@@ -8619,6 +8751,9 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
         if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الحفظ');
         applyConfig(json.config);
       }
+      // القوائم المسندلة في «عملاء كامبين» و«توزيع الأرقام» تتحدّث فوراً:
+      // الفورم المفعّل الآن يظهر فيهما بلا حاجة لإعادة تحميل الصفحة.
+      window.dispatchEvent(new Event(ACTIVE_FORMS_EVENT));
       setNotice(message);
     } catch (error: any) {
       setNotice(error?.message || 'تعذّر الحفظ');
