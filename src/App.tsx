@@ -206,7 +206,7 @@ const mapsLink = (lat: number, lng: number): string =>
 
 // ===== الرتب الثلاث: CEO / Team Leader / Sales Agent =====
 // الرتبة تُشتق من الدور الداخلي (admin = CEO، supervisor = Team Leader، sales = Sales Agent)
-const RANK_LABEL: Record<string, string> = { admin: 'CEO', supervisor: 'Team Leader', sales: 'Sales Agent', developer: 'System Dev' };
+const RANK_LABEL: Record<string, string> = { admin: 'CEO', supervisor: 'Team Leader', sales: 'Sales Agent', developer: 'System Deveolper' };
 const RANK_AR: Record<string, string> = { admin: 'المدير التنفيذي', supervisor: 'قائد فريق', sales: 'سيلز', developer: 'مطوّر النظام' };
 const rankLabel = (role?: string): string => RANK_LABEL[role || 'sales'] || 'Sales Agent';
 const rankAr = (role?: string): string => RANK_AR[role || 'sales'] || 'سيلز';
@@ -2422,8 +2422,12 @@ function App() {
           </div>
 
           <div className="sidebar-scroll">
-            {navGroups.map((group) => (
-              <div key={group.label} className="mb-1">
+            {navGroups.map((group, groupIndex) => (
+              <div key={`${group.section || ''}-${group.label}`} className="mb-1">
+                {/* فاصل قسم كبير فوق مجموعة القوائم (قوائم السيلز / قوائم الادارة) */}
+                {group.section && group.section !== navGroups[groupIndex - 1]?.section && (
+                  <p className="nav-section-title">{group.section}</p>
+                )}
                 <p className="nav-group-title">{group.label}</p>
                 {group.items.map((tab) => (
                   <button
@@ -3354,7 +3358,7 @@ function AdminChatView({ currentUser, users, messages, onSend, onRead, onGroupRe
 
 // تبويبات القائمة الجانبية — كل تبويب له مهمة واحدة، مقسّمة في مجموعات واضحة
 type NavItem = { id: TabType; icon: typeof Home; label: string };
-type NavGroup = { label: string; items: NavItem[] };
+type NavGroup = { label: string; items: NavItem[]; section?: string };
 
 function getTabGroups(role: string, developer = false): NavGroup[] {
   const salesGroups: NavGroup[] = [
@@ -3442,15 +3446,20 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
     ];
   }
 
-  // حساب المطوّر: قوائم الإدارة والسيلز معاً (بلا تكرار التبويب نفسه)
+  // حساب المطوّر: قوائم السيلز أولاً ثم قوائم الإدارة (بلا تكرار التبويب نفسه)،
+  // مع عنوان قسم واضح فوق كل مجموعة.
   if (developer) {
     const seen = new Set<TabType>();
     const merged: NavGroup[] = [];
-    for (const group of [...adminGroups, ...salesGroups]) {
-      const items = group.items.filter((item) => !seen.has(item.id));
-      items.forEach((item) => seen.add(item.id));
-      if (items.length) merged.push({ ...group, items });
-    }
+    const addSection = (groups: NavGroup[], section: string) => {
+      for (const group of groups) {
+        const items = group.items.filter((item) => !seen.has(item.id));
+        items.forEach((item) => seen.add(item.id));
+        if (items.length) merged.push({ ...group, section, items });
+      }
+    };
+    addSection(salesGroups, 'قوائم السيلز');
+    addSection(adminGroups, 'قوائم الادارة');
     return merged;
   }
 
@@ -9878,7 +9887,13 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
     );
 
     localStorage.setItem('crm_users', JSON.stringify(updated));
-    await pushKey('crm_users');
+    // الحفظ لا يُعتبر ناجحاً إلا بعد تأكيد الرفع للسيرفر — وإلا يبقى التغيير
+    // على هذا الجهاز وحده (خصوصاً تغيير كلمة المرور).
+    const pushed = await pushKey('crm_users');
+    if (!pushed) {
+      setError('تعذّر حفظ التغيير على السيرفر — تحقّق من الاتصال ثم حاول مرة أخرى');
+      return;
+    }
     setSaved(true);
     setTimeout(() => { onSuccess(); onClose(); }, 900);
   };

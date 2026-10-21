@@ -624,6 +624,23 @@ html[data-mode="dark"] .imp-bar-back { color: var(--warn); }
   padding: 12px 10px 4px;
 }
 
+/* فاصل قسم كبير في القائمة الجانبية (قوائم السيلز / قوائم الادارة):
+   خط رفيع ونص أوضح قليلاً من عنوان المجموعة — بيفصل البابين بلا زحمة. */
+.nav-section-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-strong);
+  opacity: 0.75;
+  padding: 14px 10px 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.sidebar-scroll > div:first-child .nav-section-title {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 2px;
+}
+
 .side-link {
   position: relative;
   z-index: 3;
@@ -822,7 +839,7 @@ html[data-mode="dark"] .imp-bar-back { color: var(--warn); }
 }
 .app-sidebar.rail .sidebar-brand { justify-content: center; padding: 2px 0 12px; gap: 0; }
 .app-sidebar.rail .sidebar-brand > div { display: none; }
-.app-sidebar.rail .nav-group-title { display: none; }
+.app-sidebar.rail .nav-group-title, .app-sidebar.rail .nav-section-title { display: none; }
 .app-sidebar.rail .side-link { justify-content: center; padding: 8px 0; gap: 0; }
 .app-sidebar.rail .side-link > span.truncate { display: none; }
 .app-sidebar.rail .side-link > .side-badge {
