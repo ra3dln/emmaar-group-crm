@@ -114,10 +114,23 @@ export async function enablePush(user: { id: string; name?: string }): Promise<P
   try {
     let subscription = await registration.pushManager.getSubscription();
     if (!subscription) {
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidKey),
-      });
+      try {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidKey),
+        });
+      } catch (error) {
+        // اشتراك قديم بمفتاح سابق يمنع إنشاء اشتراك جديد (InvalidStateError):
+        // نلغيه ثم نُنشئ اشتراكاً بالمفتاح الحالي — بدون ذلك يبقى الجهاز
+        // «مفعّلاً» في الشاشة ولا يصله أي إشعار إطلاقاً.
+        const stale = await registration.pushManager.getSubscription();
+        if (!stale) throw error;
+        await stale.unsubscribe();
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidKey),
+        });
+      }
     }
 
     const res = await fetch('/api/push/subscribe', {
@@ -175,6 +188,15 @@ export async function sendTestPush(user: { id: string }): Promise<PushResult> {
     if (res.ok && json.ok) {
       return { ok: true, state: 'subscribed', message: 'تم إرسال إشعار تجريبي حقيقي من السيرفر' };
     }
+    // لا أجهزة مسجّلة: الإشعار التجريبي المحلي لا يُثبت أن الإشعار الخارجي يعمل،
+    // فنقولها صريحة بدل ما يظن المستخدم أن الإشعارات مضبوطة.
+    if (res.ok && Number(json.total) === 0) {
+      return {
+        ok: false,
+        state: 'default',
+        message: 'مفيش أجهزة مسجّلة لهذا الحساب — اضغط «تفعيل على هذا الجهاز» ثم أعد التجربة',
+      };
+    }
     const local = await localNotification('🔔 إشعار تجريبي', 'هذا إشعار من الجهاز نفسه — لتفعيل الإشعارات والموقع مقفول اضغط «تفعيل الإشعارات»');
     return local
       ? { ok: true, state: 'default', message: 'وصل إشعار محلي (لم يُرسل من السيرفر بعد)' }
@@ -184,6 +206,44 @@ export async function sendTestPush(user: { id: string }): Promise<PushResult> {
     return local
       ? { ok: true, state: 'default', message: 'وصل إشعار محلي' }
       : { ok: false, state: 'default', message: 'تعذّر إرسال الإشعار التجريبي' };
+  }
+}
+
+// ===== دفع فوري للتذكيرات المستحقة =====
+// المجدول الخارجي قد يتأخر/يتوقف فتبقى التذكيرات بلا إشعار خارجي. أي جهاز مفتوح
+// ينادي هذا المسار فيرسل السيرفر الإشعارات المستحقة لبقية الأجهزة فوراً.
+let lastFlushAt = 0;
+export async function flushPush(force = false): Promise<{ sent?: number } | null> {
+  // نداء واحد كل ٦٠ ثانية كحد أقصى من هذا الجهاز
+  if (!force && Date.now() - lastFlushAt < 60_000) return null;
+  lastFlushAt = Date.now();
+  try {
+    const res = await fetch('/api/push/flush', { method: 'POST', credentials: 'same-origin' });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export type PushHealth = {
+  devices: number;
+  totalDevices: number;
+  lastRunAt: number;
+  lastResult: { sent?: number; reminders?: number; messages?: number } | null;
+  lastError: string;
+  dueReminders: number;
+  serverTime: number;
+};
+
+// تشخيص الإشعارات: أجهزتي المسجلة + آخر تشغيل للمُشغّل + آخر نتيجة إرسال
+export async function pushHealth(): Promise<PushHealth | null> {
+  try {
+    const res = await fetch('/api/push/health', { credentials: 'same-origin', cache: 'no-store' });
+    if (!res.ok) return null;
+    return (await res.json()) as PushHealth;
+  } catch {
+    return null;
   }
 }
 
@@ -244,6 +304,20 @@ export async function resyncPush(user: { id: string; name?: string }): Promise<P
   if (!pushSupported()) return 'unsupported';
   if (Notification.permission !== 'granted') return pushState();
   try {
+    // اشتراك قديم بمفتاح سابق لا يصلح: نرجّع الحالة «غير مشترك» حتى يفعّله المستخدم
+    // من جديد بدل أن يضل فاكراً الإشعارات شغّالة وهي ميتة.
+    const keyNow = await fetchVapidKey();
+    const existing = await navigator.serviceWorker.getRegistration(SW_URL);
+    const current = await existing?.pushManager.getSubscription();
+    if (current && keyNow) {
+      const used = current.options?.applicationServerKey;
+      if (used) {
+        const a = new Uint8Array(used as ArrayBuffer);
+        const b = urlBase64ToUint8Array(keyNow);
+        const same = a.length === b.length && a.every((value, index) => value === b[index]);
+        if (!same) return 'default';
+      }
+    }
     // نسجّل العامل أولاً (لو المتصفح مسحه) وبننتظر جاهزيته بحد أقصى ٤ ثوانٍ
     // حتى لا يعلّق التطبيق لو الإشعارات مش مسجّلة في هذا المتصفح أصلاً.
     await registerWorker();

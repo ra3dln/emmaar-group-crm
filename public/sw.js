@@ -14,6 +14,17 @@ self.addEventListener('fetch', (event) => {
 
 const ICON = '/icon-192.png';
 
+// عرض الإشعار بأمان: بعض المتصفحات (وآيفون) ترفض خصائص مثل actions/renotify
+// فترفض الإشعار كله. لو حدث ذلك نعرضه بدون الخصائص الاختيارية بدل ما يضيع.
+const showSafe = async (title, options) => {
+  try {
+    await self.registration.showNotification(title, options);
+  } catch {
+    const { actions, renotify, ...rest } = options;
+    await self.registration.showNotification(title, rest);
+  }
+};
+
 // ===== إشعار يصل من السيرفر والموقع مقفول =====
 self.addEventListener('push', (event) => {
   let data = {};
@@ -36,6 +47,8 @@ self.addEventListener('push', (event) => {
     dir: 'rtl',
     lang: 'ar',
     timestamp: Date.now(),
+    // التذكير يبقى على الشاشة حتى يُتخذ فيه إجراء — رسالة الشات تكفيها لمسة
+    requireInteraction: (data.kind || '') === 'reminder',
     data: { url: data.url || '/', id: data.id || '', phone: data.phone || '', kind: data.kind || '' },
     actions: [
       { action: 'open', title: 'فتح ومتابعة' },
@@ -44,7 +57,8 @@ self.addEventListener('push', (event) => {
   };
 
   // إشعار واحد لكل حدث في وقته — ممنوع أي حلقة إعادة عرض (كانت بتعمل رنة متكررة).
-  event.waitUntil(self.registration.showNotification(title, options));
+  // التذكيرات تبقى على الشاشة (requireInteraction) حتى لا تفوت لو الجهاز بعيد.
+  event.waitUntil(showSafe(title, options));
 });
 
 // ===== ضغط المستخدم على الإشعار =====
@@ -95,7 +109,7 @@ self.addEventListener('message', (event) => {
   const msg = event.data || {};
   if (msg.type === 'notify') {
     event.waitUntil(
-      self.registration.showNotification(msg.title || 'إعمار جروب', {
+      showSafe(msg.title || 'إعمار جروب', {
         body: msg.body || '',
         icon: ICON,
         badge: ICON,

@@ -120,7 +120,12 @@ function encryptPayload(subscription, payloadBuffer) {
 }
 
 // ---------- إرسال إشعار لاشتراك واحد ----------
-export async function sendPush(subscription, payload, keys, subject = 'mailto:crm@emmagroup.local') {
+// موضوع VAPID: بعض خدمات الإشعارات (آبل خاصةً) ترفض `mailto` لنطاق غير حقيقي فيفشل
+// الإرسال بصمت. رابط الموقع (https) مقبول من كل الخدمات — ويمكن تجاوزه من البيئة.
+export const PUSH_SUBJECT =
+  String(process.env.PUSH_SUBJECT || '').trim() || 'https://emmaar-group-crm.vercel.app';
+
+export async function sendPush(subscription, payload, keys, subject = PUSH_SUBJECT) {
   const data = Buffer.from(JSON.stringify(payload));
   const body = encryptPayload(subscription, data);
   const { jwt, publicKey } = vapidHeader(subscription.endpoint, keys, subject);
@@ -187,7 +192,10 @@ const readBody = (req) =>
 
 // ---------- نواة خدمة الإشعارات (واجهة HTTP) ----------
 // كل الوصول للتخزين يمر عبر مُسبِّبات غير متزامنة، فلا يفرق المنطق بين ملف محلي وقاعدة مشتركة.
-function buildPushHandler({ getKeys, loadDb, saveDb, auth = null, logger = console }) {
+function buildPushHandler({ getKeys, loadDb, saveDb, stateStore = null, auth = null, logger = console }) {
+  // حالة الإرسال (آخر تشغيل/آخر نتيجة) — تُقرأ للتشخيص وتُحدَّث بعد كل دورة
+  const loadState = () => (stateStore ? stateStore.load() : Promise.resolve({}));
+  const saveState = (value) => (stateStore ? stateStore.save(value) : Promise.resolve(value));
   // إرسال لكل اشتراكات مستخدم معيّن، وحذف الاشتراكات المنتهية تلقائياً
   const pushToUser = async (userId, payload) => {
     const keys = await getKeys();
@@ -283,6 +291,53 @@ function buildPushHandler({ getKeys, loadDb, saveDb, auth = null, logger = conso
         return send(res, 200, { ok: result.sent > 0, ...result });
       }
 
+      // ===== تشخيص الإشعارات: لماذا لم يصل الإشعار =====
+      // يرجع ما يحتاجه المستخدم ليعرف بنفسه: أجهزته المسجلة، آخر مرة عمل فيها
+      // المُشغّل الدوري، نتيجة آخر إرسال، وعدد التذكيرات المستحقة الآن.
+      if (url === '/api/push/health' && req.method === 'GET') {
+        const db = await loadDb();
+        const subs = db.data.crm_push_subs || [];
+        const mine = session ? subs.filter((s) => s.userId === session.u) : [];
+        const state = (await loadState()) || {};
+        const now = Date.now();
+        const due = (db.data.crm_reminders || []).filter((r) => {
+          if (r.isCompleted || !r.dateTime) return false;
+          if (session && r.userId !== session.u) return false;
+          const at = Date.parse(r.dateTime);
+          return Number.isFinite(at) && at <= now;
+        }).length;
+        return send(res, 200, {
+          ok: true,
+          devices: mine.length,
+          totalDevices: subs.length,
+          lastRunAt: state.lastRunAt || 0,
+          lastResult: state.lastResult || null,
+          lastError: state.lastError || '',
+          dueReminders: due,
+          serverTime: now,
+        });
+      }
+
+      // ===== إرسال فوري للتذكيرات/الرسائل المستحقة =====
+      // المجدول الخارجي قد يتأخر أو يتوقف، وفي هذه الحالة تبقى التذكيرات بلا إشعار
+      // خارجي. أي جهاز مفتوح للفريق ينادي هذا المسار، فيرسل السيرفر الإشعارات
+      // المستحقة لبقية الأجهزة فوراً — بلا انتظار المجدول. الدورة محمية بفاصل زمني
+      // حتى لا يتحول كل جهاز إلى مُشغّل دائم على القاعدة.
+      if (url === '/api/push/flush' && req.method === 'POST') {
+        const result = await processPushTick({
+          getKeys,
+          loadDb,
+          saveDb,
+          loadState,
+          saveState,
+          logger,
+          minIntervalMs: 20000,
+          // جهاز الطالب نفسه عنده تنبيه داخل الصفحة، فلا نكرر له نفس التذكير
+          skipReminderUserIds: session ? [session.u] : [],
+        });
+        return send(res, 200, { ok: true, ...result });
+      }
+
       if (url === '/api/push/state' && req.method === 'GET') {
         const db = await loadDb();
         const subs = db.data.crm_push_subs || [];
@@ -304,17 +359,40 @@ function buildPushHandler({ getKeys, loadDb, saveDb, auth = null, logger = conso
 // ---------- نواة معالجة التذكيرات والرسائل (مشتركة بين المحلي والاستضافة) ----------
 const RECENT_MS = 6 * 60 * 60 * 1000; // لا نرسل لتذكير أقدم من ٦ ساعات
 
-async function processPushTick({ getKeys, loadDb, saveDb, loadState, saveState, logger = console }) {
+async function processPushTick({
+  getKeys,
+  loadDb,
+  saveDb,
+  loadState,
+  saveState,
+  logger = console,
+  minIntervalMs = 0,
+  skipReminderUserIds = [],
+}) {
   const keys = await getKeys();
   const db = await loadDb();
   const data = db.data || {};
   const subs = data.crm_push_subs || [];
-  if (!subs.length) return { sent: 0, reminders: 0, messages: 0 };
-
   const state = (await loadState()) || { reminders: {}, messages: {} };
   state.reminders = state.reminders || {};
   state.messages = state.messages || {};
   const now = Date.now();
+
+  // نداء يدوي متكرر (كل جهاز مفتوح): لا نضرب القاعدة أكثر من مرة كل ٢٠ ثانية
+  if (minIntervalMs && state.lastRunAt && now - Number(state.lastRunAt) < minIntervalMs) {
+    return { sent: 0, reminders: 0, messages: 0, skipped: true, lastRunAt: state.lastRunAt };
+  }
+
+  // وقت التشغيل يُسجَّل في نهاية الدورة (مع نتيجتها) — تشخيص «هل المجدول شغّال؟» يعتمد عليه
+  if (!subs.length) {
+    await saveState({
+      ...state,
+      lastRunAt: now,
+      lastResult: { sent: 0, reminders: 0, messages: 0 },
+    }).catch(() => {});
+    return { sent: 0, reminders: 0, messages: 0 };
+  }
+
   let changed = false;
   let sent = 0;
 
@@ -344,6 +422,8 @@ async function processPushTick({ getKeys, loadDb, saveDb, loadState, saveState, 
   let reminderCount = 0;
   for (const reminder of data.crm_reminders || []) {
     if (reminder.isCompleted || !reminder.dateTime) continue;
+    // صاحب التذكير اللي طلب الإرسال بنفسه عنده تنبيه داخل الصفحة — لا نكرره له
+    if (skipReminderUserIds.includes(reminder.userId)) continue;
     const dueAt = Date.parse(reminder.dateTime);
     if (Number.isNaN(dueAt)) continue;
     if (dueAt > now || now - dueAt > RECENT_MS) continue;
@@ -382,20 +462,25 @@ async function processPushTick({ getKeys, loadDb, saveDb, loadState, saveState, 
     changed = true;
   }
 
-  if (changed) {
-    // تنظيف السجل القديم حتى لا يكبر بلا حدود
-    const prune = (map) => {
-      const out = {};
-      for (const [key, value] of Object.entries(map || {})) {
-        if (now - Number(value) < 7 * 24 * 60 * 60 * 1000) out[key] = value;
-      }
-      return out;
-    };
-    try {
-      await saveState({ reminders: prune(state.reminders), messages: prune(state.messages) });
-    } catch (error) {
-      logger.warn?.('[push] تعذّر حفظ حالة الإرسال:', String(error?.message || error));
+  // تنظيف السجل القديم حتى لا يكبر بلا حدود
+  const prune = (map) => {
+    const out = {};
+    for (const [key, value] of Object.entries(map || {})) {
+      if (now - Number(value) < 7 * 24 * 60 * 60 * 1000) out[key] = value;
     }
+    return out;
+  };
+  // نحفظ دائمًا وقت التشغيل ونتيجته (ولو لم يُرسل شيئاً) حتى يعرف المستخدم
+  // من شاشة التشخيص أن المُشغّل يعمل فعلاً وأن المشكلة في الاشتراك أو الصلاحية.
+  try {
+    await saveState({
+      reminders: prune(state.reminders),
+      messages: prune(state.messages),
+      lastRunAt: now,
+      lastResult: { sent, reminders: reminderCount, messages: messageCount, changed },
+    });
+  } catch (error) {
+    logger.warn?.('[push] تعذّر حفظ حالة الإرسال:', String(error?.message || error));
   }
 
   return { sent, reminders: reminderCount, messages: messageCount };
@@ -413,7 +498,8 @@ export function createPushHandler({ storeFile, vapidFile, stateFile, auth = null
     return { version: Number(db.version) || 0, data: db.data || {} };
   };
   const saveDb = async (data, version) => writeJson(storeFile, { version, data });
-  const { handler, pushToUser } = buildPushHandler({ getKeys, loadDb, saveDb, auth, logger });
+  const stateStore = fileJsonStore(stateFile, { reminders: {}, messages: {} });
+  const { handler, pushToUser } = buildPushHandler({ getKeys, loadDb, saveDb, stateStore, auth, logger });
   return { handler, pushToUser, publicKey: keys.publicKey };
 }
 
@@ -447,11 +533,11 @@ export function startPushLoop({ storeFile, vapidFile, stateFile, intervalMs = 60
 // ---------- مسبار الاستضافة: قاعدة بيانات مشتركة ----------
 // نفس المنطق تماماً، لكن الاشتراكات والتذكيرات وحالة الإرسال ومفاتيح VAPID كلها
 // في القاعدة المشتركة — فلا تضيع مع الاستدعاء البارد ولا تحتاج ملفاً على القرص.
-export async function createPushHandlerFromStore({ storage, vapidStore, auth = null, logger = console }) {
+export async function createPushHandlerFromStore({ storage, vapidStore, stateStore = null, auth = null, logger = console }) {
   const getKeys = createVapidAccessor(vapidStore);
   const loadDb = () => storage.load();
   const saveDb = (data, version) => storage.save({ version, data });
-  const { handler, pushToUser } = buildPushHandler({ getKeys, loadDb, saveDb, auth, logger });
+  const { handler, pushToUser } = buildPushHandler({ getKeys, loadDb, saveDb, stateStore, auth, logger });
   return { handler, pushToUser };
 }
 

@@ -69,7 +69,8 @@ const users = [
 db = { version: 1, data: { crm_users: users } };
 
 const authHandler = createAuthHandler({ storage, env: process.env });
-const { handler: pushHandler } = await createPushHandlerFromStore({ storage, vapidStore, auth: process.env });
+// نفس مخزن الحالة الذي يقرأه المُشغّل الدوري — وإلا فشاشة التشخيص لا تعرف آخر تشغيل
+const { handler: pushHandler } = await createPushHandlerFromStore({ storage, vapidStore, stateStore, auth: process.env });
 
 const server = http.createServer((req, res) => {
   const path = (req.url || '').split('?')[0];
@@ -200,6 +201,54 @@ try {
   const before = db.data.crm_reminders.filter((r) => r.userId === 'sales-2' && !r.isCompleted).length;
   const fifth = await processPushesOnce({ storage, vapidStore, stateStore });
   check('بلا أجهزة لمندوب آخر: لا إرسال ولا استهلاك', fifth.sent === 0 && before === 1, JSON.stringify(fifth));
+
+  // ===== ٩) التشخيص: هل الإشعارات شغّالة فعلاً؟ =====
+  const healthAnon = await call('/api/push/health');
+  check('التشخيص بلا جلسة مرفوض (401)', healthAnon.status === 401);
+
+  const health = await call('/api/push/health', { cookie });
+  check('التشخيص يعرض أجهزة صاحب الجلسة', health.status === 200 && health.json.devices === 1, JSON.stringify(health.json));
+  check('التشخيص يعرض وقت آخر تشغيل للمُشغّل', Number(health.json.lastRunAt) > 0);
+  check('التشخيص يعرض نتيجة آخر إرسال', !!health.json.lastResult);
+  check('التشخيص يعدّ التذكيرات المستحقة', Number(health.json.dueReminders) >= 1);
+
+  // ===== ١٠) الإرسال الفوري من أي جهاز مفتوح =====
+  const flushAnon = await call('/api/push/flush', { method: 'POST' });
+  check('الإرسال الفوري بلا جلسة مرفوض (401)', flushAnon.status === 401);
+
+  db.data.crm_reminders.push({
+    id: 'r-mine-now', userId: 'sales-1', clientName: 'عميل جهازي', clientPhone: '01010001007',
+    dateTime: iso(-1), isCompleted: false,
+  });
+  const beforeFlush = received.length;
+  const flush = await call('/api/push/flush', { method: 'POST', cookie });
+  check(
+    'جهاز الطالب لا يستقبل إشعاراً مكرراً لتذكيره هو',
+    flush.status === 200 && flush.json.reminders === 0 && received.length === beforeFlush,
+    JSON.stringify(flush.json)
+  );
+  const flushAgain = await call('/api/push/flush', { method: 'POST', cookie });
+  check('النداء المتكرر خلال ٢٠ ثانية لا يضرب القاعدة', flushAgain.json?.skipped === true, JSON.stringify(flushAgain.json));
+
+  // المجدول (أو جهاز آخر) يرسل نفس التذكير لأنه لم يُستهلك من جهاز الطالب
+  const afterFlush = await processPushesOnce({ storage, vapidStore, stateStore });
+  check(
+    'التذكير لم يُعلَّم كمُرسَل من جهاز الطالب — وصله من المسار العادي',
+    afterFlush.reminders === 1 && received.length === beforeFlush + 1,
+    JSON.stringify(afterFlush)
+  );
+
+  // ===== ١١) ربط الواجهة وملف العامل =====
+  const fs = await import('node:fs');
+  const app = fs.readFileSync('src/App.tsx', 'utf8');
+  const pushSrc = fs.readFileSync('src/push.ts', 'utf8');
+  const swSrc = fs.readFileSync('public/sw.js', 'utf8');
+  check('ضغط الجرس يعلّم الرسائل مقروءة في السجل المشترك', /openNotifyCenter[\s\S]{0,400}handleMarkRead\(direct\)/.test(app));
+  check('تعليم الرسائل مقروءة يُرفع للسيرفر', /handleMarkRead[\s\S]{0,900}pushKey\('crm_messages'\)/.test(app));
+  check('كل جهاز مفتوح يطلب الإرسال المستحق دورياً', app.includes('flushPush()') && app.includes("setInterval(run, 60_000)"));
+  check('مركز الإشعارات يعرض تشخيص الإشعارات الخارجية', app.includes('pushHealth') && app.includes('الإشعارات الخارجية'));
+  check('إعادة الاشتراك عند مفتاح قديم (InvalidStateError)', pushSrc.includes('stale.unsubscribe()'));
+  check('ملف العامل يعرض الإشعار بمحاولة آمنة', swSrc.includes('showSafe') && swSrc.includes('requireInteraction'));
 
   console.log(`\n✅ كل اختبارات الإشعارات نجحت (${passed}).`);
 } finally {

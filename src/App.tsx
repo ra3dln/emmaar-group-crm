@@ -20,7 +20,7 @@ import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, 
 import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, syncNow } from './sync';
 import { buildPreview, buildSampleCsv, buildFakeCampaignCsv, decodeText, parseTable, type ImportPreview } from './leadImport';
 import { alarm, loadAlarmSettings, saveAlarmSettings, DEFAULT_ALARM_SETTINGS, type AlarmSettings } from './alarm';
-import { enablePush, disablePush, pushState, sendTestPush, pushSupported, registerWorker, resyncPush, localNotification, type PushState } from './push';
+import { enablePush, disablePush, pushState, sendTestPush, pushSupported, registerWorker, resyncPush, localNotification, flushPush, pushHealth, type PushState, type PushHealth } from './push';
 import {
   arabicMoneyValue,
   arabicNumberValue,
@@ -1349,6 +1349,25 @@ function App() {
     resyncPush({ id: currentUser.id, name: currentUser.name }).then(setNotifState).catch(() => {});
   }, [currentUser?.id, showNotifyPanel]);
 
+  // ===== إرسال التذكيرات المستحقة من أي جهاز مفتوح =====
+  // الإشعار الخارجي كان يعتمد على مجدول خارجي وحده؛ فلو تأخر أو توقف تبقى التذكيرات
+  // بلا إشعار. كل جهاز مفتوح يطلب من السيرفر (مرة كل دقيقة) إرسال المستحق الآن،
+  // فيوصل إشعار لبقية الأجهزة حتى لو الموقع مقفول عندها.
+  useEffect(() => {
+    if (!currentUser) return;
+    const run = () => {
+      if (document.visibilityState !== 'visible') return;
+      void flushPush();
+    };
+    run();
+    const timer = window.setInterval(run, 60_000);
+    document.addEventListener('visibilitychange', run);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', run);
+    };
+  }, [currentUser?.id]);
+
   // ===== قياس ارتفاع الشريط العلوي فعلياً =====
   // الشريط ثابت (fixed)، فالمحتوى يحتاج مساحة محجوزة بمقداره — وارتفاعه يتغيّر
   // مع حجم الشاشة والخط وطول اسم الحساب. القياس هنا يمنع أي نص يمرّ تحته.
@@ -1784,6 +1803,8 @@ function App() {
     setMessages(next);
     // الرفع الفوري ضروري لإشعار الطرف الآخر والموقع مقفول (السيرفر يرسل Web Push)
     void pushKey('crm_messages');
+    // وندفع الإشعار للطرف الآخر في نفس اللحظة (بدل انتظار المجدول أو الدورة)
+    void flushPush(true);
   };
 
   // تعليم رسائل غرفة المدراء كمقروءة لهذا العضو فقط (كل مدير له علامة قراءة مستقلة)
@@ -1801,6 +1822,8 @@ function App() {
     if (!changed) return;
     saveMessages(next);
     setMessages(next);
+    // «قرأتها» تسافر لباقي الأجهزة والسيرفر فوراً — لا تبقى حالة هذا الجهاز
+    void pushKey('crm_messages');
   };
 
   // تعليم الرسائل الواردة كمقروءة (يظهر للمُرسِل «تم القراءة»)
@@ -1819,6 +1842,7 @@ function App() {
     if (!changed) return;
     saveMessages(next);
     setMessages(next);
+    void pushKey('crm_messages');
   };
 
   // ===== توزيع الأرقام: رقم واحد أو دفعة كاملة على مندوب واحد =====
@@ -2292,9 +2316,19 @@ function App() {
 
   // فتح جرس الإشعارات = قراءة كل الإشعارات دفعة واحدة (كل التبويبات)،
   // لا التبويب المعروض فقط — وإلا يظل العدّاد الأحمر عالقاً بعد الإغلاق.
+  // فتح الجرس = قراءة الإشعارات فعلاً: التذكيرات والمكالمات تُعلَّم مقروءة على
+  // هذا الجهاز، والرسائل تُعلَّم مقروءة في السجل المشترك نفسه (readAt / readBy)
+  // — وليس في ذاكرة المتصفح فقط. بدونه كانت الرسائل ترجع «جديدة» بعد كل تحديث.
   const openNotifyCenter = () => {
     setShowNotifyCenter(true);
     markNotifsSeen(unseenNotifIds);
+    const unread = notifMessages.filter((m: ChatMessage) => !isMessageReadBy(m, currentUser.id));
+    const direct = unread.filter((m: ChatMessage) => m.toId !== MANAGERS_GROUP_ID).map((m) => m.id);
+    const group = unread.filter((m: ChatMessage) => m.toId === MANAGERS_GROUP_ID).map((m) => m.id);
+    if (direct.length) handleMarkRead(direct);
+    if (group.length) handleMarkGroupRead(group);
+    // الإشعارات الخارجية: نطلب من السيرفر إرسال أي تذكير/رسالة مستحقة الآن
+    void flushPush();
   };
 
   const markNotifsSeen = (idsToMark: string[]) => {
@@ -5846,6 +5880,42 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
       ];
 
   const [tab, setTab] = useState<string>(tabs[0].id);
+  // ===== حالة الإشعارات الخارجية =====
+  // الرقم الغايب في الشكوى: هل الجهاز مسجّل؟ هل السيرفر بعت فعلاً؟ هنا يظهر
+  // الجواب من السيرفر نفسه بدل التخمين — مع زر تفعيل وزر إشعار تجريبي.
+  const [device, setDevice] = useState<PushState>('default');
+  const [health, setHealth] = useState<PushHealth | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushNote, setPushNote] = useState('');
+  const refreshPush = useCallback(async () => {
+    setDevice(await pushState());
+    setHealth(await pushHealth());
+  }, []);
+  useEffect(() => { void refreshPush(); }, [refreshPush]);
+  const ago = (ms: number) => {
+    if (!ms) return 'لسه ما اشتغلش';
+    const diff = Math.max(0, Date.now() - ms);
+    if (diff < 60_000) return 'قبل لحظات';
+    if (diff < 3_600_000) return `قبل ${Math.floor(diff / 60_000)} دقيقة`;
+    if (diff < 86_400_000) return `قبل ${Math.floor(diff / 3_600_000)} ساعة`;
+    return `قبل ${Math.floor(diff / 86_400_000)} يوم`;
+  };
+  const enableHere = async () => {
+    setPushBusy(true);
+    setPushNote('');
+    const result = await enablePush({ id: user.id, name: user.name });
+    setPushNote(result.message);
+    setPushBusy(false);
+    void refreshPush();
+  };
+  const testHere = async () => {
+    setPushBusy(true);
+    setPushNote('');
+    const result = await sendTestPush({ id: user.id });
+    setPushNote(result.message);
+    setPushBusy(false);
+    void refreshPush();
+  };
   // فتح المركز كلّياً = قراءة كل الإشعارات (كل التبويبات)، والعدّادات تختفي
   // فوراً — المطلوب: بمجرد ضغط الجرس تكون الإشعارات اتقرأت خلاص.
   const [allSeen, setAllSeen] = useState(false);
@@ -5898,6 +5968,43 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
               </button>
             );
           })}
+        </div>
+
+        {/* ===== شريط الإشعارات الخارجية: هل توصل للجهاز فعلاً؟ ===== */}
+        <div className={`push-health ${device === 'subscribed' ? 'is-on' : 'is-off'}`}>
+          <div className="push-health-head">
+            <span className="ph-dot" />
+            <b>{device === 'subscribed' ? 'الإشعارات الخارجية مفعّلة على هذا الجهاز' : 'الإشعارات الخارجية غير مفعّلة على هذا الجهاز'}</b>
+            <span className="ph-devices">
+              {health ? `${health.devices} جهاز لك` : '—'}
+            </span>
+          </div>
+          <p className="ph-line">
+            آخر إرسال من السيرفر: <b>{health ? ago(health.lastRunAt) : '—'}</b>
+            {health?.lastResult ? ` • ${health.lastResult.reminders || 0} تذكير / ${health.lastResult.messages || 0} رسالة` : ''}
+            {health ? ` • تذكيرات مستحقة: ${health.dueReminders}` : ''}
+          </p>
+          {device !== 'subscribed' && (
+            <p className="ph-line ph-warn">
+              {device === 'denied'
+                ? 'المتصفح حاظر الإشعارات لهذا الموقع — اسمح بها من أيقونة 🔒 ثم أعد التحميل.'
+                : 'إشعارات هذا الجهاز مش مفعّلة — من غيرها الجهاز مش هيستقبل تذكيرات والموقع مقفول.'}
+            </p>
+          )}
+          {health && health.lastRunAt > 0 && Date.now() - health.lastRunAt > 10 * 60_000 && (
+            <p className="ph-line ph-warn">
+              مُشغّل الإشعارات متوقف منذ {ago(health.lastRunAt)} — التذكيرات لن تصل لو كل الأجهزة مقفولة.
+              سيولة الحل: افتح الموقع على أي جهاز أو ضع جدولة خارجية تنادي /api/cron.
+            </p>
+          )}
+          <div className="ph-actions">
+            <button type="button" onClick={() => void enableHere()} disabled={pushBusy || device === 'unsupported'}>
+              {device === 'subscribed' ? 'إعادة تسجيل هذا الجهاز' : 'تفعيل على هذا الجهاز'}
+            </button>
+            <button type="button" onClick={() => void testHere()} disabled={pushBusy || device !== 'subscribed'}>إشعار تجريبي</button>
+            <button type="button" onClick={() => void refreshPush()} disabled={pushBusy}>تحديث</button>
+          </div>
+          {pushNote && <p className="ph-note">{pushNote}</p>}
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-2 min-h-[180px]">

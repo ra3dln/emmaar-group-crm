@@ -18,6 +18,7 @@ import { redisJsonStore, redisStorage } from '../../server/store.js';
 import { supabaseJsonStore, supabaseStorage } from '../../server/supabase.js';
 
 const VAPID_KEY = 'crm:push:vapid';
+const STATE_KEY = 'crm:push:state';
 
 // نفضّل Supabase لو مضبوط، وإلا Redis — نفس الواجهة تماماً
 const supaStorage = supabaseStorage(process.env);
@@ -26,12 +27,17 @@ const useSupabase = supaStorage.configured && supaVapid.configured;
 
 const storage = useSupabase ? supaStorage : redisStorage(process.env);
 const vapidStore = useSupabase ? supaVapid : redisJsonStore(process.env, VAPID_KEY);
+// نفس مخزن حالة الإرسال الذي يقرأه/يكتبه المُشغّل الدوري — به يعرف التشخيص
+// آخر مرة عمل فيها المُشغّل فعلاً ونتيجة آخر إرسال.
+const stateStore = useSupabase
+  ? supabaseJsonStore(process.env, STATE_KEY)
+  : redisJsonStore(process.env, STATE_KEY);
 
 // مُسبِّب الإشعارات يُبنى مرة واحدة لكل استدعاء دالة (الدالة قد تُعاد استخدامها عبر حافة واحدة)
 let cached = null;
 async function getHandler() {
   if (cached) return cached;
-  cached = createPushHandlerFromStore({ storage, vapidStore, auth: process.env });
+  cached = createPushHandlerFromStore({ storage, vapidStore, stateStore, auth: process.env });
   return cached;
 }
 

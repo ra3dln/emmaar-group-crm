@@ -42,10 +42,19 @@ const SOURCE_FILE = path.resolve(env.CRM_SOURCE_FILE || path.join(root, 'data', 
 const { fileStorage, createStoreHandler } = await import('../server/store.js');
 const { createAuthHandler } = await import('../server/authApi.js');
 const { createLeadSourceHandler } = await import('../server/leadSource.js');
+const { createPushHandler } = await import('../server/push.js');
 
 const authHandler = createAuthHandler({ storage: fileStorage(DB_FILE), env });
 const storeHandler = createStoreHandler({ ...fileStorage(DB_FILE), auth: env });
 const leadHandler = createLeadSourceHandler({ storeFile: DB_FILE, configFile: SOURCE_FILE, auth: env });
+// الإشعارات: نفس المعالج الحقيقي (مفتاح/اشتراك/تشخيص/إرسال مستحق) حتى تُجرَّب
+// شاشة حالة الإشعارات على هذا السيرفر بلا حاجة إلى خدمة إشعارات خارجية.
+const { handler: pushHandler } = createPushHandler({
+  storeFile: DB_FILE,
+  vapidFile: path.resolve(env.CRM_VAPID_FILE || path.join(root, 'data', 'e2e-vapid.json')),
+  stateFile: path.resolve(env.CRM_PUSH_STATE || path.join(root, 'data', 'e2e-push-state.json')),
+  auth: env,
+});
 
 const DIST = path.join(root, 'dist');
 const MIME = {
@@ -81,6 +90,7 @@ const server = http.createServer((req, res) => {
   if (pathname.startsWith('/api/auth')) return authHandler(req, res);
   if (pathname.startsWith('/api/store')) return storeHandler(req, res);
   if (pathname.startsWith('/api/lead-source')) return leadHandler(req, res);
+  if (pathname.startsWith('/api/push')) return pushHandler(req, res);
   if (pathname.startsWith('/api/')) {
     res.statusCode = 404;
     res.end('{}');
