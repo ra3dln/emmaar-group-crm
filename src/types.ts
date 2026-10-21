@@ -5,6 +5,9 @@ export interface User {
   name: string;
   phone?: string;
   role: 'admin' | 'supervisor' | 'sales';
+  // حساب «مطوّر»: رتبته إدارية (كل الصلاحيات وتعديل كلمات المرور) لكنه
+  // يظهر في قائمة الحسابات كحساب سيلز عادي، وتظهر له قوائم السيلز والإدارة معاً.
+  developer?: boolean;
   team?: string;
   isActive: boolean;
   createdAt: string;

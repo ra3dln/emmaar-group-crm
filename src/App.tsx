@@ -212,6 +212,10 @@ const rankLabel = (role?: string): string => RANK_LABEL[role || 'sales'] || 'Sal
 const rankAr = (role?: string): string => RANK_AR[role || 'sales'] || 'سيلز';
 const rankClass = (role?: string): string =>
   role === 'admin' ? 'rank-chip rank-ceo' : role === 'supervisor' ? 'rank-chip rank-leader' : 'rank-chip rank-sales';
+// حساب «المطوّر» رتبته إدارية فعلياً (كل الصلاحيات + تغيير كلمات المرور)،
+// لكنه يُعرَض في كل مكان كحساب سيلز عادي — بطلب صريح من صاحب النظام.
+const displayRoleOf = (user?: { role?: string; developer?: boolean } | null): string =>
+  user && user.developer ? 'sales' : (user?.role || 'sales');
 // المدير التنفيذي (CEO) فقط يملك صلاحيات النظام الكاملة — قائد الفريق يدير فريقه
 const isCeoRole = (role?: string): boolean => role === 'admin';
 const isManagerRole = (role?: string): boolean => role === 'admin' || role === 'supervisor';
@@ -2091,7 +2095,10 @@ function App() {
   const unreadCount = messages.filter((m) => messageTargetsUser(m, currentUser) && !isMessageReadBy(m, currentUser.id)).length;
   const chatTab: TabType = currentUser.role === 'sales' ? 'chat' : 'admin-chat';
   // مجموعات القائمة الجانبية + عنوان الصفحة الحالية + الحرف الأول من الاسم داخل الصورة الرمزية
-  const navGroups = getTabGroups(currentUser.role);
+  const navGroups = getTabGroups(currentUser.role, !!(currentUser as User).developer);
+  // حساب المطوّر يرى واجهات السيلز والإدارة معاً
+  const isDeveloper = !!(currentUser as User).developer;
+  const isSalesView = currentUser.role === 'sales' || isDeveloper;
   const activeTabMeta = navGroups.flatMap((g) => g.items).find((t) => t.id === activeTab);
   const userInitial = (currentUser.name || '؟').trim().charAt(0);
   const closeSidebar = () => setSidebarOpen(false);
@@ -2229,7 +2236,7 @@ function App() {
   const unseenNotifCount = unseenNotifIds.filter((id) => !seenNotifIds.includes(id)).length;
 
   // شارة «عملاء كامبين»: أرقام جديدة لسه ما اتضافتش لعملاء السيلز
-  const newCampaignLeadsCount = currentUser.role === 'sales'
+  const newCampaignLeadsCount = isSalesView
     ? assignedLeads.filter((l) => l.salesId === currentUser.id && l.status === 'new' && isCampaignRecord(l)).length
     : 0;
 
@@ -2370,7 +2377,7 @@ function App() {
           <span className="imp-bar-text">
             <span className="imp-bar-title">
               داخل حساب <b className="imp-bar-who">{currentUser.name}</b>
-              <span className="imp-bar-role">{rankLabel(currentUser.role)}</span>
+              <span className="imp-bar-role">{rankLabel(displayRoleOf(currentUser))}</span>
             </span>
             <span className="imp-bar-note">ما تراه الآن هو ما يراه هذا الحساب بالضبط</span>
           </span>
@@ -2449,7 +2456,7 @@ function App() {
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-bold text-[var(--text-strong)] truncate">{currentUser.name}</p>
                 <span className={`${rankClass(currentUser.role)} !mt-0.5`}>
-                  {rankLabel(currentUser.role)}
+                  {rankLabel(displayRoleOf(currentUser))}
                 </span>
               </div>
               <button
@@ -2491,7 +2498,7 @@ function App() {
               <span className="who">
                 <b>{currentUser.name}</b>
                 <span className={rankClass(currentUser.role)}>
-                  {rankLabel(currentUser.role)}
+                  {rankLabel(displayRoleOf(currentUser))}
                 </span>
               </span>
             </div>
@@ -2615,8 +2622,8 @@ function App() {
           </div>
         )}
         <AnimatePresence mode="wait">
-          {activeTab === 'dashboard' && currentUser.role === 'sales' && <DashboardView stats={stats} clients={clients} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} onOpenStatus={setStatusBoard} onCompleteReminder={completeReminder} onActed={markReminderAction} />}
-          {activeTab === 'clients' && currentUser.role === 'sales' && <ClientsView
+          {activeTab === 'dashboard' && isSalesView && <DashboardView stats={stats} clients={clients} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} onOpenStatus={setStatusBoard} onCompleteReminder={completeReminder} onActed={markReminderAction} />}
+          {activeTab === 'clients' && isSalesView && <ClientsView
             currentUser={currentUser}
             onRefresh={loadData}
             clients={filteredClients}
@@ -2643,10 +2650,10 @@ function App() {
               void pushKey('crm_assigned_leads');
             }}
           />}
-          {activeTab === 'pipeline' && currentUser.role !== 'sales' && <AdminPipelineView clients={scopedClients} users={scopedUsers} currentUser={currentUser} onUpdateStage={handleUpdateClientStage} onSelectClient={setSelectedClient} />}
-          {activeTab === 'pipeline' && currentUser.role === 'sales' && <PipelineView clients={clients} onUpdateStage={handleUpdateClientStage} />}
+          {activeTab === 'pipeline' && currentUser.role !== 'sales' && !isDeveloper && <AdminPipelineView clients={scopedClients} users={scopedUsers} currentUser={currentUser} onUpdateStage={handleUpdateClientStage} onSelectClient={setSelectedClient} />}
+          {activeTab === 'pipeline' && isSalesView && <PipelineView clients={clients} onUpdateStage={handleUpdateClientStage} />}
           {activeTab === 'properties' && <PropertiesView properties={filteredProperties} users={users} currentUser={currentUser} searchTerm={propertySearch} onSearch={setPropertySearch} onSelect={setSelectedProperty} onAdd={() => setShowAddProperty(true)} />}
-          {activeTab === 'reminders' && currentUser.role === 'sales' && <RemindersView reminders={reminders} onComplete={(id: string) => {
+          {activeTab === 'reminders' && isSalesView && <RemindersView reminders={reminders} onComplete={(id: string) => {
             markReminderAction(id);
             const target = reminders.find((r: Reminder) => r.id === id);
             if (target?.clientId) addClientActivity(target.clientId, 'reminder', 'تم تنفيذ التذكير', currentUser.name);
@@ -2674,7 +2681,7 @@ function App() {
             localStorage.setItem('crm_reminders', JSON.stringify(JSON.parse(localStorage.getItem('crm_reminders') || '[]').filter((r: Reminder) => r.id !== id)));
             void pushKey('crm_reminders');
           }} onAdd={() => setShowAddReminder(true)} />}
-          {activeTab === 'daily-feedback' && currentUser.role === 'sales' && <DailyFeedbackView feedbacks={dailyFeedbacks} clients={clients} currentUser={currentUser} callLogs={callLogs.filter((l: CallLog) => l.salesId === currentUser.id)} onDelete={(id: string) => {
+          {activeTab === 'daily-feedback' && isSalesView && <DailyFeedbackView feedbacks={dailyFeedbacks} clients={clients} currentUser={currentUser} callLogs={callLogs.filter((l: CallLog) => l.salesId === currentUser.id)} onDelete={(id: string) => {
             setDailyFeedbacks(dailyFeedbacks.filter(f => f.id !== id));
             localStorage.setItem('crm_daily_feedback', JSON.stringify(JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]').filter((f: DailyFeedback) => f.id !== id)));
             void pushKey('crm_daily_feedback');
@@ -2693,7 +2700,7 @@ function App() {
               loadData();
             }
           }} onAdd={() => setShowAddFeedback(true)} />}
-          {activeTab === 'reports' && currentUser.role === 'sales' && <ReportsView clients={clients} feedbacks={dailyFeedbacks} reminders={reminders} />}
+          {activeTab === 'reports' && isSalesView && <ReportsView clients={clients} feedbacks={dailyFeedbacks} reminders={reminders} />}
           {activeTab === 'admin-users' && currentUser.role !== 'sales' && <AdminUsersView users={scopedUsers} currentUser={currentUser} onSelect={setSelectedUserFeedback} onAdd={() => setShowAddUser(true)} onEdit={setEditingUser} onDelete={setDeletingUser} onImpersonate={handleImpersonate} />}
           {activeTab === 'admin-feedback' && currentUser.role !== 'sales' && <AdminFeedbackView users={scopedUsers.filter((u: User) => u.role === 'sales' || u.role === 'supervisor')} dailyFeedbacks={scopedFeedbacks} clients={scopedClients} callLogs={scopedCallLogs} onSelect={setSelectedUserFeedback} />}
           {/* كل عملاء الشركة: العدد + كارت لكل عميل يفتح التفاصيل كاملة */}
@@ -2707,7 +2714,7 @@ function App() {
           {/* شيت الفورمات: كل فورم لوحده مع تصدير أرقامه وفيدباكه العام */}
           {activeTab === 'admin-forms' && currentUser.role !== 'sales' && <AdminFormsSheetView clients={scopedClients} leads={scopedLeads} />}
           {/* الأرقام الجديدة التي وصلت للمندوب من الكامبينات — الكارت يفتح التفاصيل */}
-          {activeTab === 'new-leads' && currentUser.role === 'sales' && <NewLeadsViewForSales
+          {activeTab === 'new-leads' && isSalesView && <NewLeadsViewForSales
             assignedLeads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id && l.status !== 'closed')}
             onConvert={handleConvertLeadToClient}
             onMarkViewed={(id: string) => {
@@ -2727,7 +2734,7 @@ function App() {
           }} onAssign={handleAssignLeads} />}
           {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={scopedUsers} />}
           {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
-          {activeTab === 'chat' && currentUser.role === 'sales' && <SalesChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} readOnly={!!impersonator} />}
+          {activeTab === 'chat' && isSalesView && <SalesChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} readOnly={!!impersonator} />}
           {activeTab === 'admin-chat' && currentUser.role !== 'sales' && <AdminChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} onGroupRead={handleMarkGroupRead} />}
           {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} />}
         </AnimatePresence>
@@ -3339,7 +3346,7 @@ function AdminChatView({ currentUser, users, messages, onSend, onRead, onGroupRe
 type NavItem = { id: TabType; icon: typeof Home; label: string };
 type NavGroup = { label: string; items: NavItem[] };
 
-function getTabGroups(role: string): NavGroup[] {
+function getTabGroups(role: string, developer = false): NavGroup[] {
   const salesGroups: NavGroup[] = [
     {
       label: 'لوحة العمل',
@@ -3425,6 +3432,18 @@ function getTabGroups(role: string): NavGroup[] {
     ];
   }
 
+  // حساب المطوّر: قوائم الإدارة والسيلز معاً (بلا تكرار التبويب نفسه)
+  if (developer) {
+    const seen = new Set<TabType>();
+    const merged: NavGroup[] = [];
+    for (const group of [...adminGroups, ...salesGroups]) {
+      const items = group.items.filter((item) => !seen.has(item.id));
+      items.forEach((item) => seen.add(item.id));
+      if (items.length) merged.push({ ...group, items });
+    }
+    return merged;
+  }
+
   return role === 'sales' ? salesGroups : adminGroups;
 }
 
@@ -3439,17 +3458,17 @@ const tabKeyOf = (userId: string) => `crm_active_tab_${userId}`;
 // بلا القايمة الزيادة دي، أي تبويب من النوع ده كان بيتقفل فوراً وينط للرئيسية.
 const EXTRA_TABS: Record<string, TabType[]> = { sales: ['new-leads'] };
 
-function isTabAllowed(role: string, tab: string): boolean {
-  const inNav = getTabGroups(role).some((group) => group.items.some((item) => item.id === tab));
+function isTabAllowed(role: string, tab: string, developer = false): boolean {
+  const inNav = getTabGroups(role, developer).some((group) => group.items.some((item) => item.id === tab));
   return inNav || (EXTRA_TABS[role] || []).includes(tab as TabType);
 }
 
 function startTabFor(user: User): TabType {
-  const fallback: TabType = user.role === 'sales' ? 'dashboard' : 'admin-users';
+  const fallback: TabType = user.role === 'sales' || user.developer ? 'dashboard' : 'admin-users';
   try {
     const saved = localStorage.getItem(tabKeyOf(user.id));
     if (!saved) return fallback;
-    return isTabAllowed(user.role, saved) ? (saved as TabType) : fallback;
+    return isTabAllowed(user.role, saved, !!user.developer) ? (saved as TabType) : fallback;
   } catch {
     return fallback;
   }
@@ -7080,7 +7099,7 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
     user.id !== currentUser.id ? !(currentUser.role === 'supervisor' && user.role === 'admin') : true;
   // الدخول لحساب سيلز متاح للإدارة فقط، وبدون أي كلمة مرور
   const canImpersonate = (user: User) =>
-    !!onImpersonate && user.id !== currentUser.id && user.role !== 'admin' && user.isActive;
+    !!onImpersonate && user.id !== currentUser.id && (user.role !== 'admin' || !!user.developer) && user.isActive;
 
   return (
     <div className="space-y-4">
@@ -7129,11 +7148,11 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
               className={`panel p-5 cursor-pointer ${user.isActive ? '' : 'opacity-60'}`}
             >
               <div className="flex items-center gap-3">
-                <span className={`avatar-plate rank-${user.role}`} aria-hidden="true">{user.name[0]}</span>
+                <span className={`avatar-plate rank-${displayRoleOf(user)}`} aria-hidden="true">{user.name[0]}</span>
                 <div className="flex-1 min-w-0">
                   <h4 className="font-bold text-[var(--text-strong)] truncate">{user.name}</h4>
                   <div className="flex items-center gap-1.5 flex-wrap mt-1">
-                    <span className={rankClass(user.role)}>{rankLabel(user.role)}</span>
+                    <span className={rankClass(displayRoleOf(user))}>{rankLabel(displayRoleOf(user))}</span>
                     {user.team && <span className="chip">فريق: {user.team}</span>}
                     {!user.isActive && <span className="st-chip st-lost">موقوف</span>}
                   </div>
