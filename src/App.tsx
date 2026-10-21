@@ -206,16 +206,26 @@ const mapsLink = (lat: number, lng: number): string =>
 
 // ===== الرتب الثلاث: CEO / Team Leader / Sales Agent =====
 // الرتبة تُشتق من الدور الداخلي (admin = CEO، supervisor = Team Leader، sales = Sales Agent)
-const RANK_LABEL: Record<string, string> = { admin: 'CEO', supervisor: 'Team Leader', sales: 'Sales Agent' };
-const RANK_AR: Record<string, string> = { admin: 'المدير التنفيذي', supervisor: 'قائد فريق', sales: 'سيلز' };
+const RANK_LABEL: Record<string, string> = { admin: 'CEO', supervisor: 'Team Leader', sales: 'Sales Agent', developer: 'System Dev' };
+const RANK_AR: Record<string, string> = { admin: 'المدير التنفيذي', supervisor: 'قائد فريق', sales: 'سيلز', developer: 'مطوّر النظام' };
 const rankLabel = (role?: string): string => RANK_LABEL[role || 'sales'] || 'Sales Agent';
 const rankAr = (role?: string): string => RANK_AR[role || 'sales'] || 'سيلز';
 const rankClass = (role?: string): string =>
-  role === 'admin' ? 'rank-chip rank-ceo' : role === 'supervisor' ? 'rank-chip rank-leader' : 'rank-chip rank-sales';
+  role === 'admin'
+    ? 'rank-chip rank-ceo'
+    : role === 'supervisor'
+      ? 'rank-chip rank-leader'
+      : role === 'developer'
+        ? 'rank-chip rank-dev'
+        : 'rank-chip rank-sales';
 // حساب «المطوّر» رتبته إدارية فعلياً (كل الصلاحيات + تغيير كلمات المرور)،
 // لكنه يُعرَض في كل مكان كحساب سيلز عادي — بطلب صريح من صاحب النظام.
 const displayRoleOf = (user?: { role?: string; developer?: boolean } | null): string =>
   user && user.developer ? 'sales' : (user?.role || 'sales');
+// الرتبة التي يراها صاحب الحساب عن نفسه: المطوّر يرى «System Dev»
+// بينما يبقى معروضاً كسيلز عادي في قوائم الحسابات عند الإدارة.
+const selfRoleOf = (user?: { role?: string; developer?: boolean } | null): string =>
+  user && user.developer ? 'developer' : (user?.role || 'sales');
 // المدير التنفيذي (CEO) فقط يملك صلاحيات النظام الكاملة — قائد الفريق يدير فريقه
 const isCeoRole = (role?: string): boolean => role === 'admin';
 const isManagerRole = (role?: string): boolean => role === 'admin' || role === 'supervisor';
@@ -1427,8 +1437,8 @@ function App() {
   useEffect(() => {
     if (!currentUser) return;
     // لو تغيّرت صلاحية الحساب أثناء فتح الصفحة، نرجع لتبويب مسموح بدل شاشة فاضية
-    if (!isTabAllowed(currentUser.role, activeTab)) {
-      setActiveTab(currentUser.role === 'sales' ? 'dashboard' : 'admin-users');
+    if (!isTabAllowed(currentUser.role, activeTab, !!(currentUser as User).developer)) {
+      setActiveTab(currentUser.role === 'sales' || (currentUser as User).developer ? 'dashboard' : 'admin-users');
       return;
     }
     try {
@@ -1436,7 +1446,7 @@ function App() {
     } catch {
       /* التخزين قد يكون معطّلاً — التنقل يعمل عادي بلا حفظ */
     }
-  }, [activeTab, currentUser?.id, currentUser?.role]);
+  }, [activeTab, currentUser?.id, currentUser?.role, (currentUser as User)?.developer]);
 
   // السيرفر رفض أي طلب بيانات (لا جلسة) => نخفي كل شيء ونعرض شاشة الدخول فوراً
   useEffect(() => {
@@ -2377,7 +2387,7 @@ function App() {
           <span className="imp-bar-text">
             <span className="imp-bar-title">
               داخل حساب <b className="imp-bar-who">{currentUser.name}</b>
-              <span className="imp-bar-role">{rankLabel(displayRoleOf(currentUser))}</span>
+              <span className="imp-bar-role">{rankLabel(selfRoleOf(currentUser))}</span>
             </span>
             <span className="imp-bar-note">ما تراه الآن هو ما يراه هذا الحساب بالضبط</span>
           </span>
@@ -2455,8 +2465,8 @@ function App() {
               <span className="avatar">{userInitial}</span>
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-bold text-[var(--text-strong)] truncate">{currentUser.name}</p>
-                <span className={`${rankClass(currentUser.role)} !mt-0.5`}>
-                  {rankLabel(displayRoleOf(currentUser))}
+                <span className={`${rankClass(selfRoleOf(currentUser))} !mt-0.5`}>
+                  {rankLabel(selfRoleOf(currentUser))}
                 </span>
               </div>
               <button
@@ -2497,8 +2507,8 @@ function App() {
               <span className="top-avatar">{userInitial}</span>
               <span className="who">
                 <b>{currentUser.name}</b>
-                <span className={rankClass(currentUser.role)}>
-                  {rankLabel(displayRoleOf(currentUser))}
+                <span className={rankClass(selfRoleOf(currentUser))}>
+                  {rankLabel(selfRoleOf(currentUser))}
                 </span>
               </span>
             </div>

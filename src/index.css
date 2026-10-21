@@ -861,7 +861,7 @@ html[data-mode="dark"] .imp-bar-back { color: var(--warn); }
   padding: 0;
   white-space: nowrap;
 }
-.rank-ceo, .rank-leader, .rank-sales {
+.rank-ceo, .rank-leader, .rank-sales, .rank-dev {
   background: none;
   border: none;
   color: var(--text-dim);
