@@ -2250,6 +2250,13 @@ function App() {
     ? assignedLeads.filter((l) => l.salesId === currentUser.id && l.status === 'new' && isCampaignRecord(l)).length
     : 0;
 
+  // فتح جرس الإشعارات = قراءة كل الإشعارات دفعة واحدة (كل التبويبات)،
+  // لا التبويب المعروض فقط — وإلا يظل العدّاد الأحمر عالقاً بعد الإغلاق.
+  const openNotifyCenter = () => {
+    setShowNotifyCenter(true);
+    markNotifsSeen(unseenNotifIds);
+  };
+
   const markNotifsSeen = (idsToMark: string[]) => {
     if (!idsToMark.length) return;
     const merged = Array.from(new Set([...seenNotifIds, ...idsToMark])).slice(-500);
@@ -2417,7 +2424,9 @@ function App() {
             <img src="/emaar-logo.jpg" alt="Emaar Group" className="brand-mark object-cover" />
             <div className="min-w-0">
               <h1 className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight truncate">Emaar Group CRM</h1>
-              <p className="text-[10.5px] text-[var(--text-dim)] truncate">إعمار جروب — إدارة العملاء</p>
+              <p className="text-[10.5px] text-[var(--text-dim)] truncate">
+                {(currentUser as User).developer ? 'System Deveolper' : 'إعمار جروب — إدارة العملاء'}
+              </p>
             </div>
           </div>
 
@@ -2507,7 +2516,7 @@ function App() {
             </div>
 
             {/* أيقونة دائرية + الاسم وتحته الرتبة (CEO / Team Leader / Sales Agent) — يظهران حتى على الهاتف */}
-            <div className="top-user" title={`${currentUser.name} — ${rankAr(currentUser.role)}`}>
+            <div className="top-user" title={`${currentUser.name} — ${rankAr(selfRoleOf(currentUser))}`}>
               <span className="top-avatar">{userInitial}</span>
               <span className="who">
                 <b>{currentUser.name}</b>
@@ -2521,7 +2530,7 @@ function App() {
             {/* الإشعارات — مقسّمة: تذكيرات / أرقام جديدة / رسائل / اتصالات الفريق */}
             <motion.button
               whileHover={{ scale: 1.05 }}
-              onClick={() => { alarm.unlock(); setShowNotifyCenter(true); }}
+              onClick={() => { alarm.unlock(); openNotifyCenter(); }}
               title="الإشعارات"
               className="icon-btn relative"
             >
@@ -2598,7 +2607,7 @@ function App() {
                 className="rc-action"
                 onClick={() => {
                   if (currentUser.role === 'sales') setActiveTab('reminders');
-                  else setShowNotifyCenter(true);
+                  else openNotifyCenter();
                 }}
               >
                 عرض التذكيرات
@@ -3566,7 +3575,7 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
           transition={{ delay: 0.2 }}
           className="text-3xl sm:text-4xl font-bold gradient-text mb-3"
         >
-          {done ? 'تم تسجيل الدخول' : `مرحباً ${user.name}`}
+          {done ? 'تم تسجيل الدخول' : `مرحباً ${user.developer ? 'مطور النظام' : user.name}`}
         </motion.h1>
 
         <motion.p
@@ -3834,7 +3843,7 @@ function DashboardView({ stats, clients, reminders, properties, currentUser, imp
     <div className="space-y-6">
       <div className="page-intro">
         <div className="min-w-0">
-          <h2>أهلاً {String(currentUser.name || '').split(' ')[0]}</h2>
+          <h2>أهلاً {currentUser.developer ? 'مطور النظام' : String(currentUser.name || '').split(' ')[0]}</h2>
           <p>{new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
         </div>
         <div className="page-intro-facts">
@@ -5518,13 +5527,19 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
       ];
 
   const [tab, setTab] = useState<string>(tabs[0].id);
-  const countFor = (id: string) => unseenIds.filter((x: string) => x.startsWith(id === 'calls' ? 'call-' : id === 'reminders' ? 'rem-' : id === 'leads' ? 'lead-' : 'msg-')).length;
-
-  // فتح أي تبويب = قراءة ما فيه (فيختفي العدّاد الأحمر الخاص به)
+  // فتح المركز كلّياً = قراءة كل الإشعارات (كل التبويبات)، والعدّادات تختفي
+  // فوراً — المطلوب: بمجرد ضغط الجرس تكون الإشعارات اتقرأت خلاص.
+  const [allSeen, setAllSeen] = useState(false);
   useEffect(() => {
-    const prefix = tab === 'calls' ? 'call-' : tab === 'reminders' ? 'rem-' : tab === 'leads' ? 'lead-' : 'msg-';
-    onSeen(unseenIds.filter((x: string) => x.startsWith(prefix)));
-  }, [tab, unseenIds.join('|')]);
+    onSeen(unseenIds);
+    setAllSeen(true);
+  }, [unseenIds.join('|')]);
+  const countFor = (id: string) =>
+    allSeen
+      ? 0
+      : unseenIds.filter((x: string) =>
+          x.startsWith(id === 'calls' ? 'call-' : id === 'reminders' ? 'rem-' : id === 'leads' ? 'lead-' : 'msg-')
+        ).length;
 
   const goTarget = tab === 'reminders' ? 'reminders' : tab === 'calls' ? (isSales ? 'daily-feedback' : 'admin-feedback') : (isSales ? 'chat' : 'admin-chat');
 
