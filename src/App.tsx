@@ -206,7 +206,7 @@ const mapsLink = (lat: number, lng: number): string =>
 
 // ===== الرتب الثلاث: CEO / Team Leader / Sales Agent =====
 // الرتبة تُشتق من الدور الداخلي (admin = CEO، supervisor = Team Leader، sales = Sales Agent)
-const RANK_LABEL: Record<string, string> = { admin: 'CEO', supervisor: 'Team Leader', sales: 'Sales Agent', developer: 'System Deveolper' };
+const RANK_LABEL: Record<string, string> = { admin: 'CEO', supervisor: 'Team Leader', sales: 'Sales Agent', developer: 'System Dev' };
 const RANK_AR: Record<string, string> = { admin: 'المدير التنفيذي', supervisor: 'قائد فريق', sales: 'سيلز', developer: 'مطوّر النظام' };
 const rankLabel = (role?: string): string => RANK_LABEL[role || 'sales'] || 'Sales Agent';
 const rankAr = (role?: string): string => RANK_AR[role || 'sales'] || 'سيلز';
@@ -1437,8 +1437,10 @@ function App() {
   useEffect(() => {
     if (!currentUser) return;
     // لو تغيّرت صلاحية الحساب أثناء فتح الصفحة، نرجع لتبويب مسموح بدل شاشة فاضية
-    if (!isTabAllowed(currentUser.role, activeTab, !!(currentUser as User).developer)) {
-      setActiveTab(currentUser.role === 'sales' || (currentUser as User).developer ? 'dashboard' : 'admin-users');
+    const devMenus = !!(currentUser as User).developer && !impersonator;
+    const guardRole = impersonator && (currentUser as User).developer ? 'sales' : currentUser.role;
+    if (!isTabAllowed(guardRole, activeTab, devMenus)) {
+      setActiveTab(guardRole === 'sales' || devMenus ? 'dashboard' : 'admin-users');
       return;
     }
     try {
@@ -1446,7 +1448,7 @@ function App() {
     } catch {
       /* التخزين قد يكون معطّلاً — التنقل يعمل عادي بلا حفظ */
     }
-  }, [activeTab, currentUser?.id, currentUser?.role, (currentUser as User)?.developer]);
+  }, [activeTab, currentUser?.id, currentUser?.role, (currentUser as User)?.developer, impersonator?.id]);
 
   // السيرفر رفض أي طلب بيانات (لا جلسة) => نخفي كل شيء ونعرض شاشة الدخول فوراً
   useEffect(() => {
@@ -1729,7 +1731,7 @@ function App() {
     setImpersonator(currentUser);
     setCurrentUser(target);
     localStorage.setItem('current_user', JSON.stringify(target));
-    setActiveTab(target.role === 'sales' ? 'dashboard' : 'admin-users');
+    setActiveTab(target.role === 'sales' || target.developer ? 'dashboard' : 'admin-users');
     setLoginAnimation(target);
   };
 
@@ -2105,7 +2107,11 @@ function App() {
   const unreadCount = messages.filter((m) => messageTargetsUser(m, currentUser) && !isMessageReadBy(m, currentUser.id)).length;
   const chatTab: TabType = currentUser.role === 'sales' ? 'chat' : 'admin-chat';
   // مجموعات القائمة الجانبية + عنوان الصفحة الحالية + الحرف الأول من الاسم داخل الصورة الرمزية
-  const navGroups = getTabGroups(currentUser.role, !!(currentUser as User).developer);
+  // أثناء «الدخول لحساب» من الإدارة يظهر لحساب المطوّر قوائم السيلز فقط
+  // (الإدارة تشوفه زي أي مندوب)، أما صاحبه فيرى القوائمتين.
+  const developerMenus = !!(currentUser as User).developer && !impersonator;
+  const menuRole = impersonator && (currentUser as User).developer ? 'sales' : currentUser.role;
+  const navGroups = getTabGroups(menuRole, developerMenus);
   // حساب المطوّر يرى واجهات السيلز والإدارة معاً
   const isDeveloper = !!(currentUser as User).developer;
   const isSalesView = currentUser.role === 'sales' || isDeveloper;
@@ -2425,7 +2431,7 @@ function App() {
             <div className="min-w-0">
               <h1 className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight truncate">Emaar Group CRM</h1>
               <p className="text-[10.5px] text-[var(--text-dim)] truncate">
-                {(currentUser as User).developer ? 'System Deveolper' : 'إعمار جروب — إدارة العملاء'}
+                {(currentUser as User).developer ? 'إعمار جروب — System Deveolper' : 'إعمار جروب — إدارة العملاء'}
               </p>
             </div>
           </div>
