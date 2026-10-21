@@ -12,7 +12,7 @@ import {
   Shield, UserCheck, Settings, Eye, EyeOff, Upload, Download,
   LogIn, Undo2, UserCog, MessageCircle, Send, ArrowRight, Moon, Sun, Menu,
   Rows, LayoutList, List, ShieldAlert, MapPinOff, Navigation,
-  ChevronRight, ChevronLeft,
+  ChevronRight, ChevronLeft, Filter,
   Workflow, BellRing, ClipboardList, MessagesSquare, Share2, LineChart,
   Megaphone, Globe, Link2, Facebook, ChevronDown, Palette
 } from 'lucide-react';
@@ -31,6 +31,15 @@ import {
 } from './arabicNumbers';
 import { buildXlsx, downloadBlob } from './xlsx';
 import { formNameOf, formKeyOf, activeFormNamesOf, UNKNOWN_FORM } from './campaignForms';
+import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
+import {
+  FEEDBACK_STATUS_TO_STAGE,
+  LEAD_STATUS_TO_FEEDBACK_STATUS,
+  buildWorkNumbers,
+  feedbackBucketOf,
+  feedbackByPhone,
+  latestFeedbackStatusOf,
+} from './feedbackBuckets';
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import {
@@ -499,7 +508,7 @@ const addClientActivity = (
   type: string,
   text: string,
   by?: string,
-  opts?: { authorId?: string; callStatus?: DailyFeedback['callStatus']; cardId?: string; skipCard?: boolean; status?: string }
+  opts?: { authorId?: string; callStatus?: DailyFeedback['callStatus']; cardId?: string; skipCard?: boolean; status?: string; cancelReason?: string }
 ): void => {
   if (!clientId) return;
   try {
@@ -516,8 +525,15 @@ const addClientActivity = (
         by: by || '',
         // حالة الفيدباك تسافر مع الحدث نفسه فتظهر في الشريط وبجوار الكومنت
         ...(opts?.status ? { status: opts.status } : {}),
+        // سبب الإلغاء يُحفظ مع الحدث **وعلى العميل** — فلتر القائمة يقرأه مباشرة
+        ...(opts?.cancelReason ? { cancelReason: opts.cancelReason } : {}),
       };
-      return { ...c, activities: [entry, ...(c.activities || [])].slice(0, 60), updatedAt: nowIso };
+      return {
+        ...c,
+        ...(opts?.cancelReason ? { cancelReason: opts.cancelReason } : {}),
+        activities: [entry, ...(c.activities || [])].slice(0, 60),
+        updatedAt: nowIso,
+      };
     });
     localStorage.setItem('crm_clients', JSON.stringify(next));
 
@@ -2207,6 +2223,19 @@ function App() {
   const scopedProperties = teamMemberIds ? properties.filter((p) => inTeam(p.userId)) : properties;
 
   const activeReminders = reminders.filter(r => !r.isCompleted);
+
+  // ===== كل رقم في نطاق المستخدم: عملاء مسجّلون + أرقام التوزيع =====
+  // لوحة «حالات عملائي» و«المراحل» كانتا تعدّان العملاء المسجّلين فقط، فأرقام
+  // التوزيع — وهي شغل المندوب الحقيقي — ما كانتش بتتعدّ والرقم يفضل صفر ثابت.
+  const workNumbers = (() => {
+    const snapshots = feedbackByPhone(scopedFeedbacks, scopedCallLogs);
+    const myLeads =
+      currentUser.role === 'sales'
+        ? scopedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)
+        : scopedLeads;
+    return buildWorkNumbers(scopedClients, myLeads, snapshots);
+  })();
+
   // المستحق الآن — الأحدث أولاً (نفس ترتيب تبويب التذكيرات)
   const dueReminders = reminders
     .filter((r) => isReminderDue(r) && (currentUser.role !== 'admin' || r.userId === currentUser.id))
@@ -2279,11 +2308,17 @@ function App() {
 
   // حفظ مكالمة: سجل مشترك للإدارة + حدث في الخط الزمني للعميل + تذكير بموعد الاتصال القادم
   // + الكومنت ينزل تلقائياً كبطاقة في «الفيدباك اليومي» (فوق: خط العميل الزمني ينزل هو كذلك من addClientActivity)
-  const handleSaveCall = (payload: { result: 'answered' | 'no-answer'; comment: string; status?: string; nextCallAt: string }) => {
+  const handleSaveCall = (payload: { result: 'answered' | 'no-answer'; comment: string; status?: string; cancelReason?: string; nextCallAt: string }) => {
     const target = callClient;
     if (!target) return;
-    // «لم يرد» تُكتب في الكومنتات تلقائياً — حتى لو لم يكتب المندوب شيئاً
-    const callComment = payload.comment.trim() || (payload.result === 'no-answer' ? NO_ANSWER_COMMENT : '');
+    // الحالة المختارة من القائمة المنسدلة (follow up / done deal …) هي الحالة المسجّلة،
+    // ولو مافيش اختيار نرجع للحالة الافتراضية حسب نتيجة الاتصال.
+    const pickedStatus = payload.status || (payload.result === 'answered' ? 'follow-up' : 'no-answer');
+    // «لم يرد» و«إلغاء» يكتبان الكومنت تلقائياً — حتى لو لم يكتب المندوب شيئاً
+    const callComment =
+      payload.comment.trim() ||
+      (payload.result === 'no-answer' ? NO_ANSWER_COMMENT : '') ||
+      (pickedStatus === 'cancellation' ? cancelReasonLabelOf(payload.cancelReason) : '');
     const log: CallLog = {
       id: crypto.randomUUID(),
       clientId: target.id,
@@ -2305,15 +2340,13 @@ function App() {
       payload.result === 'answered' ? 'اتصال: تم الرد ' : 'اتصال: لم يرد ',
       currentUser.name
     );
-    // الحالة المختارة من القائمة المنسدلة (follow up / done deal …) هي الحالة المسجّلة،
-    // ولو مافيش اختيار نرجع للحالة الافتراضية حسب نتيجة الاتصال.
-    const pickedStatus = payload.status || (payload.result === 'answered' ? 'follow-up' : 'no-answer');
     if (callComment) {
       addClientActivity(target.id, 'feedback', `من المكالمة: ${callComment}`, currentUser.name, {
         authorId: currentUser.id,
         callStatus: payload.result === 'answered' ? 'called' : 'no-answer',
         cardId: log.id,
         status: pickedStatus,
+        ...(pickedStatus === 'cancellation' && payload.cancelReason ? { cancelReason: payload.cancelReason } : {}),
       });
     }
     // المرحلة تتحرّك تلقائياً مع الحالة المختارة (زي صندوق الفيدباك)
@@ -2656,7 +2689,7 @@ function App() {
           </div>
         )}
         <AnimatePresence mode="wait">
-          {activeTab === 'dashboard' && isSalesView && <DashboardView stats={stats} clients={clients} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} onOpenStatus={setStatusBoard} onCompleteReminder={completeReminder} onActed={markReminderAction} />}
+          {activeTab === 'dashboard' && isSalesView && <DashboardView stats={stats} clients={clients} numbers={workNumbers} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} onOpenStatus={setStatusBoard} onCompleteReminder={completeReminder} onActed={markReminderAction} />}
           {activeTab === 'clients' && isSalesView && <ClientsView
             currentUser={currentUser}
             onRefresh={loadData}
@@ -2668,6 +2701,7 @@ function App() {
             onSearch={setSearchTerm}
             onSelect={setSelectedClient}
             onAdd={() => setShowAddClient(true)}
+            onAddNumber={currentUser.role === 'sales' ? () => setShowAddAssignedLead(true) : undefined}
             onCall={(c: Client) => setCallClient(c)}
             onConvert={handleConvertLeadToClient}
             // شريط الفيدباك في الكارت: كل حالة تنقل العميل إلى مرحلتها تلقائياً
@@ -2685,7 +2719,7 @@ function App() {
             }}
           />}
           {activeTab === 'pipeline' && currentUser.role !== 'sales' && !isDeveloper && <AdminPipelineView clients={scopedClients} users={scopedUsers} currentUser={currentUser} onUpdateStage={handleUpdateClientStage} onSelectClient={setSelectedClient} />}
-          {activeTab === 'pipeline' && isSalesView && <PipelineView clients={clients} onUpdateStage={handleUpdateClientStage} />}
+          {activeTab === 'pipeline' && isSalesView && <PipelineView clients={clients} numbers={workNumbers} onUpdateStage={handleUpdateClientStage} />}
           {activeTab === 'properties' && <PropertiesView properties={filteredProperties} users={users} currentUser={currentUser} searchTerm={propertySearch} onSearch={setPropertySearch} onSelect={setSelectedProperty} onAdd={() => setShowAddProperty(true)} />}
           {activeTab === 'reminders' && isSalesView && <RemindersView reminders={reminders} onComplete={(id: string) => {
             markReminderAction(id);
@@ -2751,6 +2785,7 @@ function App() {
           {/* الأرقام الجديدة التي وصلت للمندوب من الكامبينات — الكارت يفتح التفاصيل */}
           {activeTab === 'new-leads' && isSalesView && <NewLeadsViewForSales
             assignedLeads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id && l.status !== 'closed')}
+            onAdd={() => setShowAddAssignedLead(true)}
             onConvert={handleConvertLeadToClient}
             onMarkViewed={(id: string) => {
               const target = assignedLeads.find((l: AssignedLead) => l.id === id);
@@ -2858,9 +2893,7 @@ function App() {
         {statusBoard && (
           <StatusBoardView
             statusId={statusBoard}
-            clients={currentUser.role === 'sales'
-              ? clients.filter((c: Client) => c.userId === currentUser.id || c.assignedTo === currentUser.id)
-              : clients}
+            numbers={workNumbers}
             onClose={() => setStatusBoard(null)}
             onCall={(c: Client) => setCallClient(c)}
             onSelect={(c: Client) => { setStatusBoard(null); setSelectedClient(c); }}
@@ -3841,13 +3874,18 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
 }
 
 // Dashboard View
-function DashboardView({ stats, clients, reminders, properties, currentUser, impersonating, onOpenStatus, onCompleteReminder, onActed }: any) {
+function DashboardView({ stats, clients, numbers = [], reminders, properties, currentUser, impersonating, onOpenStatus, onCompleteReminder, onActed }: any) {
   const dueReminders = reminders
     .filter((r: Reminder) => isReminderDue(r) && !r.isCompleted)
     .slice()
     .sort((a: Reminder, b: Reminder) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
-  // عملاي أنا فقط — خانات الحالات تحسب أرقامي
-  const myClients = (clients || []).filter((c: Client) => c.userId === currentUser.id || c.assignedTo === currentUser.id);
+  // عدّادات الحالات تحسب الأرقام المعروضة في هذه الصفحة نفسها.
+  // البيانات محصورة أصلاً في loadData (السيلز يرى عملاءه، والأدمن/المطوّر يرون الكل)،
+  // وكانت التصفية الثانية هنا تُفرّغ العدّادات لصفر لكل رقم ليس باسم صاحب الحساب
+  // مباشرةً (حساب المطوّر مثلاً) رغم أن الرقم ظاهر في القائمة — وهو العيب المُبلّغ عنه.
+  const myClients = (clients || []) as Client[];
+  // لوحة الحالات تعدّ كل رقم في نطاقي (عميل مسجّل أو رقم في التوزيع) — لا العملاء وحدهم
+  const scopeNumbers: any[] = numbers.length ? numbers : myClients;
   const [todayRecord, setTodayRecord] = useState<Attendance | undefined>(() => getTodayCheckIn(currentUser.id));
   const myHistory = getAttendance().filter((a: Attendance) => a.userId === currentUser.id).sort((a: Attendance, b: Attendance) => b.checkInAt.localeCompare(a.checkInAt)).slice(0, 7);
   
@@ -3896,11 +3934,13 @@ function DashboardView({ stats, clients, reminders, properties, currentUser, imp
       <section className="panel status-panel">
         <div className="panel-head">
           <h3>حالات عملائي</h3>
-          <span className="chip">{myClients.length} رقم</span>
+          <span className="chip">{scopeNumbers.length} رقم</span>
         </div>
         <div className="status-buckets">
           {FEEDBACK_STATUSES.map((s) => {
-            const n = myClients.filter((c: Client) => latestFeedbackStatusOf(c) === s.id).length;
+            const n = scopeNumbers.filter((record: any) =>
+              (record.bucket || feedbackBucketOf(record)) === s.id
+            ).length;
             return (
               <button
                 key={s.id}
@@ -4338,9 +4378,8 @@ const NO_ANSWER_COMMENT = 'No answer';
 // فالعميل يظهر في تبويب الفيدباك من لحظته الأولى بلا أي خطوة يدوية.
 const NEW_CLIENT_FEEDBACK = 'عميل جديد — لم يتم التواصل معه بعد';
 
-// آخر حالة فيدباك على العميل: أحدث حدث في الخط الزمني يحمل حالة (الأحداث مرتّبة بالأحدث أولاً)
-const latestFeedbackStatusOf = (c: any): string =>
-  String((c?.activities || []).find((a: ClientActivity) => a?.status)?.status || '');
+// آخر حالة فيدباك على العميل — انظر src/feedbackBuckets.ts
+// (فيه أيضاً السقوط على المرحلة عند غياب حالة، حتى لا تبقى عدّادات اللوحة صفراً)
 // آخر فيدباك للعميل: نُفضّل آخر حدث يحمل حالة (فيدباك مسجّل من الشريط أو من مكالمة)
 // حتى لا يحل حدث «تغيير مرحلة» التلقائي مكان الكومنت الذي كتبه المندوب.
 const lastCommentOf = (c: any): ClientActivity | null => {
@@ -4452,6 +4491,29 @@ function StatusMenu({ value, onPick, label = 'تسجيل فيدباك', classNam
 function FeedbackBar({ client, onPick }: { client: any; onPick?: (statusId: string) => void }) {
   const active = latestFeedbackStatusOf(client);
   return <StatusMenu value={active} onPick={(id) => onPick?.(id)} className="fb-bar-menu" />;
+}
+
+// ===== قائمة سبب الإلغاء =====
+// تظهر لحظة اختيار «cancellation» في أي صندوق فيدباك في النظام، واختيار سبب يكتب
+// الكومنت تلقائياً (نفس سلوك «no answer») ويُحفظ السبب مع العميل فلترةً لاحقاً.
+function CancelReasonPicker({ value, onChange, className = '' }:
+  { value?: string; onChange: (id: string) => void; className?: string }) {
+  return (
+    <label className={`cancel-reason ${className}`.trim()}>
+      <span className="cr-label">سبب الإلغاء — cancel reason *</span>
+      <select value={value || ''} onChange={(e) => onChange(e.target.value)} className="cr-select">
+        <option value="">— اختر سبب الإلغاء —</option>
+        {CANCEL_REASONS.map((reason) => (
+          <option key={reason.id} value={reason.id}>
+            {reason.label} — {reason.ar}
+          </option>
+        ))}
+      </select>
+      <span className="cr-hint">
+        {value ? `الكومنت هيتكتب: ${cancelReasonLabelOf(value)}` : 'اختيار السبب يكتب الكومنت تلقائياً ويحفظه مع الرقم'}
+      </span>
+    </label>
+  );
 }
 
 // حالة فيدباك صغيرة تُعرض بجوار الكومنت (في الخط الزمني وفي تبويب الفيدباك)
@@ -4743,25 +4805,36 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
 // قائمة العملاء للمندوب: الأرقام الواردة من الإدارة + عملاؤه في **قائمة واحدة** بلا أي تقسيم،
 // وكل كارت يحمل شريطاً لونياً وشارة توضح مصدر العميل (Facebook / Campaign / External…)
 // مع صندوق اختيارات سريع جمب الاسم: new / follow up / closed deal.
-function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedbacks = [], searchTerm, onSearch, onSelect, onAdd, onCall, onConvert, onLeadViewed, onSetStage, onRefresh }: any) {
+function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedbacks = [], searchTerm, onSearch, onSelect, onAdd, onAddNumber, onCall, onConvert, onLeadViewed, onSetStage, onRefresh }: any) {
   const [view, setView] = useState<'cards' | 'table'>(() => (localStorage.getItem('crm_clients_view') === 'table' ? 'table' : 'cards'));
   const [showComments, setShowComments] = useState(false);
   const [commentsClient, setCommentsClient] = useState<Client | null>(null);
   // صندوق الفيدباك: حالة إلزامية + كومنت إلزامي — لا يُحفظ فيدباك ناقص
   const [composer, setComposer] = useState<{ key: string; clientId: string; status: string } | null>(null);
   const [commentText, setCommentText] = useState('');
+  // سبب الإلغاء — يُطلب مع حالة «cancellation» فقط
+  const [cancelReason, setCancelReason] = useState('');
+  // فلتر الإلغاء في القائمة (أيقونة الفلتر بجوار البحث)
+  const [cancelFilter, setCancelFilter] = useState('');
+  const [showCancelFilter, setShowCancelFilter] = useState(false);
 
   // فتح الصندوق: بضغطة على حالة في الشريط (تتحدد تلقائياً) أو من زر الكومنت
   const openComposer = (client: Client, status?: string) => {
     const picked = status || latestFeedbackStatusOf(client) || '';
     setComposer({ key: `client-${client.id}`, clientId: client.id, status: picked });
+    // سبب الإلغاء المحفوظ سابقاً يرجع كما هو، والكومنت يُكتب منه تلقائياً
+    const keptReason = picked === 'cancellation' ? latestCancelReasonOf(client) : '';
+    setCancelReason(keptReason);
     // «no answer» تعني حرفياً لا يوجد رد — تُكتب في الكومنتات تلقائياً (ويمكن للشخص تعديلها)
-    setCommentText(picked === 'no-answer' ? NO_ANSWER_COMMENT : '');
+    setCommentText(
+      picked === 'no-answer' ? NO_ANSWER_COMMENT : picked === 'cancellation' ? cancelReasonLabelOf(keptReason) : ''
+    );
   };
 
   const closeComposer = () => {
     setComposer(null);
     setCommentText('');
+    setCancelReason('');
   };
 
   const submitFeedback = () => {
@@ -4769,10 +4842,14 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
     if (!composer || !text) return;
     const status = FEEDBACK_STATUS_BY_ID[composer.status];
     if (!status) return;
+    // حالة الإلغاء بلا سبب لا تُحفظ — القائمة المنسدلة للسبب إلزامية
+    if (composer.status === 'cancellation' && !cancelReason) return;
     // الفيدباك = كومنت + حالة، وينزل في الخط الزمني فيظهر في خانة الكومنتات (الفيدباك)
     addClientActivity(composer.clientId, 'feedback', text, currentUser?.name || '', {
       authorId: currentUser?.id,
       status: composer.status,
+      // سبب الإلغاء يُسجَّل مع الحدث وعلى العميل — فلتر القائمة يقرأه
+      ...(composer.status === 'cancellation' && cancelReason ? { cancelReason } : {}),
       // «no answer» تعني مكالمة بلا رد — فتظهر هكذا في الفيدباك اليومي أيضاً
       callStatus: composer.status === 'no-answer' ? 'no-answer' : 'called',
     });
@@ -4801,9 +4878,26 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
           stopPropagation={false}
           onPick={(optionId) => {
             setComposer({ ...composer, status: optionId });
+            if (optionId === 'cancellation') {
+              // لا نكتب كومنت قبل اختيار السبب — سببه هو الكومنت
+              setCancelReason('');
+              setCommentText('');
+              return;
+            }
+            setCancelReason('');
             if (optionId === 'no-answer' && !commentText.trim()) setCommentText(NO_ANSWER_COMMENT);
           }}
         />
+        {composer.status === 'cancellation' && (
+          <CancelReasonPicker
+            value={cancelReason}
+            onChange={(reason) => {
+              setCancelReason(reason);
+              // اختيار السبب يكتب الكومنت فوراً — نفس سلوك «no answer»
+              setCommentText(reason ? cancelReasonLabelOf(reason) : '');
+            }}
+          />
+        )}
         <div className="fc-row">
           <input
             autoFocus
@@ -4812,14 +4906,16 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
             placeholder={status ? `اكتب كومنت «${status.label}» — إلزامي ليُحفظ الفيدباك` : 'اختر حالة الفيدباك ثم اكتب الكومنت'}
             className="quick-comment-input"
           />
-          <button type="submit" disabled={!commentText.trim() || !status}
-            title={!status ? 'اختر حالة أولاً' : 'حفظ الفيدباك (الحالة + الكومنت)'}>
+          <button type="submit" disabled={!commentText.trim() || !status || (composer.status === 'cancellation' && !cancelReason)}
+            title={!status ? 'اختر حالة أولاً' : composer.status === 'cancellation' && !cancelReason ? 'اختر سبب الإلغاء' : 'حفظ الفيدباك (الحالة + الكومنت)'}>
             حفظ
           </button>
           <button type="button" title="إلغاء" onClick={closeComposer}>✕</button>
         </div>
         <p className="fc-hint">
-          {status ? `الحالة: ${status.label} — ${status.ar}` : 'لازم تختار حالة وتكتب كومنت معاً'}
+          {composer.status === 'cancellation' && !cancelReason
+            ? 'اختر سبب الإلغاء — والكومنت هيتكتب تلقائياً'
+            : status ? `الحالة: ${status.label} — ${status.ar}` : 'لازم تختار حالة وتكتب كومنت معاً'}
         </p>
       </form>
     );
@@ -4836,16 +4932,63 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
   // الرقم اللي اتحوّل لعميل ما يتكررش ككارت رقم
   const clientPhones = new Set((clients || []).map((c: Client) => digitsOf(c.phone)).filter(Boolean));
   const baseLeads = (leads || []).filter((l: AssignedLead) => l.status !== 'closed' && !clientPhones.has(digitsOf(l.phone)));
-  const visibleLeads = q
+
+  // ===== فلتر الإلغاء =====
+  // عند اختيار سبب (أو «كل حالات الإلغاء») تظهر الأرقام الملغاة بسببها فقط؛
+  // والأرقام الواردة التي لم تُحوّل لعميل لا علاقة لها بالإلغاء فتختفي.
+  // إلغاء الأرقام الموزّعة محفوظ في بطاقات الفيدباك/المكالمات بالهاتف، فيُقرأ من فهرس
+  // الهاتف كي يشمل الفلتر كل الأرقام — لا العملاء المسجّلين فقط.
+  const phoneSnapshots = feedbackByPhone(feedbacks, callLogs);
+  const leadCancelReasonOf = (lead: AssignedLead) =>
+    String(phoneSnapshots.get(digitsOf(lead.phone))?.cancelReason || '');
+  const leadIsCancelled = (lead: AssignedLead) =>
+    String(phoneSnapshots.get(digitsOf(lead.phone))?.status || '') === 'cancellation' ||
+    !!leadCancelReasonOf(lead);
+  const cancelCounts = (() => {
+    const byReason: Record<string, number> = {};
+    let total = 0;
+    for (const c of clients || []) {
+      if (latestFeedbackStatusOf(c) !== 'cancellation') continue;
+      total += 1;
+      const reason = latestCancelReasonOf(c);
+      if (reason) byReason[reason] = (byReason[reason] || 0) + 1;
+    }
+    for (const lead of baseLeads) {
+      if (!leadIsCancelled(lead)) continue;
+      total += 1;
+      const reason = leadCancelReasonOf(lead);
+      if (reason) byReason[reason] = (byReason[reason] || 0) + 1;
+    }
+    return { byReason, total };
+  })();
+  const cancelMatch = (c: Client) => {
+    if (!cancelFilter) return true;
+    if (latestFeedbackStatusOf(c) !== 'cancellation') return false;
+    return cancelFilter === 'any' || latestCancelReasonOf(c) === cancelFilter;
+  };
+  const cancelMatchLead = (lead: AssignedLead) => {
+    if (!cancelFilter) return true;
+    if (!leadIsCancelled(lead)) return false;
+    return cancelFilter === 'any' || leadCancelReasonOf(lead) === cancelFilter;
+  };
+  const cancelFilterLabel = !cancelFilter
+    ? ''
+    : cancelFilter === 'any'
+    ? 'كل حالات الإلغاء'
+    : `${CANCEL_REASON_BY_ID[cancelFilter]?.label || ''} — ${CANCEL_REASON_BY_ID[cancelFilter]?.ar || ''}`;
+
+  const visibleLeads = (q
     ? baseLeads.filter((l: AssignedLead) =>
         normalizeArabicText(`${l.name} ${l.phone} ${l.description || ''}`).includes(q)
       )
-    : baseLeads;
-  const visibleClients = q
+    : baseLeads
+  ).filter(cancelMatchLead);
+  const visibleClients = (q
     ? (clients || []).filter((c: Client) =>
         normalizeArabicText(`${c.name} ${c.phone} ${(c.phones || []).join(' ')} ${c.property || ''} ${c.source || ''}`).includes(q)
       )
-    : (clients || []);
+    : (clients || [])
+  ).filter(cancelMatch);
 
   // ===== قائمة موحّدة: الأرقام والعملاء مرصوصون معاً بالأحدث أولاً =====
   type FeedItem =
@@ -4869,6 +5012,20 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
             className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] pr-10 pl-4 py-2.5 text-[13.5px] text-[var(--text-strong)]" />
         </div>
         <div className="flex items-center gap-2">
+          {/* ===== فلتر الإلغاء: أيقونة + لوحة أسباب ===== */}
+          <button
+            type="button"
+            onClick={() => setShowCancelFilter((v) => !v)}
+            className={`icon-btn !w-10 !h-10 relative ${cancelFilter ? 'is-on' : ''}`}
+            title="فلتر الإلغاء — اعرض الأرقام حسب سبب الإلغاء"
+            aria-expanded={showCancelFilter}
+            aria-label="فلتر الإلغاء"
+          >
+            <Filter className="w-4 h-4" />
+            {cancelCounts.total > 0 && (
+              <span className="cf-badge">{cancelCounts.total > 99 ? '99+' : cancelCounts.total}</span>
+            )}
+          </button>
           {/* أيقونتان لتحديد شكل العرض */}
           <div className="view-toggle">
             <button className={view === 'cards' ? 'on' : ''} onClick={() => switchView('cards')} title="مربعات (شكل قديم محفوظ)"><LayoutList className="w-4 h-4" /></button>
@@ -4879,16 +5036,79 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
             title="يعرض كل التعليقات وعددها وزرار التلخيص للـ CEO">
             <MessageSquare className="w-4 h-4" /> كل التعليقات
           </button>
+          {/* السيلز يضيف رقمه بنفسه: ينزل في «أرقام جديدة» باسمه بلا اختيار مندوب */}
+          {onAddNumber && (
+            <button onClick={onAddNumber}
+              className="text-[11.5px] font-bold text-[var(--text)] bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2.5 hover:bg-[var(--tint-2)] inline-flex items-center gap-1.5"
+              title="رقم جديد ينزل باسمك أنت مباشرة">
+              <Plus className="w-3.5 h-3.5" /> إضافة رقم
+            </button>
+          )}
           <button onClick={onAdd} className="btn-primary">
             <Plus className="w-4 h-4" /> إضافة عميل
           </button>
         </div>
       </div>
 
+      {/* ===== لوحة فلتر الإلغاء ===== */}
+      {showCancelFilter && (
+        <div className="cancel-filter-panel">
+          <div className="cfp-head">
+            <span className="cfp-title"><Filter className="w-3.5 h-3.5" /> فلترة الأرقام حسب الإلغاء</span>
+            <button type="button" className="cfp-close" onClick={() => setShowCancelFilter(false)} title="إغلاق الفلتر">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="cfp-list">
+            <button
+              type="button"
+              className={`cfp-item${!cancelFilter ? ' on' : ''}`}
+              onClick={() => { setCancelFilter(''); setShowCancelFilter(false); }}
+            >
+              <span className="cfp-dot" />
+              <span className="cfp-name">كل الأرقام</span>
+              <b>{(clients || []).length + baseLeads.length}</b>
+            </button>
+            <button
+              type="button"
+              className={`cfp-item${cancelFilter === 'any' ? ' on' : ''}`}
+              onClick={() => { setCancelFilter('any'); setShowCancelFilter(false); }}
+            >
+              <span className="cfp-dot danger" />
+              <span className="cfp-name">كل حالات الإلغاء</span>
+              <b>{cancelCounts.total}</b>
+            </button>
+            <span className="cfp-sep" />
+            {CANCEL_REASONS.map((reason) => (
+              <button
+                key={reason.id}
+                type="button"
+                className={`cfp-item${cancelFilter === reason.id ? ' on' : ''}`}
+                onClick={() => { setCancelFilter(reason.id); setShowCancelFilter(false); }}
+                title={reason.ar}
+              >
+                <span className="cfp-dot" />
+                <span className="cfp-name">{reason.label} <small>{reason.ar}</small></span>
+                <b>{cancelCounts.byReason[reason.id] || 0}</b>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* سطر ملخص واحد — بلا أي تقسيم للقائمة */}
       <div className="clients-summary">
         <span>الإجمالي: <b>{feed.length}</b></span>
-        <span className="cs-dim">مرتبة بالأحدث أولاً</span>
+        {cancelFilter ? (
+          <span className="cs-cancel">
+            <i>فلتر:</i> {cancelFilterLabel}
+            <button type="button" onClick={() => setCancelFilter('')} title="مسح فلتر الإلغاء">
+              مسح <X className="w-3 h-3" />
+            </button>
+          </span>
+        ) : (
+          <span className="cs-dim">مرتبة بالأحدث أولاً</span>
+        )}
       </div>
 
       {/* قائمة واحدة: الأرقام الواردة والعملاء مرصوصون معاً */}
@@ -4896,7 +5116,11 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
         <div className="text-center py-16">
           <Users className="w-14 h-14 text-[var(--text-dim)] mx-auto mb-3" />
           <p className="text-[var(--text-muted)] text-sm">
-            {q ? 'لا نتائج مطابقة للبحث' : 'لا يوجد عملاء بعد — أضف عميلاً وسيظهر هنا فوراً'}
+            {q
+              ? 'لا نتائج مطابقة للبحث'
+              : cancelFilter
+              ? 'لا توجد أرقام ملغاة بهذا السبب'
+              : 'لا يوجد عملاء بعد — أضف عميلاً وسيظهر هنا فوراً'}
           </p>
         </div>
       ) : view === 'table' ? (
@@ -4935,6 +5159,11 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                       <i className="ct-avatar">{name?.[0] || '#'}</i>
                       <b>{name}</b>
                       {client?.stage === 'lost' && <span className="st-chip st-lost">ضائع</span>}
+                      {isLead && leadIsCancelled(lead!) && (
+                        <span className="st-chip st-lost" title="سبب الإلغاء">
+                          إلغاء{leadCancelReasonOf(lead!) ? ` · ${CANCEL_REASON_BY_ID[leadCancelReasonOf(lead!)]?.label || ''}` : ''}
+                        </span>
+                      )}
                     </span>
                     <span role="cell" dir="ltr" className="ct-phone">
                       <a href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
@@ -5038,6 +5267,11 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                         {sourceText}
                       </span>
                       {client?.stage === 'lost' && <span className="st-chip st-lost">ضائع</span>}
+                      {isLead && leadIsCancelled(lead!) && (
+                        <span className="st-chip st-lost" title="سبب الإلغاء">
+                          إلغاء{leadCancelReasonOf(lead!) ? ` · ${CANCEL_REASON_BY_ID[leadCancelReasonOf(lead!)]?.label || ''}` : ''}
+                        </span>
+                      )}
                       {/* حالة العميل المختارة من القائمة المنسدلة: حبة صغيرة جنب الاسم */}
                       {!isLead && (
                         <FeedbackBar client={client} onPick={(statusId: string) => openComposer(client!, statusId)} />
@@ -5207,7 +5441,12 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
   );
 }
 
-function PipelineView({ clients, onUpdateStage }: any) {
+function PipelineView({ clients, numbers = [], onUpdateStage }: any) {
+  // كل رقم في نطاقي: العميل بحالته، والرقم الموزّع بحالة آخر فيدباك عليه.
+  // بدون كده أعمدة المراحل كانت تعرض صفراً رغم وجود أرقام في التوزيع.
+  const stageItems = numbers.length
+    ? numbers.map((record: any) => ({ ...record, stage: record.stage }))
+    : (clients || []).map((client: Client) => ({ key: client.id, client, stage: client.stage, name: client.name, phone: client.phone }));
   const stages = [
     { id: 'new', label: 'جديد', color: 'stg-new' },
     { id: 'contacted', label: 'تم التواصل', color: 'stg-contacted' },
@@ -5222,7 +5461,7 @@ function PipelineView({ clients, onUpdateStage }: any) {
       <div className="page-intro"><div><h2>مراحل العملاء</h2></div></div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {stages.map((stage) => {
-          const stageClients = clients.filter((c: Client) => c.stage === stage.id);
+          const stageClients = stageItems.filter((record: any) => record.stage === stage.id);
           return (
             <div key={stage.id} className="panel p-4">
               <div className="flex items-center gap-2.5 pb-3 mb-3 border-b border-[var(--border)]">
@@ -5231,17 +5470,21 @@ function PipelineView({ clients, onUpdateStage }: any) {
                 <span className="text-xs font-bold text-[var(--text-muted)] tabular-nums">{stageClients.length}</span>
               </div>
               <div className="space-y-2">
-                {stageClients.map((client: Client) => (
-                  <div key={client.id} className="bg-[var(--tint-1)] rounded-[var(--r-sm)] p-3">
-                    <p className="font-medium text-[var(--text-strong)] text-sm">{client.name}</p>
-                    <p className="text-xs text-[var(--text-muted)]" dir="ltr">{client.phone}</p>
-                    <select
-                      value={client.stage}
-                      onChange={(e) => onUpdateStage(client.id, e.target.value as Client['stage'])}
-                      className="mt-1.5 w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-2 py-1 text-xs text-[var(--text-strong)]"
-                    >
-                      {stages.map((s) => <option key={s.id} value={s.id} className="bg-gray-900">{s.label}</option>)}
-                    </select>
+                {stageClients.map((record: any) => (
+                  <div key={record.key || record.id} className="bg-[var(--tint-1)] rounded-[var(--r-sm)] p-3">
+                    <p className="font-medium text-[var(--text-strong)] text-sm">{record.name}</p>
+                    <p className="text-xs text-[var(--text-muted)]" dir="ltr">{record.phone}</p>
+                    {record.client ? (
+                      <select
+                        value={record.client.stage}
+                        onChange={(e) => onUpdateStage(record.client.id, e.target.value as Client['stage'])}
+                        className="mt-1.5 w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-2 py-1 text-xs text-[var(--text-strong)]"
+                      >
+                        {stages.map((s) => <option key={s.id} value={s.id} className="bg-gray-900">{s.label}</option>)}
+                      </select>
+                    ) : (
+                      <span className="inline-block mt-1.5 text-[10.5px] text-[var(--text-dim)]">رقم في التوزيع</span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -5255,9 +5498,12 @@ function PipelineView({ clients, onUpdateStage }: any) {
 
 // ===== شريط التذكير الرنّان: نفس شكل الإشعار الأصلي + أزرار الإسكات والإتمام والتأجيل =====
 // ===== بند ٤: صفحة حالة واحدة — كل الأرقام اللي عليها الحالة دي =====
-function StatusBoardView({ statusId, clients, onClose, onCall, onSelect }: any) {
+function StatusBoardView({ statusId, numbers = [], onClose, onCall, onSelect }: any) {
   const meta = FEEDBACK_STATUS_BY_ID[statusId];
-  const items = (clients || []).filter((c: Client) => latestFeedbackStatusOf(c) === statusId);
+  // نفس قاعدة لوحة الحالات: كل رقم بحالته (عميل مسجّل أو رقم في التوزيع)
+  const items: any[] = (numbers || []).filter(
+    (record: any) => (record.bucket || feedbackBucketOf(record)) === statusId
+  );
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="status-board">
       <div className="status-board-head">
@@ -5278,17 +5524,32 @@ function StatusBoardView({ statusId, clients, onClose, onCall, onSelect }: any) 
           </div>
         ) : (
           <div className="panel divide-y divide-[var(--border)]">
-            {items.map((c: Client) => (
-              <div key={c.id} className="stb-row">
-                <div className="min-w-0 flex-1">
-                  <button type="button" className="stb-name" onClick={() => onSelect?.(c)}>{c.name}</button>
-                  <p className="stb-phone" dir="ltr">{c.phone}</p>
-                  {lastCommentOf(c)?.text ? <p className="stb-note">{lastCommentOf(c)?.text}</p> : null}
+            {items.map((record: any) => {
+              const client = record.client;
+              const note = record.note || (client ? lastCommentOf(client)?.text : '') || '';
+              return (
+                <div key={record.key || record.id} className="stb-row">
+                  <div className="min-w-0 flex-1">
+                    <button
+                      type="button"
+                      className="stb-name"
+                      onClick={() => client && onSelect?.(client)}
+                      title={client ? 'عرض تفاصيل العميل' : 'رقم في التوزيع'}
+                    >
+                      {record.name}
+                    </button>
+                    <p className="stb-phone" dir="ltr">{record.phone}</p>
+                    {note ? <p className="stb-note">{note}</p> : null}
+                  </div>
+                  <a href={`tel:${record.phone}`} className="rc-action" dir="ltr">اتصال</a>
+                  {client ? (
+                    <button type="button" className="rc-action" onClick={() => onCall?.(client)}>تسجيل فيدباك</button>
+                  ) : (
+                    <span className="stb-note">رقم في التوزيع</span>
+                  )}
                 </div>
-                <a href={`tel:${c.phone}`} className="rc-action" dir="ltr">اتصال</a>
-                <button type="button" className="rc-action" onClick={() => onCall?.(c)}>تسجيل فيدباك</button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -5404,6 +5665,8 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
   const [result, setResult] = useState<'' | 'answered' | 'no-answer'>('');
   const [comment, setComment] = useState('');
   const [status, setStatus] = useState('');
+  // سبب الإلغاء — يُطلب فقط عند اختيار حالة «cancellation»
+  const [cancelReason, setCancelReason] = useState('');
   const [nextCallAt, setNextCallAt] = useState('');
   const [dialed, setDialed] = useState(false);
   const [done, setDone] = useState(false);
@@ -5421,9 +5684,14 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
   // الحفظ يتوقّف حتى يكتمل الثلاثة: النتيجة + الكومنت + حالة الفيدباك
   const save = () => {
     if (!result) return;
-    const text = comment.trim() || (result === 'no-answer' ? NO_ANSWER_COMMENT : '');
+    // إلغاء بلا سبب لا يُحفظ
+    if (status === 'cancellation' && !cancelReason) return;
+    const text =
+      comment.trim() ||
+      (result === 'no-answer' ? NO_ANSWER_COMMENT : '') ||
+      (status === 'cancellation' ? cancelReasonLabelOf(cancelReason) : '');
     if (!text || !status) return;
-    onSave({ result, comment: text, status, nextCallAt });
+    onSave({ result, comment: text, status, cancelReason, nextCallAt });
     setDone(true);
   };
 
@@ -5508,8 +5776,25 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
                         label="اختر الحالة (follow up / done deal …)"
                         className="fc-status-menu"
                         stopPropagation={false}
-                        onPick={(id: string) => setStatus(id)}
+                        onPick={(id: string) => {
+                          setStatus(id);
+                          // الحالة غير الإلغاء تمسح أي سبب قديم
+                          setCancelReason('');
+                          if (id === 'cancellation') setComment('');
+                        }}
                       />
+                      {status === 'cancellation' && (
+                        <div className="mt-2">
+                          <CancelReasonPicker
+                            value={cancelReason}
+                            onChange={(reason) => {
+                              setCancelReason(reason);
+                              // اختيار السبب يكتب الكومنت فوراً
+                              setComment(reason ? cancelReasonLabelOf(reason) : '');
+                            }}
+                          />
+                        </div>
+                      )}
                     </div>
 
                     {/* بند ٥: تاريخ الاتصال القادم ← يتسجّل تذكير */}
@@ -5530,7 +5815,7 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
                       </div>
                     </div>
 
-                    <button onClick={save} disabled={!status} className="btn-primary w-full justify-center py-3.5 disabled:opacity-55">
+                    <button onClick={save} disabled={!status || (status === 'cancellation' && !cancelReason)} className="btn-primary w-full justify-center py-3.5 disabled:opacity-55">
                       <Send className="w-4 h-4" /> حفظ نتيجة الاتصال
                     </button>
                   </motion.div>
@@ -7289,7 +7574,7 @@ function formatLeadDescription(description?: string): string {
 }
 
 // New Leads View - For Sales (shows leads assigned to this sales person)
-function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert }: any) {
+function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert, onAdd }: any) {
   const [selectedLead, setSelectedLead] = useState<AssignedLead | null>(null);
 
   const handleLeadClick = (lead: AssignedLead) => {
@@ -7301,7 +7586,15 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert }: any) {
 
   return (
     <div className="space-y-4">
-      <div className="page-intro"><div><h2>أرقام جديدة</h2></div></div>
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+        <div className="page-intro"><div><h2>أرقام جديدة</h2></div></div>
+        {/* السيلز يضيف رقمه بنفسه — بينزل باسمه هو بلا اختيار مندوب */}
+        {onAdd && (
+          <button type="button" onClick={onAdd} className="btn-primary">
+            <Plus className="w-4 h-4" /> إضافة رقم
+          </button>
+        )}
+      </div>
 
       <div className="space-y-3">
         {assignedLeads.map((lead: AssignedLead) => (
@@ -7742,11 +8035,25 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, active
     !q ||
     normalizeArabicText(`${lead.name} ${lead.phone} ${lead.description || ''} ${formNameOf(lead)} ${userName(lead.salesId)}`).includes(q);
 
+  // المرحلة اللي يقف عليها الرقم الموزّع — من حالته في التوزيع (جديد/تم التواصل/مغلق)
+  // حتى تتحسب أرقام التوزيع على المراحل، وما يفضل العدّاد صفراً رغم وجودها.
+  const leadStage = (lead: AssignedLead): Client['stage'] =>
+    (FEEDBACK_STATUS_TO_STAGE[LEAD_STATUS_TO_FEEDBACK_STATUS[String(lead.status || '')] || 'fresh-stage'] ||
+      'new') as Client['stage'];
   const visible = campaignClients.filter((c: Client) => (stage === 'all' || c.stage === stage) && matches(c));
-  const visibleLeads = stage === 'all' ? campaignLeads.filter(matchesLead) : [];
-  const stageCount = (id: 'all' | Client['stage']) =>
-    id === 'all' ? campaignClients.length : campaignClients.filter((c: Client) => c.stage === id).length;
-  const inProgress = campaignClients.filter((c: Client) => c.stage !== 'closed' && c.stage !== 'lost').length;
+  const visibleLeads = campaignLeads.filter(
+    (lead: AssignedLead) => (stage === 'all' || leadStage(lead) === stage) && matchesLead(lead)
+  );
+  const stageCount = (id: 'all' | Client['stage']) => {
+    const fromClients =
+      id === 'all' ? campaignClients.length : campaignClients.filter((c: Client) => c.stage === id).length;
+    const fromLeads =
+      id === 'all' ? campaignLeads.length : campaignLeads.filter((l: AssignedLead) => leadStage(l) === id).length;
+    return fromClients + fromLeads;
+  };
+  const inProgress =
+    campaignClients.filter((c: Client) => c.stage !== 'closed' && c.stage !== 'lost').length +
+    campaignLeads.filter((l: AssignedLead) => l.status !== 'closed').length;
   const sold = campaignClients.filter((c: Client) => c.stage === 'closed').length;
   const formNameCount = [...campaignClients, ...campaignLeads].filter((record: any) => !!formNameOf(record)).length;
   const totalCampaign = campaignClients.length + campaignLeads.length;
@@ -9428,7 +9735,7 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
   const reps = (users || []).filter((u: User) => u.role === 'sales' || u.role === 'supervisor');
   const [form, setForm] = useState({
     name: '', phone: '', phones: [] as string[], property: '', budget: '', monthlyInstallment: '', deliveryPeriod: '',
-    status: 'campaign', stage: 'new', feedback: '', feedbackStatus: 'follow-up',
+    status: 'campaign', stage: 'new', feedback: '', feedbackStatus: 'follow-up', cancelReason: '',
     reminderAt: nextReminderInput(), priority: 'medium', source: '', ownerId: '',
   });
   const [newPhone, setNewPhone] = useState('');
@@ -9462,6 +9769,11 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
       setError('اختر السيلز المسؤول عن العميل أولاً');
       return;
     }
+    // إلغاء بلا سبب لا يُحفظ — السبب هو الذي يكتب الكومنت ويُحفظ للفلترة
+    if (form.feedbackStatus === 'cancellation' && !form.cancelReason) {
+      setError('اختر سبب الإلغاء أولاً');
+      return;
+    }
     const comment = form.feedback.trim();
     setSaving(true);
     try {
@@ -9470,7 +9782,7 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
       const alreadySaved = !!createdId && existing.some((c) => c.id === createdId);
 
       if (!alreadySaved) {
-        const { ownerId, feedbackStatus, reminderAt, ...rest } = form;
+        const { ownerId, feedbackStatus, reminderAt, cancelReason, ...rest } = form;
         const newClient: Client = {
           ...rest,
           id: crypto.randomUUID(),
@@ -9490,6 +9802,7 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
           addClientActivity(newClient.id, 'feedback', comment, currentUser?.name || '', {
             authorId: currentUser.id,
             status: feedbackStatus,
+            ...(feedbackStatus === 'cancellation' && cancelReason ? { cancelReason } : {}),
             callStatus: feedbackStatus === 'no-answer' ? 'no-answer' : 'called',
           });
         } else {
@@ -9630,12 +9943,25 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
                   setForm({
                     ...form,
                     feedbackStatus: optionId,
+                    cancelReason: '',
                     // المرحلة تتحرّك مع الحالة المختارة، فيظهر العميل في مكانه الصحيح
                     ...(FEEDBACK_STATUS_BY_ID[optionId]?.stage ? { stage: FEEDBACK_STATUS_BY_ID[optionId].stage } : {}),
-                    ...(optionId === 'no-answer' && !form.feedback.trim() ? { feedback: NO_ANSWER_COMMENT } : {}),
+                    ...(optionId === 'no-answer' && !form.feedback.trim()
+                      ? { feedback: NO_ANSWER_COMMENT }
+                      : optionId === 'cancellation'
+                      ? { feedback: '' }
+                      : {}),
                   })
                 }
               />
+              {form.feedbackStatus === 'cancellation' && (
+                <div className="mt-2">
+                  <CancelReasonPicker
+                    value={form.cancelReason}
+                    onChange={(reason) => setForm({ ...form, cancelReason: reason, feedback: reason ? cancelReasonLabelOf(reason) : '' })}
+                  />
+                </div>
+              )}
             </div>
             <textarea placeholder="اكتب كومنت الفيدباك — ولو سيبته فاضي ينزل العميل في الفيدباك كـ«مرحلة جديدة لم يتم التواصل معه»"
               value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })}
@@ -9651,7 +9977,7 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
             </div>
           </div>
           {error && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-[var(--r-md)] px-3 py-2">{error}</p>}
-          <button type="submit" disabled={saving} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-60">
+          <button type="submit" disabled={saving || (form.feedbackStatus === 'cancellation' && !form.cancelReason)} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-60">
             {saving ? 'جارٍ الحفظ...' : createdId ? 'إعادة المحاولة' : 'إضافة'}
           </button>
         </form>
@@ -9893,12 +10219,14 @@ function AddPropertyModal({ clients, currentUser, onClose, onSuccess }: any) {
 }
 
 function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
-  const [form, setForm] = useState({ clientId: '', clientPhone: '', clientName: '', date: new Date().toISOString().slice(0, 16), feedback: '', status: '', callStatus: 'called', duration: '', nextAction: '' });
+  const [form, setForm] = useState({ clientId: '', clientPhone: '', clientName: '', date: new Date().toISOString().slice(0, 16), feedback: '', status: '', callStatus: 'called', duration: '', nextAction: '', cancelReason: '' });
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     // الفيدباك لا يُحفظ بلا حالة وبلا كومنت — نفس شرط الشريط في تبويب العملاء
     if (!form.status || !form.feedback.trim()) return;
+    // «cancellation» بلا سبب لا تُحفظ — السبب هو الكومنت
+    if (form.status === 'cancellation' && !form.cancelReason) return;
     const feedbacks = JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]');
     const newFeedback = { ...form, id: crypto.randomUUID(), userId: currentUser.id, createdAt: new Date().toISOString() };
     localStorage.setItem('crm_daily_feedback', JSON.stringify([newFeedback, ...feedbacks]));
@@ -9908,6 +10236,7 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
         authorId: currentUser?.id,
         skipCard: true,
         status: form.status,
+        ...(form.status === 'cancellation' && form.cancelReason ? { cancelReason: form.cancelReason } : {}),
         callStatus: form.status === 'no-answer' ? 'no-answer' : 'called',
       });
     }
@@ -9964,15 +10293,29 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
                 setForm({
                   ...form,
                   status: optionId,
+                  // حالة الإلغاء تنتظر اختيار السبب — والسبب هو اللي يكتب الكومنت
+                  cancelReason: '',
                   // «no answer» تعني مكالمة بلا رد — يُضبط حقل حالة الاتصال معها
                   callStatus: optionId === 'no-answer' ? 'no-answer' : 'called',
-                  ...(optionId === 'no-answer' && !form.feedback.trim() ? { feedback: NO_ANSWER_COMMENT } : {}),
+                  ...(optionId === 'no-answer' && !form.feedback.trim()
+                    ? { feedback: NO_ANSWER_COMMENT }
+                    : optionId === 'cancellation'
+                    ? { feedback: '' }
+                    : {}),
                 })
               }
             />
+            {form.status === 'cancellation' && (
+              <div className="mt-2">
+                <CancelReasonPicker
+                  value={form.cancelReason}
+                  onChange={(reason) => setForm({ ...form, cancelReason: reason, feedback: reason ? cancelReasonLabelOf(reason) : '' })}
+                />
+              </div>
+            )}
           </div>
           <textarea placeholder="الفيدباك * (لا يُحفظ بلا كومنت)" value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-24" required />
-          <button type="submit" disabled={!form.status || !form.feedback.trim()} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-50">إضافة</button>
+          <button type="submit" disabled={!form.status || !form.feedback.trim() || (form.status === 'cancellation' && !form.cancelReason)} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-50">إضافة</button>
         </form>
       </motion.div>
     </motion.div>
@@ -10866,20 +11209,41 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
 
 
 function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
-  const [form, setForm] = useState({ name: '', phone: '', description: '', salesId: '' });
-  
-  const handleSubmit = (e: React.FormEvent) => {
+  // السيلز مابيوزعش لنفسه على حد: الرقم اللي بيكتبه بينزل باسمه هو مباشرة،
+  // فقائمة اختيار السيلز تختفي تماماً من حسابه (وقرار التوزيع يظل للإدارة).
+  const isSalesAgent = currentUser?.role === 'sales';
+  const [form, setForm] = useState({ name: '', phone: '', description: '', salesId: isSalesAgent ? currentUser.id : '' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
+    const salesId = isSalesAgent ? currentUser.id : form.salesId;
+    if (!salesId) {
+      setError('اختر السيلز المسؤول عن الرقم');
+      return;
+    }
+    setError('');
+    setSaving(true);
     const leads = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
-    const newLead: AssignedLead = { 
-      ...form, 
-      id: crypto.randomUUID(), 
-      adminId: currentUser.id, 
+    const newLead: AssignedLead = {
+      ...form,
+      salesId,
+      id: crypto.randomUUID(),
+      adminId: currentUser.id,
       status: 'new',
-      createdAt: new Date().toISOString() 
+      createdAt: new Date().toISOString()
     };
     localStorage.setItem('crm_assigned_leads', JSON.stringify([newLead, ...leads]));
+    // لا نغلق النافذة قبل التأكد أن الرقم وصل للسيرفر — وإلا بقي على الجهاز وحده
+    const ok = await pushKey('crm_assigned_leads');
+    setSaving(false);
     onSuccess();
+    if (!ok) {
+      setError('الرقم اتحفظ على الجهاز ولم يوصل للسيرفر — جرّب مرة أخرى.');
+      return;
+    }
     onClose();
   };
   
@@ -10889,7 +11253,7 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-6">
-          <div className="page-intro"><div><h2>توزيع رقم جديد</h2></div></div>
+          <div className="page-intro"><div><h2>{isSalesAgent ? 'إضافة رقم جديد' : 'توزيع رقم جديد'}</h2></div></div>
           <button type="button" onClick={onClose} title="إغلاق"
             className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
             <X className="w-4 h-4 text-[var(--text)]" />
@@ -10899,13 +11263,23 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
           <input type="text" placeholder="اسم العميل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
           <input type="tel" placeholder="رقم الهاتف *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
           <textarea placeholder="وصف/ملاحظات" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-20" />
-          <select value={form.salesId} onChange={(e) => setForm({ ...form, salesId: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required>
-            <option value="" className="bg-gray-900">اختر السيلز</option>
-            {salesUsers.map((u: User) => (
-              <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
-            ))}
-          </select>
-          <button type="submit" className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">توزيع الرقم</button>
+          {isSalesAgent ? (
+            <div className="flex items-center justify-between gap-2 rounded-[var(--r-md)] border border-[var(--brand-primary-soft)] bg-[var(--brand-primary-softer)] px-4 py-3">
+              <span className="text-xs text-[var(--text-muted)]">الرقم هيضاف على اسمك</span>
+              <b className="text-sm text-[var(--text-strong)]">{currentUser.name}</b>
+            </div>
+          ) : (
+            <select value={form.salesId} onChange={(e) => setForm({ ...form, salesId: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required>
+              <option value="" className="bg-gray-900">اختر السيلز</option>
+              {salesUsers.map((u: User) => (
+                <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
+              ))}
+            </select>
+          )}
+          {error && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-[var(--r-md)] px-3 py-2">{error}</p>}
+          <button type="submit" disabled={saving || (!isSalesAgent && !form.salesId)} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-60">
+            {saving ? 'جارٍ الحفظ...' : isSalesAgent ? 'إضافة الرقم' : 'توزيع الرقم'}
+          </button>
         </form>
       </motion.div>
     </motion.div>

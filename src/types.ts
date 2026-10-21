@@ -35,6 +35,8 @@ export interface ClientActivity {
   // حالة الفيدباك المختارة من الشريط (follow up / meeting / done deal …) — اختيارية
   // حتى تبقى الأحداث القديمة التي لا حالة لها صالحة كما هي.
   status?: string;
+  // سبب الإلغاء عند اختيار حالة «cancellation» (not-interested / low-budget / …)
+  cancelReason?: string;
 }
 
 export interface Client {
@@ -55,6 +57,8 @@ export interface Client {
   source: string;
   // اسم فورم الكامبين الذي جاء منه الرقم (للعرض في «عملاء كامبين»)
   formName?: string;
+  // آخر سبب إلغاء اختاره المندوب — أساس فلتر الإلغاء في قائمة العملاء
+  cancelReason?: string;
   createdAt: string;
   updatedAt: string;
   activities?: ClientActivity[];
