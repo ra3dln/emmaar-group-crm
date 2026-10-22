@@ -230,6 +230,10 @@ const mapsLink = (lat: number, lng: number): string =>
 const RANK_LABEL: Record<string, string> = { admin: 'CEO', supervisor: 'Team Leader', sales: 'Sales Agent', developer: 'System Dev' };
 const RANK_AR: Record<string, string> = { admin: 'المدير التنفيذي', supervisor: 'قائد فريق', sales: 'سيلز', developer: 'مطوّر النظام' };
 const rankLabel = (role?: string): string => RANK_LABEL[role || 'sales'] || 'Sales Agent';
+// لقب يظهر تحت الاسم في المحادثة: حساب المطوّر يُكتب تحته «System Developer»
+// حتى لو كانت رتبته إدارية (مثل حساب mohamed).
+const chatRank = (user?: { role?: string; developer?: boolean } | null): string =>
+  user && user.developer ? 'System Developer' : rankLabel(user?.role);
 const rankAr = (role?: string): string => RANK_AR[role || 'sales'] || 'سيلز';
 const rankClass = (role?: string): string =>
   role === 'admin'
@@ -1141,6 +1145,8 @@ function App() {
   const [showAddReminder, setShowAddReminder] = useState(false);
   const [showAddProperty, setShowAddProperty] = useState(false);
   const [showAddFeedback, setShowAddFeedback] = useState(false);
+  // فتح «إضافة فيدباك» برقم محدد مسبقاً (من مراحل الرئيسية أو من كارت العميل)
+  const [feedbackPreset, setFeedbackPreset] = useState<{ clientId?: string; clientName?: string; clientPhone?: string } | null>(null);
   const [showAddUser, setShowAddUser] = useState(false);
   const [showAddTeam, setShowAddTeam] = useState(false);
   const [showAddAssignedLead, setShowAddAssignedLead] = useState(false);
@@ -1722,12 +1728,37 @@ function App() {
     const allTeams = JSON.parse(localStorage.getItem('crm_teams') || '[]');
     const allAssignedLeads = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
     
+    // ===== نطاق هذا الحساب =====
+    // «كل حساب منفصل عن التاني»: السيلز لا يستلم في متصفحه إلا سجلاته هو.
+    // كانت الرسائل والأرقام والمكالمات تُحمَّل كاملة لكل حساب ثم تُرشَّح في العرض،
+    // وأي مكان ينسى الفلتر كان يعرض شغل زميله عليه (فوضي حسابات مفتوحة على بعض).
+    // الإدارة (CEO) ترى الكل، وقائد الفريق يرى فريقه فقط بشرط وجود فريق فعلي
+    // (فريق فارغ ما يبقاش معناه «كل الحسابات»).
+    const myScopeIds: Set<string> | null = (() => {
+      if (currentUser.role === 'admin') return null;
+      if (currentUser.role === 'supervisor' && String(currentUser.team || '').trim()) {
+        return new Set<string>([
+          currentUser.id,
+          ...allUsers.filter((u: User) => u.team === currentUser.team).map((u: User) => u.id),
+        ]);
+      }
+      return new Set<string>([currentUser.id]);
+    })();
+    const inMyScope = (id?: string) => !myScopeIds || (!!id && myScopeIds.has(id));
+
     setUsers(allUsers);
     setTeams(allTeams);
-    setAssignedLeads(allAssignedLeads);
+    setAssignedLeads(allAssignedLeads.filter((l: AssignedLead) => inMyScope(l.salesId)));
     setAutoAssignRules(parseRules(localStorage.getItem(AUTO_ASSIGN_KEY)));
-    setMessages(getMessages());
-    setCallLogs(getCallLogs());    // الحساب لم يعد موجوداً (حُذف، أو أُعيد ضبط النظام وبدأنا من جديد) → خروج تلقائي لشاشة الدخول
+    // الرسائل: السيلز لا يحمل في ذاكرته إلا محادثاته هو — لا محادثات غيره
+    // (غرفة المدراء للحسابات الإدارية وحدها).
+    setMessages(
+      getMessages().filter((m: ChatMessage) =>
+        myScopeIds ? m.fromId === currentUser.id || m.toId === currentUser.id : true
+      )
+    );
+    setCallLogs(getCallLogs().filter((l: CallLog) => inMyScope(l.salesId)));
+    // الحساب لم يعد موجوداً (حُذف، أو أُعيد ضبط النظام وبدأنا من جديد) → خروج تلقائي لشاشة الدخول
     const me = allUsers.find((u: User) => u.id === currentUser.id);
     if (!me) {
       handleLogout();
@@ -1746,24 +1777,13 @@ function App() {
       setCurrentUser(me);
     }
 
-    if (currentUser.role === 'admin') {
-      setClients(allClients);
-      setReminders(allReminders);
-      setDailyFeedbacks(allFeedbacks);
-    } else {
-      const myClients = allClients.filter((c: Client) => c.userId === currentUser.id || c.assignedTo === currentUser.id);
-      // أرقامي — يستخدمها الفيدباك لضمان أن أى كومنت على رقم من أرقامي يظهر عندي
-      // حتى لو الكارت القديم كان منسوباً لصاحب العميل (الإدارة أو مندوب آخر)
-      const digits = (v: any) => normalizeDigits(String(v || '')).replace(/\D/g, '');
-      const myNumbers = new Set(myClients.map((c: Client) => digits(c.phone)).filter(Boolean));
-      setClients(myClients);
-      setReminders(allReminders.filter((r: Reminder) => r.userId === currentUser.id));
-      setDailyFeedbacks(
-        allFeedbacks.filter(
-          (f: DailyFeedback) => f.userId === currentUser.id || (!!f.clientPhone && myNumbers.has(digits(f.clientPhone)))
-        )
-      );
-    }
+    setClients(
+      allClients.filter((c: Client) => inMyScope(c.userId) || inMyScope(c.assignedTo))
+    );
+    setReminders(allReminders.filter((r: Reminder) => inMyScope(r.userId)));
+    // الفيدباك لصاحبه فقط. الربط بالرقم كان يجعل كومنت مندوب يظهر لمندوب آخر
+    // حصل على نفس الرقم — وهو بالضبط «الفيدباك بينزل للشخص التاني».
+    setDailyFeedbacks(allFeedbacks.filter((f: DailyFeedback) => inMyScope(f.userId)));
     // العقارات: عقارات الفريق تظهر للجميع، والعقار الخاص لا يخرج من جهاز صاحبه
     // ولا يُحمَّل أصلاً في متصفح مندوب آخر (الإدارة وقائد الفريق يرون عقارات فريقهم).
     const ownerOf = (p: Property) => p.userId;
@@ -2461,7 +2481,19 @@ function App() {
       createdAt: new Date().toISOString(),
     };
     saveCallLogs([log, ...getCallLogs()]);
-    setCallLogs(getCallLogs());
+    // سجل هذا الحساب فقط (الإدارة ترى الكل، وقائد الفريق فريقه)
+    setCallLogs(
+      getCallLogs().filter((l: CallLog) =>
+        currentUser.role === 'admin'
+          ? true
+          : currentUser.role === 'supervisor' && String(currentUser.team || '').trim()
+            ? l.salesId === currentUser.id ||
+              JSON.parse(localStorage.getItem('crm_users') || '[]').some(
+                (u: User) => u.id === l.salesId && u.team === currentUser.team
+              )
+            : l.salesId === currentUser.id
+      )
+    );
 
     addClientActivity(
       target.id,
@@ -2533,7 +2565,7 @@ function App() {
             initial={{ opacity: 0, y: -100 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -100 }}
-            className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4"
+            className="alarm-float fixed left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4"
           >
             <div className="panel p-4 border-[var(--brand-primary-soft)] glow-primary">
               <div className="flex items-start gap-3">
@@ -2974,7 +3006,7 @@ function App() {
         {showAddClient && <AddClientModal currentUser={currentUser} users={users} onClose={() => setShowAddClient(false)} onSuccess={loadData} />}
         {showAddReminder && <AddReminderModal clients={clients} currentUser={currentUser} onClose={() => setShowAddReminder(false)} onSuccess={loadData} />}
         {showAddProperty && <AddPropertyModal clients={clients} currentUser={currentUser} onClose={() => setShowAddProperty(false)} onSuccess={loadData} />}
-        {showAddFeedback && <AddFeedbackModal clients={clients} currentUser={currentUser} onClose={() => setShowAddFeedback(false)} onSuccess={loadData} />}
+        {showAddFeedback && <AddFeedbackModal clients={clients} currentUser={currentUser} preset={feedbackPreset} onClose={() => { setShowAddFeedback(false); setFeedbackPreset(null); }} onSuccess={() => { setFeedbackPreset(null); loadData(); }} />}
         {showAddUser && <AddUserModal currentUser={currentUser} onClose={() => setShowAddUser(false)} onSuccess={loadData} />}
         {showAddTeam && <AddTeamModal users={users} currentUser={currentUser} onClose={() => setShowAddTeam(false)} onSuccess={loadData} />}
         {showAddAssignedLead && <AddAssignedLeadModal users={users} currentUser={currentUser} onClose={() => setShowAddAssignedLead(false)} onSuccess={loadData} />}
@@ -3054,14 +3086,25 @@ function App() {
             numbers={workNumbers}
             onClose={() => setStatusBoard(null)}
             onCall={(c: Client) => setCallClient(c)}
+            onAddFeedback={(record: any) => {
+              // نفس إجراءات كارت العملاء: فيدباك جاهز على نفس الرقم + واتساب
+              setFeedbackPreset({
+                clientId: record?.client?.id || '',
+                clientName: record?.name || record?.client?.name || '',
+                clientPhone: record?.phone || record?.client?.phone || '',
+              });
+              setShowAddFeedback(true);
+            }}
             onSelect={(c: Client) => { setStatusBoard(null); setSelectedClient(c); }}
           />
         )}
       </AnimatePresence>
 
-      {/* بطاقة التذكير — نوتفكيشن فقط: تم / تأجيل / اتصال (بلا رنة) */}
+      {/* بطاقة التذكير — نوتفكيشن فقط: تم / تأجيل / اتصال (بلا رنة)
+          تختفي مؤقتاً ودرج القائمة مفتوح: البطاقة العائمة كانت تغطي أول عناصر
+          القائمة على الهاتف فلا يمكن الضغط على «الرئيسية» أو «العملاء». */}
       <AnimatePresence>
-        {activeAlarm && (
+        {activeAlarm && !sidebarOpen && (
           <AlarmBar
             alarm={activeAlarm}
             snoozeMinutes={alarmSettings.snoozeMin}
@@ -3074,10 +3117,11 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* أنيميشن الدخول */}
-      <AnimatePresence>
-        {loginAnimation && <LoginTransition user={loginAnimation} onDone={() => setLoginAnimation(null)} />}
-      </AnimatePresence>
+      {/* أنيميشن الدخول — يُرسم عبر Portal ويُزيل نفسه بنفسه.
+          لا نضعه داخل AnimatePresence: الحركة داخل Portal، فلا يراها الـ AnimatePresence
+          ولا يحذف العنصر بعد انتهاء الخروج — فيبقى طبقة بيضاء/شفافة فوق الشاشة تمنع كل
+          اللمسات (كانت هي سبب «الشاشة البيضاء» و«الموقع مش بيستجيب» على الهاتف). */}
+      {loginAnimation && <LoginTransition user={loginAnimation} onDone={() => setLoginAnimation(null)} />}
     </motion.div>
   );
 }
@@ -3275,7 +3319,7 @@ function SalesChatView({ currentUser, users, messages, onSend, onRead, readOnly 
                       {last && <span className="text-[10px] text-[var(--text-dim)] whitespace-nowrap">{chatTime(last.createdAt)}</span>}
                     </div>
                     <div className="flex items-center justify-between gap-2 mt-0.5">
-                      <span className="text-[10.5px] text-[var(--text-dim)]">{rankLabel(mgr.role)}</span>
+                      <span className="text-[10.5px] text-[var(--text-dim)]">{chatRank(mgr)}</span>
                       {unread > 0 && (
                         <span className="min-w-5 h-5 px-1.5 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold text-white shrink-0">
                           {unread > 9 ? '9+' : unread}
@@ -3308,7 +3352,7 @@ function SalesChatView({ currentUser, users, messages, onSend, onRead, readOnly 
                 </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="font-bold text-[var(--text-strong)] truncate">{visible.name}</h3>
-                  <p className="text-[11px] text-[var(--text-muted)]">{rankLabel(visible.role)} — محادثة خاصة</p>
+                  <p className="text-[11px] text-[var(--text-muted)]">{chatRank(visible)} — محادثة خاصة</p>
                 </div>
               </div>
               <ChatThread
@@ -3480,14 +3524,17 @@ function AdminChatView({ currentUser, users, messages, onSend, onRead, onGroupRe
                       {last && <span className="text-[10px] text-[var(--text-dim)] whitespace-nowrap">{chatTime(last.createdAt)}</span>}
                     </div>
                     <div className="flex items-center justify-between gap-2 mt-0.5">
-                      <span className="text-[11px] text-[var(--text-muted)] truncate">
-                        {last ? `${last.fromId === currentUser.id ? 'أنت: ' : ''}${last.text}` : 'لا توجد رسائل بعد'}
-                      </span>
+                      <span className="text-[10.5px] text-[var(--text-dim)] truncate">{chatRank(person)}</span>
                       {unread > 0 && (
                         <span className="min-w-5 h-5 px-1.5 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold text-white shrink-0">
                           {unread > 9 ? '9+' : unread}
                         </span>
                       )}
+                    </div>
+                    <div className="flex items-center justify-between gap-2 mt-0.5">
+                      <span className="text-[11px] text-[var(--text-muted)] truncate">
+                        {last ? `${last.fromId === currentUser.id ? 'أنت: ' : ''}${last.text}` : 'لا توجد رسائل بعد'}
+                      </span>
                     </div>
                   </div>
                 </button>
@@ -3542,7 +3589,7 @@ function AdminChatView({ currentUser, users, messages, onSend, onRead, onGroupRe
                 <div className="flex-1 min-w-0">
                   <h3 className="font-bold text-[var(--text-strong)] truncate">{selected.name}</h3>
                   <p className="text-[11px] text-[var(--text-muted)]">
-                    {selected.role === 'supervisor' ? 'مشرف' : 'سيلز'}
+                    {chatRank(selected)}
                     {selected.username ? ` • @${selected.username}` : ''}
                   </p>
                 </div>
@@ -3708,13 +3755,28 @@ function startTabFor(user: User): TabType {
 // Animated screen shown right after a successful login (admin & sales)
 function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
   const [done, setDone] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const isAdmin = user.role !== 'sales';
 
+  // بعد اكتمال الشريط: لحظة تأكيد قصيرة ثم تلاشٍ ثم إزالة من الشجرة
   useEffect(() => {
     if (!done) return;
-    const timer = setTimeout(onDone, 1000);
+    const timer = setTimeout(() => setLeaving(true), 700);
     return () => clearTimeout(timer);
-  }, [done, onDone]);
+  }, [done]);
+
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = setTimeout(onDone, 320);
+    return () => clearTimeout(timer);
+  }, [leaving, onDone]);
+
+  // شبكة أمان: تبويب في الخلفية أو «تقليل الحركة» يمنع اكتمال حركة الشريط،
+  // فلا تبقى شاشة الدخول عالقة إلى الأبد.
+  useEffect(() => {
+    const timer = setTimeout(() => setLeaving(true), 5000);
+    return () => clearTimeout(timer);
+  }, []);
 
   const accent = isAdmin
     ? { icon: Shield, ring: 'border-[var(--brand-primary-soft)]', text: 'text-[var(--text-muted)]' }
@@ -3725,10 +3787,10 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
   return createPortal(
     <motion.div
       initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0, scale: 1.06 }}
-      transition={{ duration: 0.35 }}
-      className="app-root fixed inset-0 z-[200] flex items-center justify-center overflow-hidden"
+      animate={leaving ? { opacity: 0, scale: 1.06 } : { opacity: 1, scale: 1 }}
+      transition={{ duration: 0.3 }}
+      aria-hidden={leaving}
+      className={`app-root fixed inset-0 z-[200] flex items-center justify-center overflow-hidden ${leaving ? 'pointer-events-none' : ''}`}
       dir="rtl"
     >
 
@@ -5171,7 +5233,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
           <input type="text" placeholder="ابحث بالاسم أو الرقم أو العقار أو المبلغ (مثال: مليون)" value={searchTerm} onChange={(e) => onSearch(e.target.value)}
             className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] pr-10 pl-4 py-2.5 text-[13.5px] text-[var(--text-strong)]" />
         </div>
-        <div className="flex items-center gap-2">
+        {/* أدوات القائمة: تلتف على الهاتف الضيق (320px) بدل ما تخرج من الشاشة */}
+        <div className="flex flex-wrap items-center gap-2">
           {/* ===== فلتر الإلغاء: أيقونة + لوحة أسباب ===== */}
           <button
             type="button"
@@ -5192,9 +5255,9 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
             <button className={view === 'table' ? 'on' : ''} onClick={() => switchView('table')} title="جدول بأعمدة"><Rows className="w-4 h-4" /></button>
           </div>
           <button onClick={() => setShowComments(true)}
-            className="flex items-center gap-1.5 text-[11.5px] font-semibold text-amber-300 border border-amber-400/30 rounded-[var(--r-sm)] px-3 py-2.5"
+            className="flex items-center gap-1.5 text-[11.5px] font-semibold text-amber-300 border border-amber-400/30 rounded-[var(--r-sm)] px-2.5 py-2.5 shrink-0"
             title="يعرض كل التعليقات وعددها وزرار التلخيص للـ CEO">
-            <MessageSquare className="w-4 h-4" /> كل التعليقات
+            <MessageSquare className="w-4 h-4" /> <span className="hidden min-[380px]:inline">كل التعليقات</span>
           </button>
           {/* السيلز يضيف رقمه بنفسه: ينزل في «أرقام جديدة» باسمه بلا اختيار مندوب */}
           {onAddNumber && (
@@ -5204,8 +5267,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
               <Plus className="w-3.5 h-3.5" /> إضافة رقم
             </button>
           )}
-          <button onClick={onAdd} className="btn-primary">
-            <Plus className="w-4 h-4" /> إضافة عميل
+          <button onClick={onAdd} className="btn-primary shrink-0">
+            <Plus className="w-4 h-4" /> <span>إضافة عميل</span>
           </button>
         </div>
       </div>
@@ -5658,7 +5721,7 @@ function PipelineView({ clients, numbers = [], onUpdateStage }: any) {
 
 // ===== شريط التذكير الرنّان: نفس شكل الإشعار الأصلي + أزرار الإسكات والإتمام والتأجيل =====
 // ===== بند ٤: صفحة حالة واحدة — كل الأرقام اللي عليها الحالة دي =====
-function StatusBoardView({ statusId, numbers = [], onClose, onCall, onSelect }: any) {
+function StatusBoardView({ statusId, numbers = [], onClose, onCall, onSelect, onAddFeedback }: any) {
   const meta = FEEDBACK_STATUS_BY_ID[statusId];
   // نفس قاعدة لوحة الحالات: كل رقم بحالته (عميل مسجّل أو رقم في التوزيع)
   const items: any[] = (numbers || []).filter(
@@ -5701,12 +5764,18 @@ function StatusBoardView({ statusId, numbers = [], onClose, onCall, onSelect }: 
                     <p className="stb-phone" dir="ltr">{record.phone}</p>
                     {note ? <p className="stb-note">{note}</p> : null}
                   </div>
-                  <a href={`tel:${record.phone}`} className="rc-action" dir="ltr">اتصال</a>
-                  {client ? (
-                    <button type="button" className="rc-action" onClick={() => onCall?.(client)}>تسجيل فيدباك</button>
-                  ) : (
-                    <span className="stb-note">رقم في التوزيع</span>
-                  )}
+                  <div className="stb-acts" onClick={(e) => e.stopPropagation()}>
+                    <a href={`tel:${record.phone}`} className="rc-action" dir="ltr">اتصال</a>
+                    {/* نفس إجراءات كارت العميل في تبويب العملاء: اتصال + فيدباك + واتساب */}
+                    <button type="button" className="rc-action is-done" onClick={() => onAddFeedback?.(record)}>
+                      <MessageSquare className="w-3.5 h-3.5" /> فيدباك
+                    </button>
+                    <WhatsAppButton
+                      name={record.name || client?.name}
+                      phones={[record.phone, ...(client?.phones || [])]}
+                      className="rc-action"
+                    />
+                  </div>
                 </div>
               );
             })}
@@ -5784,7 +5853,7 @@ function AlarmBar({ alarm: current, snoozeMinutes = 5, lateAfterMinutes = 5, onC
       initial={{ opacity: 0, y: -60 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -60 }}
-      className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4"
+      className="alarm-float fixed left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4"
     >
       <div className={`panel p-4 ${late ? 'rc-panel is-late' : ''}`}>
         <div className="flex items-start gap-3">
@@ -7073,8 +7142,8 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: any)
           const isDue = isReminderDue(reminder);
           return (
             <div key={reminder.id} className={`panel p-4 ${isDue ? 'border-red-500/50' : ''}`}>
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
                   <h4 className="font-bold text-[var(--text-strong)] text-lg">{reminder.clientName}</h4>
                   <p className="text-sm text-[var(--text-muted)]" dir="ltr">{reminder.clientPhone}</p>
                   <p className="text-xs text-[var(--text-muted)] mt-1">{formatDateTime(reminder.dateTime)}</p>
@@ -7087,7 +7156,7 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: any)
                     </p>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   <button onClick={() => onComplete(reminder.id)} title="إتمام" className="p-2 bg-emerald-500/20 rounded-[var(--r-sm)]">
                     <Check className="w-4 h-4 text-emerald-400" />
                   </button>
@@ -7117,11 +7186,9 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: any)
 function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd, callLogs = [] }: any) {
   const [historyClient, setHistoryClient] = useState<Client | null>(null);
   const norm = (value: any) => normalizeDigits(String(value || '')).replace(/\D/g, '');
-  const myPhones = new Set<string>((clients || []).map((c: Client) => norm(c.phone)).filter(Boolean));
-  // كومنتاتي: ما كتبته بنفسي + أى كومنت على رقم من أرقامي (للبيانات القديمة المنسوبة لصاحب العميل)
-  const mine = (feedbacks || []).filter(
-    (f: DailyFeedback) => f.userId === currentUser?.id || (!!f.clientPhone && myPhones.has(norm(f.clientPhone)))
-  );
+  // كومنتاتي أنا وحدي: الفيدباك منسوب لصاحبه (userId). الربط بالرقم كان يجعل
+  // فيدباك مندوب يظهر لمندوب آخر حصل على نفس الرقم — وهو ما شكا منه الفريق.
+  const mine = (feedbacks || []).filter((f: DailyFeedback) => f.userId === currentUser?.id);
 
   // تجميع: كارت واحد لكل رقم
   const byNumber = new Map<string, DailyFeedback[]>();
@@ -10740,8 +10807,15 @@ function AddPropertyModal({ clients, currentUser, onClose, onSuccess }: any) {
   );
 }
 
-function AddFeedbackModal({ clients, currentUser, onClose, onSuccess }: any) {
-  const [form, setForm] = useState({ clientId: '', clientPhone: '', clientName: '', date: new Date().toISOString().slice(0, 16), feedback: '', status: '', callStatus: 'called', duration: '', nextAction: '', cancelReason: '' });
+function AddFeedbackModal({ clients, currentUser, onClose, onSuccess, preset }: any) {
+  // preset: رقم/عميل محدد مسبقاً (يُفتح من مراحل الرئيسية بنفس رقم الكارت)
+  const [form, setForm] = useState({
+    clientId: preset?.clientId || '',
+    clientPhone: preset?.clientPhone || '',
+    clientName: preset?.clientName || '',
+    date: new Date().toISOString().slice(0, 16),
+    feedback: '', status: '', callStatus: 'called', duration: '', nextAction: '', cancelReason: '',
+  });
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

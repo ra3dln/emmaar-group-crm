@@ -456,18 +456,30 @@ async function processPushTick({
   }
 
   // ٢) رسائل الشات الجديدة
+  // الرسالة تصل **للطرف الذي تمت المحادثة معه فقط**: رسالة خاصة → جهاز صاحبها وحده،
+  // ورسالة غرفة المدراء → أجهزة المدراء (ما عدا كاتبها). لا تُرسل لكل الأجهزة
+  // كما كان يحدث حين كانت المحادثة تُعامل كأنها مشتركة.
   let messageCount = 0;
   for (const message of data.crm_messages || []) {
     if (state.messages[message.id]) continue;
     const sentAt = Date.parse(message.createdAt || '');
     if (Number.isNaN(sentAt) || now - sentAt > RECENT_MS) continue;
-    const delivered = await push(message.toId, {
-      kind: 'message',
-      title: `💬 رسالة من ${message.fromName || 'الإدارة'}`,
-      body: String(message.text || '').slice(0, 160),
-      tag: `message-${message.id}`,
-      url: '/',
-    });
+    // غرفة المدراء معرّفها 'managers' وليس حساباً حقيقياً، فلا بد من تفكيكها
+    // إلى أعضائها وإلا لم يصل إشعار الغرفة لأحد أبداً.
+    const recipients =
+      message.toId === 'managers'
+        ? managers.filter((u) => u.id !== message.fromId).map((u) => u.id)
+        : [message.toId];
+    let delivered = 0;
+    for (const recipientId of recipients) {
+      delivered += await push(recipientId, {
+        kind: 'message',
+        title: `💬 رسالة من ${message.fromName || 'الإدارة'}`,
+        body: String(message.text || '').slice(0, 160),
+        tag: `message-${message.id}`,
+        url: '/',
+      });
+    }
     if (!delivered) continue;
     state.messages[message.id] = now;
     messageCount += 1;
