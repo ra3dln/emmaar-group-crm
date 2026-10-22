@@ -1738,8 +1738,14 @@ function App() {
     // وأي مكان ينسى الفلتر كان يعرض شغل زميله عليه (فوضي حسابات مفتوحة على بعض).
     // الإدارة (CEO) ترى الكل، وقائد الفريق يرى فريقه فقط بشرط وجود فريق فعلي
     // (فريق فارغ ما يبقاش معناه «كل الحسابات»).
+    //
+    // **استثناء المطوّر**: حسابه إداري في القاعدة (ليقدر يدير الحسابات) لكنه يُعرَض
+    // في كل الواجهة كسيلز عادي. كان دوره الإداري يمنحه نطاقاً كاملاً — فيرى أرقام كل
+    // المندوبين وفيدباكهم (وهو الخلط المُبلَّغ عنه: حساب محمد وحساب SHEROQ).
+    // نطاقه الآن بياناته هو فقط، ولو احتاج يشوف شغل غيره يستخدم «الدخول إلى الحساب».
+    const isDeveloper = isDeveloperAccount(currentUser);
     const myScopeIds: Set<string> | null = (() => {
-      if (currentUser.role === 'admin') return null;
+      if (currentUser.role === 'admin' && !isDeveloper) return null;
       if (currentUser.role === 'supervisor' && String(currentUser.team || '').trim()) {
         return new Set<string>([
           currentUser.id,

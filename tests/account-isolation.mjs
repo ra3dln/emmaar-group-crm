@@ -180,7 +180,15 @@ try {
     !/myNumbers\.has\(digits\(f\.clientPhone\)\)/.test(app) &&
       !/f\.clientPhone && myPhones\.has/.test(app)
   );
-  check('الحساب الإداري وحده يرى كل البيانات', /if \(currentUser\.role === 'admin'\) return null;/.test(app));
+  check('الحساب الإداري وحده يرى كل البيانات', /if \(currentUser\.role === 'admin' && !isDeveloper\) return null;/.test(app));
+  // حساب المطوّر إداري في القاعدة (ليدير الحسابات) لكنه سيلز في كل الواجهة،
+  // وكان نطاقه الكامل يخلط أرقامه وفيدباكه بأرقام بقية المندوبين (حساب محمد وSHEROQ).
+  check(
+    'حساب المطوّر محصور في بياناته هو (لا يرى أرقام غيره)',
+    /const isDeveloper = isDeveloperAccount\(currentUser\)/.test(app) &&
+      /const isDeveloperAccount = \(user/.test(app) &&
+      /isDeveloperAccount\(user\) \? 'System Developer'/.test(app)
+  );
 
   console.log(`\n✅ كل اختبارات فصل الحسابات نجحت (${passed}).`);
 } finally {
