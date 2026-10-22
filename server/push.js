@@ -134,7 +134,9 @@ export async function sendPush(subscription, payload, keys, subject = PUSH_SUBJE
     headers: {
       'Content-Encoding': 'aes128gcm',
       'Content-Type': 'application/octet-stream',
-      TTL: '900',
+      // يبقى محفوظاً في خدمة الإشعارات يوماً كاملاً: لو الجهاز كان مقفولاً أو بلا
+      // إنترنت وقت الإرسال، يصل الإشعار فور عودته بدل أن يُسقط بعد ربع ساعة.
+      TTL: '86400',
       Urgency: 'high', // مهم: يوقظ الجهاز حتى في وضع توفير الطاقة
       Authorization: `vapid t=${jwt}, k=${publicKey}`,
     },
@@ -380,7 +382,13 @@ async function processPushTick({
   state.reminders = state.reminders || {};
   state.messages = state.messages || {};
   state.alerts = state.alerts || {};
+  // سجل الأرقام التي أُرسل عنها إشعار — يمنع التكرار كل دورة
+  state.leads = state.leads || {};
   const now = Date.now();
+  // من يُبلَّغ بالنظام (الإدارة): تنبيهات التوكن والأرقام غير الموزّعة
+  const managers = (data.crm_users || []).filter(
+    (u) => u && u.isActive !== false && (u.role === 'admin' || u.role === 'supervisor')
+  );
 
   // نداء يدوي متكرر (كل جهاز مفتوح): لا نضرب القاعدة أكثر من مرة كل ٢٠ ثانية
   if (minIntervalMs && state.lastRunAt && now - Number(state.lastRunAt) < minIntervalMs) {
@@ -479,9 +487,6 @@ async function processPushTick({
   // حتى لو الموقع مقفول. تُرسل لمن يدير التوكن (admin / supervisor) لا للمندوبين،
   // ولا تتكرر إلا كل ١٢ ساعة حتى لا تتحول إلى إزعاج يومي.
   let alertCount = 0;
-  const managers = (data.crm_users || []).filter(
-    (u) => u && u.isActive !== false && (u.role === 'admin' || u.role === 'supervisor')
-  );
   for (const alert of systemAlerts) {
     if (!alert?.id || !managers.length) continue;
     const last = Number(state.alerts[alert.id]) || 0;
@@ -503,6 +508,57 @@ async function processPushTick({
     changed = true;
   }
 
+  // ٤) أرقام جديدة نزلت (من الفورمات أو الاستيراد) — إشعار فوري حتى لو الموقع مقفول
+  //    • الرقم الموزّع: إشعار لصاحبه بالاسم والرقم ليبدأ الاتصال فوراً.
+  //    • الرقم غير الموزّع: إشعار للإدارة أنه وصل وينتظر التوزيع.
+  //    تُجمع أرقام المستلم الواحد في إشعار واحد (دفعة الفورم ٤٠ رقماً لا تتحول ٤٠ إشعاراً).
+  //    ولا يُعلَّم الرقم كمُرسَل إلا إذا وصل لجهاز فعلاً — فإن لم توجد أجهزة يُعاد لاحقاً.
+  let leadCount = 0;
+  const newLeads = (data.crm_assigned_leads || []).filter((lead) => {
+    if (!lead?.id || state.leads[lead.id]) return false;
+    const createdAt = Date.parse(lead.createdAt || '');
+    return Number.isFinite(createdAt) && now - createdAt <= RECENT_MS;
+  });
+  if (newLeads.length) {
+    const byTarget = new Map();
+    for (const lead of newLeads) {
+      const owner = String(lead.salesId || '').trim();
+      const target = owner || 'managers';
+      if (!byTarget.has(target)) byTarget.set(target, []);
+      byTarget.get(target).push(lead);
+    }
+    for (const [target, leads] of byTarget) {
+      const one = leads[0];
+      const form = one?.formName ? ` • ${one.formName}` : '';
+      const payload = {
+        kind: 'lead',
+        title:
+          leads.length === 1
+            ? `🆕 رقم جديد نزل${target === 'managers' ? ' وينتظر التوزيع' : ''}`
+            : `🆕 ${leads.length} أرقام جديدة نزلت${target === 'managers' ? ' وتنتظر التوزيع' : ''}`,
+        body:
+          leads.length === 1
+            ? `${one?.name || 'عميل'} — ${one?.phone || ''}${form}`
+            : `${leads
+                .slice(0, 3)
+                .map((l) => `${l?.name || 'عميل'} ${l?.phone || ''}`.trim())
+                .join(' • ')}${leads.length > 3 ? ` +${leads.length - 3}` : ''}`,
+        tag: `lead-${one?.id || Date.now()}`,
+        url: '/',
+      };
+      let delivered = 0;
+      if (target === 'managers') {
+        for (const manager of managers) delivered += await push(manager.id, payload);
+      } else {
+        delivered = await push(target, payload);
+      }
+      if (!delivered) continue; // لا أجهزة/فشل مؤقت: يُعاد في الدورة القادمة بلا ضياع
+      for (const lead of leads) state.leads[lead.id] = now;
+      leadCount += leads.length;
+      changed = true;
+    }
+  }
+
   // نحفظ دائمًا وقت التشغيل ونتيجته (ولو لم يُرسل شيئاً) حتى يعرف المستخدم
   // من شاشة التشخيص أن المُشغّل يعمل فعلاً وأن المشكلة في الاشتراك أو الصلاحية.
   try {
@@ -510,14 +566,15 @@ async function processPushTick({
       reminders: prune(state.reminders),
       messages: prune(state.messages),
       alerts: prune(state.alerts),
+      leads: prune(state.leads),
       lastRunAt: now,
-      lastResult: { sent, reminders: reminderCount, messages: messageCount, alerts: alertCount, changed },
+      lastResult: { sent, reminders: reminderCount, messages: messageCount, alerts: alertCount, leads: leadCount, changed },
     });
   } catch (error) {
     logger.warn?.('[push] تعذّر حفظ حالة الإرسال:', String(error?.message || error));
   }
 
-  return { sent, reminders: reminderCount, messages: messageCount, alerts: alertCount };
+  return { sent, reminders: reminderCount, messages: messageCount, alerts: alertCount, leads: leadCount };
 }
 
 // ---------- مسبار للسيرفر المحلي: ملفات JSON + setInterval ----------

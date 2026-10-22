@@ -255,6 +255,7 @@ try {
   check('مركز الإشعارات يعرض تشخيص الإشعارات الخارجية', app.includes('pushHealth') && app.includes('الإشعارات الخارجية'));
   check('إعادة الاشتراك عند مفتاح قديم (InvalidStateError)', pushSrc.includes('stale.unsubscribe()'));
   check('ملف العامل يعرض الإشعار بمحاولة آمنة', swSrc.includes('showSafe') && swSrc.includes('requireInteraction'));
+  check('إشعار الرقم الجديد يفتح الصفحة عند اللمس', swSrc.includes('notificationclick') && swSrc.includes('openWindow'));
 
   // ===== ١٢) تنبيهات النظام (انتهاء توكن السحب) — تصل الإدارة وحدها ولا تتكرر كل دورة =====
   const bossLogin = await call('/api/auth?action=login', {
@@ -292,6 +293,54 @@ try {
   // بلا تنبيهات مستحقة: الدورة العادية لا تُرسل شيئاً إضافياً
   const calmRun = await processPushesOnce({ storage, vapidStore, stateStore, systemAlerts: [] });
   check('دورة بلا تنبيهات لا تُرسل شيئاً', calmRun.sent === 0 && calmRun.alerts === 0, JSON.stringify(calmRun));
+
+  // ===== ١٣) رقم جديد نزل → إشعار فوري لصاحبه حتى لو الموقع مقفول =====
+  // المحرك يعمل على السيرفر (cron / setInterval) فلا يعتمد على متصفح مفتوح.
+  db.data.crm_assigned_leads = [
+    {
+      id: 'lead-1', name: 'عميل جديد', phone: '01010002001', salesId: 'sales-1',
+      createdAt: new Date(Date.now() - 60_000).toISOString(), formName: 'GO ADS | CAVA',
+    },
+    // رقم قديم (أكثر من ٦ ساعات) لا ينبّه — لا نزعج الفريق بأرشيف قديم
+    {
+      id: 'lead-old', name: 'قديم', phone: '01010002009', salesId: 'sales-1',
+      createdAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+    },
+  ];
+  const beforeLead = received.length;
+  const leadRun = await processPushesOnce({ storage, vapidStore, stateStore });
+  check('الرقم الجديد أرسل إشعاراً واحداً', leadRun.leads === 1 && received.length === beforeLead + 1, JSON.stringify(leadRun));
+  check('التاريخ القديم لم يُنبّه', (pushState.leads || {})['lead-old'] === undefined, JSON.stringify(pushState.leads));
+
+  const leadAgain = await processPushesOnce({ storage, vapidStore, stateStore });
+  check('نفس الرقم لا يُرسل مرتين', leadAgain.leads === 0 && received.length === beforeLead + 1, JSON.stringify(leadAgain));
+
+  // رقم غير موزّع: الإشعار يذهب للإدارة لتعرف أن رقماً وصل وينتظر التوزيع
+  db.data.crm_assigned_leads.push({
+    id: 'lead-2', name: 'بانتظار التوزيع', phone: '01010002002', salesId: '',
+    createdAt: new Date(Date.now() - 30_000).toISOString(), formName: 'فورم فيلات',
+  });
+  const unassignedRun = await processPushesOnce({ storage, vapidStore, stateStore });
+  check('الرقم غير الموزّع يُنبّه الإدارة', unassignedRun.leads === 1 && received.length === beforeLead + 2, JSON.stringify(unassignedRun));
+
+  // الدفعة الواحدة تُجمَّع في إشعار واحد لا إشعار لكل رقم
+  db.data.crm_assigned_leads.push(
+    ...Array.from({ length: 5 }, (_, i) => ({
+      id: `lead-batch-${i}`,
+      name: `عميل دفعة ${i}`,
+      phone: `0101000300${i}`,
+      salesId: 'sales-1',
+      createdAt: new Date(Date.now() - 20_000).toISOString(),
+      formName: 'دفعة',
+    }))
+  );
+  const beforeBatch = received.length;
+  const batchRun = await processPushesOnce({ storage, vapidStore, stateStore });
+  check(
+    'دفعة ٥ أرقام = إشعار واحد (لا إغراق)',
+    batchRun.leads === 5 && received.length === beforeBatch + 1,
+    JSON.stringify(batchRun)
+  );
 
   console.log(`\n✅ كل اختبارات الإشعارات نجحت (${passed}).`);
 } finally {
