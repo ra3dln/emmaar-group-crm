@@ -322,9 +322,13 @@ async function fetchFromMeta(config, channel = 'facebook') {
       : (config.forms.length === 1 ? baseCursor : 0);
 
     const params = { fields: 'created_time,field_data', limit: '200', access_token: token };
-    // نطلب من فيسبوك الأرقام الأحدث من آخر سحب لهذا الفورم فقط
+    // نطلب من فيسبوك الأرقام الأحدث من آخر سحب لهذا الفورم فقط.
+    // نرجع ثانية للوراء: فيسبوك يخزّن الوقت بدقة الثانية، والليدز التي تصل في نفس
+    // ثانية آخر ليد تم سحبه كانت تُسقط للأبد بصمت (سبب «الرقمين الناقصين»).
+    // التكرار الناتج عن هذه الثانية مرفوض تلقائياً في buildAssignments فلا ضرر.
     if (formCursor) {
-      params.filtering = JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: formCursor }]);
+      const from = Math.max(formCursor - 1, 1);
+      params.filtering = JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: from }]);
     }
 
     try {
@@ -706,15 +710,33 @@ export function buildAssignments({ fetched, knownPhones = [], at = new Date().to
   const added = [];
   let duplicates = 0;
   let invalid = 0;
+  // تفصيل كل رقم لم يُضف ولماذا — هذا ما يجيب عن سؤال «فيسبوك عنده ٣٨ وعندنا ٣٦، فين الاتنين؟»
+  // بلا هذه القائمة كان الرقم يختفي بصمت ولا يعرف أحد: مكرر؟ غير صالح؟ أم لم يُقرأ أصلاً؟
+  const rejected = [];
+  const reject = (row, reason, rawPhone) => {
+    if (rejected.length >= 200) return;
+    rejected.push({
+      phone: normalizeEgyptPhone(rawPhone || row.phone || ''),
+      name: String(row.name || '').slice(0, 80),
+      reason, // duplicate | invalid | limit
+      at: row.date || '',
+      source: String(row.source || '').slice(0, 120),
+    });
+  };
 
   for (const row of fetched || []) {
-    if (added.length >= MAX_PER_RUN) break;
+    if (added.length >= MAX_PER_RUN) {
+      reject(row, 'limit');
+      continue;
+    }
     if (!isValidPhone(row.phone)) {
       invalid += 1;
+      reject(row, 'invalid');
       continue;
     }
     if (seen.has(row.phone)) {
       duplicates += 1;
+      reject(row, 'duplicate');
       continue;
     }
     seen.add(row.phone);
@@ -744,6 +766,7 @@ export function buildAssignments({ fetched, knownPhones = [], at = new Date().to
     added,
     duplicates,
     invalid,
+    rejected,
     assignCursor: 0,
     unassigned: added.length,
     perUser: [],
@@ -882,6 +905,8 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       added: built.added.length,
       duplicates: built.duplicates,
       invalid: built.invalid,
+      // قائمة الأرقام المستبعدة بالسبب — تظهر للإدارة في نتيجة السحب
+      rejected: built.rejected || [],
       perUser: built.perUser,
       unassigned: Math.max(built.unassigned - auto.assignments.length, 0),
       autoAssigned: auto.assignments.length,

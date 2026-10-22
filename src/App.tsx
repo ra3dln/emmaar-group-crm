@@ -8566,7 +8566,10 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, active
 }
 
 function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onImport, onAssign, activeForms = [], autoRules = [], onSaveAutoRule }: any) {
-  const salesUsers = users.filter((u: User) => (u.role === 'sales' || u.role === 'supervisor') && u.isActive);
+  // نفس قاعدة السيرفر: غياب isActive يعني «نشط» (isActive !== false).
+  // الاشتراط بـ u.isActive كان يُخفي أي حساب قديم لم يُكتب له الحقل أصلاً
+  // فيقول المدير «الحساب مش ظاهر في توزيع الأرقام» ولا يستطيع توزيع رقم عليه.
+  const salesUsers = users.filter((u: User) => (u.role === 'sales' || u.role === 'supervisor') && u.isActive !== false);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'unassigned'>('all');
 
@@ -9672,7 +9675,20 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
         summary = json.summary;
       }
 
-      setNotice(summary?.ok ? `تم السحب: ${summary.added} رقم جديد (مكرر ${summary.duplicates} - غير صالح ${summary.invalid})` : `فشل السحب: ${summary?.error}`);
+      // تفصيل الأرقام المستبعدة: بدونها يختفي الرقم بصمت ولا يعرف أحد أكان مكرراً أم غير صالح
+      const rejectedList = Array.isArray(summary?.rejected) ? summary.rejected : [];
+      const reasonAr: Record<string, string> = { duplicate: 'مكرر', invalid: 'غير صالح', limit: 'تجاوز الحد' };
+      const rejectedLine = rejectedList.length
+        ? ` — أرقام لم تُضف: ${rejectedList
+            .slice(0, 6)
+            .map((r: any) => `${r.phone || 'بدون رقم'} (${reasonAr[r.reason] || r.reason})`)
+            .join('، ')}${rejectedList.length > 6 ? ` و${rejectedList.length - 6} غيرها` : ''}`
+        : '';
+      setNotice(
+        summary?.ok
+          ? `تم السحب: ${summary.added} رقم جديد (مكرر ${summary.duplicates} - غير صالح ${summary.invalid})${rejectedLine}`
+          : `فشل السحب: ${summary?.error}`
+      );
     } catch (error: any) {
       setNotice(error?.message || 'تعذّر السحب');
     } finally {
@@ -9986,6 +10002,24 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
               دخل {last.added} رقم — مكرر {last.duplicates} — غير صالح {last.invalid}
               <span className="block text-[var(--text-dim)] mt-0.5">{formatDateTime(last.at)}</span>
             </p>
+          )}
+          {last?.ok && Array.isArray(last.rejected) && last.rejected.length > 0 && (
+            <div className="mt-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] border border-[var(--border)] p-2">
+              <p className="text-[var(--text-muted)] mb-1">أرقام لم تُضف (السبب):</p>
+              <ul className="space-y-0.5">
+                {last.rejected.slice(0, 12).map((r: any, index: number) => (
+                  <li key={`${r.phone}-${index}`} className="text-[var(--text-dim)]" dir="ltr">
+                    {r.phone || 'بدون رقم'}
+                    <span className="mx-1">—</span>
+                    {r.reason === 'duplicate' ? 'مكرر في النظام' : r.reason === 'invalid' ? 'رقم غير صالح' : 'تجاوز حد الدفعة'}
+                    {r.name ? ` (${r.name})` : ''}
+                  </li>
+                ))}
+              </ul>
+              {last.rejected.length > 12 && (
+                <p className="text-[var(--text-dim)] mt-1">+{last.rejected.length - 12} أخرى</p>
+              )}
+            </div>
           )}
           {last && !last.ok && <p className="text-red-400">{last.error}</p>}
         </div>
@@ -11261,7 +11295,10 @@ function AddTeamModal({ users, currentUser, onClose, onSuccess }: any) {
 // Add Assigned Lead Modal
 // ===== استيراد الأرقام من ملف (فيسبوك / إنجاز) =====
 function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose, onSuccess }: any) {
-  const salesUsers = users.filter((u: User) => (u.role === 'sales' || u.role === 'supervisor') && u.isActive);
+  // نفس قاعدة السيرفر: غياب isActive يعني «نشط» (isActive !== false).
+  // الاشتراط بـ u.isActive كان يُخفي أي حساب قديم لم يُكتب له الحقل أصلاً
+  // فيقول المدير «الحساب مش ظاهر في توزيع الأرقام» ولا يستطيع توزيع رقم عليه.
+  const salesUsers = users.filter((u: User) => (u.role === 'sales' || u.role === 'supervisor') && u.isActive !== false);
   const [stage, setStage] = useState<'pick' | 'preview' | 'done'>('pick');
   const [fileName, setFileName] = useState('');
   const [preview, setPreview] = useState<ImportPreview | null>(null);

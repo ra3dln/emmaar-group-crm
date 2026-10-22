@@ -1,7 +1,8 @@
-// ===== بيانات تجريبية معزولة لاختبار الحماية على السيرفر المحلي =====
+// ===== بيانات تجريبية معزولة لاختبار الحماية على السيرفر المحلي ====
 // تُنشئ ملف بيانات منفصلاً تماماً (data/e2e-auth-db.json) حتى لا تلمس بيانات الشركة:
 //   admin / admin123      (كلمة المرور الافتراضية الضعيفة => إلزام تغيير)
 //   ahmed / Ahmed1234     (سيلز، كلمة مرور نصية قديمة => تُرقّى عند أول دخول)
+//   mohamed / Dev1234     (مطور، role: sales للمشاركة في توزيع الأرقام ورؤية قائمة السيلز)
 // التشغيل:  node tests/seed-e2e-db.mjs
 
 import fs from 'node:fs';
@@ -34,7 +35,19 @@ const db = {
         team: 'فريق أ',
         isActive: true,
         password: 'Ahmed1234',
-        createdAt: '2026-01-02T00:00:00.000Z',
+        createdAt: '2026-09-02T00:00:00.000Z',
+        createdBy: 'system',
+      },
+      {
+        id: 'u-mohamed',
+        username: 'mohamed',
+        name: 'المطور',
+        phone: '',
+        role: 'sales',
+        team: '',
+        isActive: true,
+        password: 'Dev1234',
+        createdAt: '2026-09-15T00:00:00.000Z',
         createdBy: 'system',
       },
     ],

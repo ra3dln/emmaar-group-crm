@@ -566,11 +566,16 @@ try {
     JSON.stringify(igLead2 || {}).slice(0, 200)
   );
 
-  // المؤشر: الدورة التالية تطلب من ميتا الأرقام الأحدث فقط (filtering time_created) فلا تكرار
+  // المؤشر: الدورة التالية تطلب من ميتا الأرقام الأحدث فقط (filtering time_created).
+  // نرجع ثانية واحدة للوراء عمداً لأن فيسبوك يخزّن الوقت بدقة الثانية: ليد يصل في نفس
+  // ثانية آخر ليد كان يُسقط للأبد (سبب «الرقمين الناقصين»). النتيجة: قد نعيد قراءة
+  // ثانية واحدة، لكن لا يُضاف رقم مكرر واحد — الأمان أهم من طلب صغير إضافي.
   const tokenAgain = await call(cronApi, { url: '/api/cron?key=secret-123&force=1' });
   check(
-    'لا تكرار في مسار التوكن: الدورة التالية تجلب صفراً',
-    tokenAgain.json?.summary?.added === 0 && tokenAgain.json?.summary?.fetched === 0,
+    'الدورة التالية لا تضيف أي رقم ولا تفقد شيئاً (المكرر يُرفض محلياً)',
+    tokenAgain.json?.summary?.added === 0 &&
+      (tokenAgain.json?.summary?.fetched === 0 ||
+        tokenAgain.json?.summary?.duplicates === tokenAgain.json?.summary?.fetched),
     JSON.stringify(tokenAgain.json?.summary).slice(0, 200)
   );
   check('مؤشر آخر سحب يُرسل إلى ميتا (filtering time_created)', graph.calls.some((c) => c.includes('time_created')));
