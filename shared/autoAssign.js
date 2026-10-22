@@ -16,6 +16,21 @@ const cleanIds = (value) =>
 
 export const formNameOfLead = (lead) => String(lead?.formName || '').trim();
 
+// من يستقبل أرقاماً؟
+//   • سيلز أو قائد فريق (وظيفته الأصلية)
+//   • أو حساب «مطوّر» — رتبته إدارية (يرى قوائم الإدارة ويعمل بها) لكن يعمل سيلزاً أيضاً
+//     فيظهر في التوزيع ويأخذ أرقاماً مثل أي مندوب.
+// غياب isActive يُعتبر نشاطاً: نفس قاعدة السيرفر وباقي القوائم، فلا يختفي حساب
+// قديم لم يُكتب له الحقل أصلاً.
+// هذا الملف مشترك بين الواجهة والسيرفر، فيبقى حكم «من يستقبل رقماً» واحداً في المكانين.
+export const isAssignableSales = (user) =>
+  !!user &&
+  user.isActive !== false &&
+  (user.role === 'sales' ||
+    user.role === 'supervisor' ||
+    user.developer === true ||
+    user.receivesLeads === true);
+
 // سجل القاعدة: معرّفه هو اسم الفورم نفسه، فيبقى للفورم الواحد سجل واحد فقط
 export function normalizeRule(raw) {
   if (!raw || typeof raw !== 'object') return null;

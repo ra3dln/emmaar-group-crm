@@ -36,6 +36,7 @@ import {
   activeRuleFor,
   applyAutoRules,
   distributeLeads,
+  isAssignableSales,
   parseRules,
   upsertRule,
   type AutoAssignRule,
@@ -1977,7 +1978,7 @@ function App() {
     // لا رقم غير مخصّص = لا عمل (المزامنة تنادي هذا الفحص كل ثانية تقريباً)
     if (!assignedLeads.some((lead: AssignedLead) => !lead.salesId)) return;
     const activeSalesIds = users
-      .filter((u: User) => u.isActive && (u.role === 'sales' || u.role === 'supervisor'))
+      .filter((u: User) => isAssignableSales(u))
       .map((u: User) => String(u.id));
     const { assignments } = applyAutoRules({
       leads: assignedLeads,
@@ -7991,7 +7992,7 @@ function SalesShareModal({ leads, users, onClose }: any) {
   const [openId, setOpenId] = useState<string | null>(null);
 
   const team = useMemo(
-    () => users.filter((u: User) => u.isActive && (u.role === 'sales' || u.role === 'supervisor')),
+    () => users.filter((u: User) => isAssignableSales(u)),
     [users]
   );
 
@@ -8566,10 +8567,10 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, active
 }
 
 function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onImport, onAssign, activeForms = [], autoRules = [], onSaveAutoRule }: any) {
-  // نفس قاعدة السيرفر: غياب isActive يعني «نشط» (isActive !== false).
-  // الاشتراط بـ u.isActive كان يُخفي أي حساب قديم لم يُكتب له الحقل أصلاً
-  // فيقول المدير «الحساب مش ظاهر في توزيع الأرقام» ولا يستطيع توزيع رقم عليه.
-  const salesUsers = users.filter((u: User) => (u.role === 'sales' || u.role === 'supervisor') && u.isActive !== false);
+  // نفس قاعدة السيرفر حرفياً (isAssignableSales): سيلز/قائد فريق + حساب «مطوّر»
+  // إداري يعمل سيلزاً أيضاً. والاشتراط بـ u.isActive كان يُخفي أي حساب قديم
+  // لم يُكتب له الحقل أصلاً، فلا يظهر في توزيع الأرقام ولا يقبل رقمأ.
+  const salesUsers = users.filter((u: User) => isAssignableSales(u));
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'unassigned'>('all');
 
@@ -9358,7 +9359,7 @@ const localSalesTeam = () => {
   try {
     const users = JSON.parse(localStorage.getItem('crm_users') || '[]');
     return users
-      .filter((u: any) => u?.isActive && (u.role === 'sales' || u.role === 'supervisor'))
+      .filter((u: any) => isAssignableSales(u))
       .map((u: any) => ({ id: u.id, name: u.name }));
   } catch {
     return [];
@@ -10850,6 +10851,8 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
     role: user.role as User['role'],
     team: user.team || '',
     isActive: user.isActive,
+    // «إداري وسيلز في نفس الوقت»: يبقى رتبته كما هي ويستقبل أرقاماً أيضاً
+    receivesLeads: user.receivesLeads === true,
   });
   // الإدارة فقط ترى وتغيّر كلمات المرور
   const canSeePasswords = currentUser.role === 'admin';
@@ -10988,6 +10991,34 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
                 كلمة مرور جديدة (٦ أحرف على الأقل) — تعمل فور الحفظ على كل الأجهزة.
               </p>
             </div>
+          )}
+
+          {/* إداري وسيلز معاً: الرتبة تبقى كما هي (قوائم الإدارة شغالة) والحساب
+              يدخل في قائمة السيلز فيستقبل أرقاماً يدوياً وبالتوزيع التلقائي. */}
+          {!['sales', 'supervisor'].includes(String(form.role)) && (
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, receivesLeads: !form.receivesLeads })}
+              className={`w-full flex items-start gap-3 rounded-[var(--r-md)] px-4 py-3 text-right border transition-colors ${
+                form.receivesLeads
+                  ? 'bg-emerald-500/15 border-emerald-400/40'
+                  : 'bg-[var(--tint-1)] border-[var(--border)]'
+              }`}
+            >
+              <span
+                className={`w-5 h-5 mt-0.5 rounded-[var(--r-xs)] border flex items-center justify-center shrink-0 ${
+                  form.receivesLeads ? 'bg-emerald-500 border-emerald-500' : 'border-gray-500'
+                }`}
+              >
+                {form.receivesLeads && <Check className="w-3.5 h-3.5 text-[var(--text-strong)]" />}
+              </span>
+              <span>
+                <span className="block text-sm text-[var(--text)] font-bold">يعمل سيلزاً أيضاً (يستقبل أرقاماً)</span>
+                <span className="block text-xs text-[var(--text-dim)] mt-0.5">
+                  يبقى رتبته الإدارية وقوائمه كما هي، ويظهر في «توزيع الأرقام» ويقبل التوزيع اليدوي والتلقائي مثل أي مندوب.
+                </span>
+              </span>
+            </button>
           )}
 
           <div>
@@ -11295,10 +11326,10 @@ function AddTeamModal({ users, currentUser, onClose, onSuccess }: any) {
 // Add Assigned Lead Modal
 // ===== استيراد الأرقام من ملف (فيسبوك / إنجاز) =====
 function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose, onSuccess }: any) {
-  // نفس قاعدة السيرفر: غياب isActive يعني «نشط» (isActive !== false).
-  // الاشتراط بـ u.isActive كان يُخفي أي حساب قديم لم يُكتب له الحقل أصلاً
-  // فيقول المدير «الحساب مش ظاهر في توزيع الأرقام» ولا يستطيع توزيع رقم عليه.
-  const salesUsers = users.filter((u: User) => (u.role === 'sales' || u.role === 'supervisor') && u.isActive !== false);
+  // نفس قاعدة السيرفر حرفياً (isAssignableSales): سيلز/قائد فريق + حساب «مطوّر»
+  // إداري يعمل سيلزاً أيضاً. والاشتراط بـ u.isActive كان يُخفي أي حساب قديم
+  // لم يُكتب له الحقل أصلاً، فلا يظهر في توزيع الأرقام ولا يقبل رقمأ.
+  const salesUsers = users.filter((u: User) => isAssignableSales(u));
   const [stage, setStage] = useState<'pick' | 'preview' | 'done'>('pick');
   const [fileName, setFileName] = useState('');
   const [preview, setPreview] = useState<ImportPreview | null>(null);

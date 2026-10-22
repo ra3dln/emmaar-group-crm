@@ -12,7 +12,7 @@ import { fileStorage } from './store.js';
 import { authConfigured, isManagerRole, sessionFromRequest } from './auth.js';
 // قواعد «التوزيع التلقائي» التي تختارها الإدارة (فورم ← مندوبون بعينهم).
 // نفس ملف المنطق يعمل في المتصفح، فالنتيجة هنا وهناك متطابقة تماماً.
-import { applyAutoRules, AUTO_ASSIGN_KEY, parseRules } from '../shared/autoAssign.js';
+import { applyAutoRules, AUTO_ASSIGN_KEY, isAssignableSales, parseRules } from '../shared/autoAssign.js';
 
 const GRAPH_VERSION = 'v25.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -878,8 +878,9 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
     // القاعدة تُطبَّق هنا لحظة الوصول، فالأرقام تُسحب وتُوزَّع ٢٤/٧ بلا متصفح مفتوح،
     // ومن ليس في قائمة الفورم لا يصله منه رقم (كل رقم يُوزَّع على مختاريه وحدهم).
     const rules = parseRules(data[AUTO_ASSIGN_KEY]);
+    // نفس دالة الواجهة: سيلز/قائد فريق + حساب «مطوّر» الإداري الذي يعمل سيلزاً أيضاً
     const activeSalesIds = (Array.isArray(data.crm_users) ? data.crm_users : [])
-      .filter((user) => user && user.isActive !== false && (user.role === 'sales' || user.role === 'supervisor'))
+      .filter(isAssignableSales)
       .map((user) => String(user.id));
     const auto = rules.length
       ? applyAutoRules({

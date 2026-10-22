@@ -18,6 +18,7 @@ export type AutoRulesResult = {
 };
 
 export declare const AUTO_ASSIGN_KEY: string;
+export declare function isAssignableSales(user: any): boolean;
 export declare function formNameOfLead(lead: any): string;
 export declare function normalizeRule(raw: any): AutoAssignRule | null;
 export declare function parseRules(raw: any): AutoAssignRule[];

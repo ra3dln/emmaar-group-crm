@@ -147,17 +147,54 @@ const config = () =>
   check('سبب الاستبعاد يظهر في ملخص آخر سحب المحفوظ', Array.isArray(cfg.lastRun?.rejected) && cfg.lastRun.rejected.length === 2);
 }
 
-// ===== ٥) الواجهة تعرض التفصيل وفلتر السيلز لا يُخفي حساباً بلا isActive =====
+// ===== ٥) «إداري وسيلز في نفس الوقت»: يستقبل أرقاماً برتبته الإدارية =====
+{
+  const { isAssignableSales } = await import('../shared/autoAssign.js');
+  check('السيلز يستقبل', isAssignableSales({ role: 'sales', isActive: true }));
+  check('قائد الفريق يستقبل', isAssignableSales({ role: 'supervisor' }));
+  check('غياب isActive = نشط', isAssignableSales({ role: 'sales' }));
+  check('الموقوف لا يستقبل', isAssignableSales({ role: 'sales', isActive: false }) === false);
+  check(
+    'الإداري مع «يعمل سيلزاً» يستقبل',
+    isAssignableSales({ role: 'admin', receivesLeads: true })
+  );
+  check(
+    'الإداري العادي لا يستقبل (يبقى إدارياً فقط)',
+    isAssignableSales({ role: 'admin' }) === false
+  );
+  check('حساب المطوّر يستقبل', isAssignableSales({ role: 'admin', developer: true }));
+
+  // السيرفر يوزّع على الإداري الذي يعمل سيلزاً
+  const storage = makeStorage({
+    crm_assigned_leads: [],
+    crm_clients: [],
+    crm_users: [
+      { id: 'dev-1', name: 'محمد', role: 'admin', receivesLeads: true, isActive: true },
+      { id: 'u-sales', name: 'سيلز', role: 'sales', isActive: true },
+      { id: 'admin-plain', name: 'إدارة', role: 'admin', isActive: true },
+    ],
+    crm_lead_auto_assign: [{ id: 'GO ADS | CAVA', formName: 'GO ADS | CAVA', salesIds: ['dev-1'], active: true }],
+  });
+  const cfg = config();
+  globalThis.fetch = async () => json({ data: [lead('1', 'ليلة', '01000000077')] });
+  const res = await runAutoImportCore({ storage, config: cfg, saveConfig: async () => {}, force: true });
+  const savedLead = (storage.current().data.crm_assigned_leads || [])[0];
+  check('الإداري-السيلز استلم الرقم من القاعدة', res.ok && savedLead?.salesId === 'dev-1', String(savedLead?.salesId));
+  check('الإداري العادي لم يستلم', savedLead?.salesId !== 'admin-plain');
+}
+
+// ===== ٦) الواجهة تعرض التفصيل وتستخدم نفس قاعدة الاستحقاق =====
 {
   const fs = await import('node:fs');
   const app = fs.readFileSync('src/App.tsx', 'utf8');
   check('الواجهة تعرض «أرقام لم تُضف»', app.includes('أرقام لم تُضف'));
   check('الواجهة تترجم سبب الاستبعاد', app.includes("r.reason === 'duplicate'") && app.includes("'رقم غير صالح'"));
   check(
-    'قائمة السيلز لا تشترط isActive الموجود (تعتبر الغياب نشاطاً)',
-    !app.includes("(u.role === 'sales' || u.role === 'supervisor') && u.isActive)") &&
-      app.includes("(u.role === 'sales' || u.role === 'supervisor') && u.isActive !== false")
+    'قائمة السيلز تستخدم isAssignableSales (نفس السيرفر)',
+    app.includes('users.filter((u: User) => isAssignableSales(u))')
   );
+  check('نموذج الحساب يعرض خيار «يعمل سيلزاً أيضاً»', app.includes('يعمل سيلزاً أيضاً'));
+  check('الخيار محفوظ على الحساب', app.includes('receivesLeads'));
 }
 
 globalThis.fetch = realFetch;
