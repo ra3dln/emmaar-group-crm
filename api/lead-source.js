@@ -152,7 +152,7 @@ export default async function handler(req, res) {
       const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
       const channelCfg = channelConfigOf(config, channel) || {};
       const token = String(body.token || channelCfg.token || '').trim();
-      const { pages, warning, tokenExpiresAt } = await discoverPages(token);
+      const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(token);
       const next = applyChannelPatch(config, { channel, token, pages, tokenExpiresAt });
       await configStore.save(next);
       return reply(res, 200, {
@@ -160,6 +160,9 @@ export default async function handler(req, res) {
         pages: pages.map((p) => ({ id: p.id, name: p.name })),
         warning,
         tokenExpiresAt,
+        // تشخيص المصادر: يبيّن للإدارة ليه صفحة معيّنة ما ظهرتش (توكن صفحة / صلاحية ناقصة)
+        sources,
+        tokenType,
         config: publicConfig(next),
       });
     }
@@ -215,8 +218,8 @@ async function statelessHandler(req, res, url) {
       const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
       const channelCfg = channelConfigOf(body.config || {}, channel) || {};
       const token = String(body.token || channelCfg.token || '').trim();
-      const { pages, warning, tokenExpiresAt } = await discoverPages(token);
-      return reply(res, 200, { ok: true, pages, warning, tokenExpiresAt });
+      const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(token);
+      return reply(res, 200, { ok: true, pages, warning, tokenExpiresAt, sources, tokenType });
     }
 
     if (action === 'forms') {

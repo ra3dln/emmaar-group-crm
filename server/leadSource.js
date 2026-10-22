@@ -399,7 +399,14 @@ export async function debugToken(token) {
   try {
     const json = await graphGet('/debug_token', { input_token: token, access_token: token });
     const data = json.data || {};
-    return { valid: data.is_valid !== false, expiresAt: Number(data.expires_at) || 0 };
+    return {
+      valid: data.is_valid !== false,
+      expiresAt: Number(data.expires_at) || 0,
+      // نوع التوكن يهم الاستكشاف: توكن الصفحة (PAGE) لا يرى صفحات المستخدم
+      type: String(data.type || '').toUpperCase(),
+      scopes: Array.isArray(data.scopes) ? data.scopes.map(String) : [],
+      profileId: String(data.profile_id || ''),
+    };
   } catch {
     return null; // التشخيص اختياري — فشله لا يمنع الاستكشاف ولا السحب
   }
@@ -440,25 +447,28 @@ export function tokenExpiryAlerts(config = {}, now = Date.now()) {
 //   ١) طلب واحد فقط بلا متابعة «التالي» — كل ما بعد أول ١٠٠ صفحة كان يضيع.
 //   ٢) الصفحة التي لا يرجع فيسبوك توكنها في القائمة كانت تُهمل بصمت (سبب «صفحة واحدة فقط»).
 //   ٣) صفحات الأعمال (Business Manager) لا تظهر في /me/accounts أصلاً — تُجلب من هنا وتُدمج.
+// قراءة كل صفحات أي قائمة فيسبوك (بمتابعة «التالي») — أي صفحة بعد أول ١٠٠ كانت تضيع
+async function graphList(path, params, maxPages = 10) {
+  const rows = [];
+  let after = '';
+  for (let request = 0; request < maxPages; request += 1) {
+    const json = await graphGet(path, { ...params, ...(after ? { after } : {}) });
+    rows.push(...(json.data || []));
+    after = json.paging?.cursors?.after || '';
+    if (!after || !(json.data || []).length) break;
+  }
+  return rows;
+}
+
 export async function discoverPages(token) {
   if (!token) throw new Error('ألصق التوكن أولاً');
 
   const byId = new Map();
   let firstError = null;
-
-  // ١) صفحات المستخدم — مع متابعة «التالي» حتى آخر دفعة (١٠ طلبات كحد أقصى)
-  let after = '';
-  for (let request = 0; request < 10; request += 1) {
-    const params = { fields: 'id,name,access_token', limit: '100', access_token: token };
-    if (after) params.after = after;
-    let json;
-    try {
-      json = await graphGet('/me/accounts', params);
-    } catch (error) {
-      if (!firstError) firstError = error;
-      break;
-    }
-    for (const row of json.data || []) {
+  // تشخيص لكل مصدر: تعرف بالضبط ليه صفحة معيّنة ما ظهرتش
+  const sources = [];
+  const pushPages = (rows) => {
+    for (const row of rows || []) {
       if (!row || !row.id) continue;
       const id = String(row.id);
       const prev = byId.get(id) || {};
@@ -468,35 +478,86 @@ export async function discoverPages(token) {
         token: String(row.access_token || prev.token || '').trim(),
       });
     }
-    after = json.paging?.cursors?.after || '';
-    if (!after || !(json.data || []).length) break;
+  };
+
+  // نوع التوكن أولاً: توكن صفحة واحدة (Page Token) هو أشهر سبب لظهور صفحة واحدة فقط
+  const debug = await debugToken(token);
+  const isPageToken = debug?.type === 'PAGE';
+
+  // ١) صفحات المستخدم — مع متابعة «التالي» حتى آخر دفعة
+  try {
+    const rows = await graphList('/me/accounts', { fields: 'id,name,access_token', limit: '100', access_token: token });
+    pushPages(rows);
+    sources.push({ name: 'صفحات حسابك', ok: true, count: rows.length });
+  } catch (error) {
+    if (!firstError) firstError = error;
+    sources.push({
+      name: 'صفحات حسابك',
+      ok: false,
+      error: String(error?.message || error),
+      permission: error?.permission || '',
+    });
   }
 
-  // ٢) صفحات الأعمال: صفحات الأدمن داخل Business Manager قد لا تظهر في /me/accounts أبداً
-  // (يحتاج business_management) — نجلبها وندمجها، وفشلها لا يمنع بقية الاستكشاف.
+  // ٢) صفحات Business Manager: صفحات الأدمن داخل الأعمال لا تظهر في /me/accounts
+  // أحياناً. نجيبها من owned_pages و client_pages لكل بيزنس (تحتاج business_management).
+  let businessesListed = 0;
+  let businessPages = 0;
+  let businessError = null;
   try {
-    const json = await graphGet('/me/businesses', {
-      fields: 'id,name,owned_pages{id,name,access_token}',
-      limit: '100',
-      access_token: token,
-    });
-    for (const business of json.data || []) {
-      for (const row of business?.owned_pages?.data || []) {
-        if (!row || !row.id) continue;
-        const id = String(row.id);
-        const prev = byId.get(id) || {};
-        byId.set(id, {
-          id,
-          name: row.name || prev.name || id,
-          token: String(row.access_token || prev.token || '').trim(),
-        });
+    // الصفحات المدمجة داخل القائمة نفسها تُقرأ أولاً (توفر طلباً لكل بيزنس)،
+    // ثم نجيب الاتصالين كاملين لأن القائمة المدمجة لا تُرجع كل الصفحات دائماً.
+    const businesses = await graphList(
+      '/me/businesses',
+      { fields: 'id,name,owned_pages{id,name,access_token}', limit: '100', access_token: token },
+      5
+    );
+    businessesListed = businesses.length;
+    for (const business of businesses) {
+      const inlinePages = business?.owned_pages?.data || [];
+      businessPages += inlinePages.filter((row) => row && row.id).length;
+      pushPages(inlinePages);
+      for (const connection of ['owned_pages', 'client_pages']) {
+        try {
+          const rows = await graphList(
+            `/${business.id}/${connection}`,
+            { fields: 'id,name,access_token', limit: '100', access_token: token },
+            5
+          );
+          businessPages += rows.filter((row) => row && row.id).length;
+          pushPages(rows);
+        } catch (error) {
+          if (!businessError) businessError = error;
+        }
       }
     }
-  } catch {
-    // business_management غير ممنوح لهذه الجلسة — نكتفي بصفحات /me/accounts
+    sources.push({
+      name: 'صفحات الأعمال (Business Manager)',
+      ok: !businessError,
+      count: businessPages,
+      businesses: businessesListed,
+      ...(businessError
+        ? { error: String(businessError?.message || businessError), permission: businessError?.permission || 'business_management' }
+        : {}),
+    });
+  } catch (error) {
+    sources.push({
+      name: 'صفحات الأعمال (Business Manager)',
+      ok: false,
+      error: String(error?.message || error),
+      // السبب الأشهر: الصلاحية دي مش من ضمن الخمسة المعتادة
+      permission: error?.permission || 'business_management',
+      hint: 'الصفحات اللي جوّه Business Manager تحتاج صلاحية business_management في التوكن — أضفها من Graph API Explorer ثم أعد الاستكشاف.',
+    });
   }
 
   if (!byId.size) {
+    if (isPageToken) {
+      throw new Error(
+        'التوكن اللي ألصقته هو توكن صفحة (Page Access Token) — يرى صفحة واحدة فقط ولا يعرف بقية صفحات حسابك.\n' +
+          'الحل: من Graph API Explorer اختر «Get User Access Token» (مش «Get Page Access Token») وفلّت الصلاحيات الخمس، ثم الصق التوكن ده.'
+      );
+    }
     throw firstError || new Error('التوكن صحيح لكنه لا يرى أي صفحة — تأكد أنك اخترت صلاحيات الصفحات عند توليد التوكن وأن لديك صفحة');
   }
 
@@ -521,16 +582,36 @@ export async function discoverPages(token) {
     skipped.push(page.name || page.id);
   }
 
-  let warning = '';
+  const notes = [];
   if (skipped.length) {
-    warning = `تم تجاهل ${skipped.length} صفحة لأن فيسبوك لم يمنح توكنها: ${skipped.join('، ')} — أعد توليد التوكن مع صلاحية pages_manage_ads.`;
+    notes.push(`تم تجاهل ${skipped.length} صفحة لأن فيسبوك لم يمنح توكنها: ${skipped.join('، ')} — أعد توليد التوكن مع صلاحية pages_manage_ads.`);
   }
+  // توكن صفحة واحدة: يشرح للمستخدم من غير ما يوقفه — الصفحات اللي ظهرت صحيحة لكن الناقصة محتاجة توكن مستخدم
+  if (isPageToken) {
+    notes.push(
+      'التوكن اللي ألصقته توكن صفحة واحدة (Page Access Token)، فيرى صفحة واحدة فقط. لجلب بقية الصفحات اللي أنت أدمن فيها: ولّد «User Access Token» من Graph API Explorer (مش Page Token) بنفس الصلاحيات ثم أعد الاستكشاف.'
+    );
+  }
+  // فشل مصدر لا يمنع بقية الاستكشاف، لكنه يُعرض بوضوح حتى لا تختفي صفحة بصمت
+  for (const source of sources) {
+    if (source.ok) continue;
+    notes.push(
+      `${source.name}: ${source.hint || source.error || 'فشل الطلب'}${source.permission && !source.hint ? ` (الصلاحية: ${source.permission})` : ''}`
+    );
+  }
+  const warning = notes.join('\n');
 
   // ٤) ميعاد انتهاء صلاحية التوكن — نحفظه لننبّه قبل انتهائه بيومين
-  const debug = await debugToken(token);
   const tokenExpiresAt = debug && debug.expiresAt > 0 ? debug.expiresAt : 0;
 
-  return { pages, warning, tokenExpiresAt };
+  return {
+    pages,
+    warning,
+    tokenExpiresAt,
+    sources,
+    tokenType: debug?.type || '',
+    scopes: debug?.scopes || [],
+  };
 }
 
 export async function fetchFormsForPage(pageId, pageToken) {

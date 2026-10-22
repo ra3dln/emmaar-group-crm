@@ -9416,6 +9416,9 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
   const [notice, setNotice] = useState('');
   const [form, setForm] = useState({ sheetUrl: '', token: '', intervalMinutes: 5, perSalesLimit: 0 });
   const [pages, setPages] = useState<any[]>([]);
+  // تشخيص آخر استكشاف: لكل مصدر (صفحات الحساب / الأعمال) هل نجح وكام صفحة رجع
+  const [pageSources, setPageSources] = useState<any[]>([]);
+  const [tokenKind, setTokenKind] = useState('');
   const [forms, setForms] = useState<any[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [manual, setManual] = useState({ pageId: '', formId: '' });
@@ -9502,6 +9505,8 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
         if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الاستكشاف');
         applyConfig(localSourceView(writeLocalChannel(channel, { type: 'meta', token, pages: json.pages, tokenExpiresAt: json.tokenExpiresAt || 0 })));
         setPages(json.pages.map((p: any) => ({ id: p.id, name: p.name })));
+        setPageSources(Array.isArray(json.sources) ? json.sources : []);
+        setTokenKind(String(json.tokenType || ''));
         setForms([]);
         setSelected({});
         setNotice(json.warning || `وجدت ${json.pages.length} صفحة — اضغط صفحة لعرض نماذجها`);
@@ -9519,6 +9524,8 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الاستكشاف');
       setPages(json.pages);
+      setPageSources(Array.isArray(json.sources) ? json.sources : []);
+      setTokenKind(String(json.tokenType || ''));
       // استكشاف الصفحات = إعداد القناة، فنبدّل المصدر فوراً بدل انتظار ضغطة «حفظ»
       await save({ type: 'meta' }, '');
       setForms([]);
@@ -9790,6 +9797,12 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
               <span className="block mt-1 text-emerald-400/80">
                  توكن Graph API Explorer يعيش ساعتين فقط. لتجنّب انتهائه: بعد توليده اضغط <span dir="ltr">Open in Access Token Debugger</span> ثم <span dir="ltr">Extend Access Token</span> — فيصبح صالحاً ٦٠ يوماً.
               </span>
+              <span className="block mt-1 text-amber-300/90">
+                صفحة داخل Business Manager مش بتظهر؟ أضف صلاحية <span dir="ltr">business_management</span> معاهم — صفحات الأعمال (owned + client) تُطلب بعد كده تلقائياً.
+              </span>
+              <span className="block mt-1 text-amber-300/90">
+                ولازم يكون <b>User Access Token</b> (من «Get User Access Token») مش توكن صفحة — توكن الصفحة بيشوف صفحة واحدة بس.
+              </span>
             </p>
 
             {/* تنبيه صلاحية التوكن: ننبّه قبل الانتهاء بيومين — فلا يتوقف السحب فجأة */}
@@ -9817,6 +9830,33 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
               );
             })()}
           </div>
+
+          {/* تشخيص الاستكشاف: يبيّن منين جت الصفحات وإيه اللي فشل بالضبط
+              — بدل ما صفحة تختفي بصمت ويقول المستخدم «مطلع صفحة واحدة». */}
+          {(pageSources.length > 0 || tokenKind) && (
+            <div className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] px-3 py-2.5 space-y-1.5">
+              <p className="text-[11px] font-bold text-[var(--text)]">مصادر الصفحات في آخر استكشاف</p>
+              {tokenKind === 'PAGE' && (
+                <p className="text-[11px] text-amber-300 leading-relaxed">
+                  ⚠️ التوكن الحالي <b>Page Token</b> — يشوف صفحة واحدة فقط ولا يعرف بقية صفحات حسابك. ولّد User Access Token وأعد الاستكشاف.
+                </p>
+              )}
+              {pageSources.map((source: any) => (
+                <p key={source.name} className="text-[11px] leading-relaxed">
+                  <span className={source.ok ? 'text-emerald-300' : 'text-amber-300'}>{source.ok ? '✓' : '✗'}</span>{' '}
+                  <span className="text-[var(--text)] font-bold">{source.name}</span>
+                  {source.ok ? (
+                    <span className="text-[var(--text-dim)]"> — {Number(source.count) || 0} صفحة</span>
+                  ) : (
+                    <span className="text-[var(--text-dim)]"> — {source.hint || source.error || 'فشل الطلب'}</span>
+                  )}
+                </p>
+              ))}
+              <p className="text-[10.5px] text-[var(--text-dim)] leading-relaxed">
+                لو صفحة أدمن مش ظاهرة في المصدرين: تأكد أنك أدمن عليها فعلاً من إعدادات الصفحة، وأن التوكن مولّد على نفس الحساب.
+              </p>
+            </div>
+          )}
 
           {pageOptions.length > 0 && (
             <div>
@@ -9980,7 +10020,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
         </button>
       </div>
 
-      {notice && <p className="text-xs text-amber-300 mt-3">{notice}</p>}
+      {notice && <p className="text-xs text-amber-300 mt-3 whitespace-pre-line leading-relaxed">{notice}</p>}
     </div>
   );
 }
