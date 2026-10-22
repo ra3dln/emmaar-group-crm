@@ -113,7 +113,8 @@ export type WorkNumber = {
 export const buildWorkNumbers = (
   clients: any[] = [],
   leads: any[] = [],
-  snapshots: Map<string, PhoneSnapshot> = new Map()
+  snapshots: Map<string, PhoneSnapshot> = new Map(),
+  { includeUnassigned = true }: { includeUnassigned?: boolean } = {}
 ): WorkNumber[] => {
   const out: WorkNumber[] = [];
   const seen = new Set<string>();
@@ -141,6 +142,9 @@ export const buildWorkNumbers = (
   }
 
   for (const lead of leads || []) {
+    // الأرقام التي لم تُوزّع بعد ليست شغل أحد، فلا تدخل لوحة الحالات ولا المراحل
+    // (كانت تُحسب «fresh stage» فتظهر كل أرقام الفورمات وكأنها مرحلة جديدة عند الفريق).
+    if (!includeUnassigned && !String(lead?.salesId || '').trim()) continue;
     const phone = String(lead?.phone || '');
     const key = digitsOfPhone(phone) || `lead:${lead?.id}`;
     if (seen.has(key)) continue; // الرقم اتحوّل لعميل مسجّل — ما يتكررش

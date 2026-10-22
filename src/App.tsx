@@ -2349,7 +2349,10 @@ function App() {
       currentUser.role === 'sales'
         ? scopedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)
         : scopedLeads;
-    return buildWorkNumbers(scopedClients, myLeads, snapshots);
+    // الأرقام الموزّعة فقط تدخل لوحة الحالات: الرقم غير الموزّع ليس «مرحلة جديدة»
+    // عند أحد، وكان يظهر في fresh stage وكأنه شغل الفريق (فكل أرقام الفورمات تُعدّ).
+    // مكانه «توزيع الأرقام» حتى يُوزّع فعلاً.
+    return buildWorkNumbers(scopedClients, myLeads, snapshots, { includeUnassigned: false });
   })();
 
   // المستحق الآن — الأحدث أولاً (نفس ترتيب تبويب التذكيرات)
@@ -4514,7 +4517,10 @@ const commentCountOf = (c: any): number =>
 // كل فيدباك = **حالة + كومنت إلزامي**: لا يُحفظ فيدباك بحالة بلا كومنت ولا كومنت بلا حالة.
 // ويُسجَّل في خط العميل الزمني فيظهر في خانة الكومنتات (الفيدباك) وفي تبويب «الفيدباك اليومي».
 // المرحلة تتحرك تلقائياً مع الحالة (بلا ضغطة إضافية) فيبقى تبويب «المراحل» صادقاً.
+// الترتيب مقصود: «fresh stage» أول خانة لأنها نقطة البداية التي لم يُتواصل معها بعد،
+// ثم «follow up» وما بعدها. نفس الترتيب يُستخدم في لوحة الحالات وفي القائمة المنسدلة.
 const FEEDBACK_STATUSES: Array<{ id: string; label: string; ar: string; cls: string; stage: Client['stage'] }> = [
+  { id: 'fresh-stage', label: 'fresh stage', ar: 'مرحلة جديدة (لم يُتواصل معه بعد)', cls: 'fs-fresh', stage: 'new' },
   { id: 'follow-up', label: 'follow up', ar: 'متابعة (تم التواصل / معاينة / تفاوض)', cls: 'fs-follow', stage: 'contacted' },
   { id: 'meeting', label: 'meeting', ar: 'موعد معاينة أو اجتماع', cls: 'fs-meeting', stage: 'meeting' },
   { id: 'after-meeting', label: 'following after meeting', ar: 'متابعة بعد الاجتماع', cls: 'fs-after', stage: 'meeting' },
@@ -4523,7 +4529,6 @@ const FEEDBACK_STATUSES: Array<{ id: string; label: string; ar: string; cls: str
   { id: 'no-answer', label: 'no answer', ar: 'لا يوجد رد (لا يرد على الهاتف)', cls: 'fs-noanswer', stage: 'contacted' },
   { id: 'done-deal', label: 'done deal', ar: 'تم البيع', cls: 'fs-done', stage: 'closed' },
   { id: 'reservation', label: 'reservation', ar: 'حجز', cls: 'fs-reservation', stage: 'negotiation' },
-  { id: 'fresh-stage', label: 'fresh stage', ar: 'مرحلة جديدة (لم يُتواصل معه بعد)', cls: 'fs-fresh', stage: 'new' },
 ];
 const FEEDBACK_STATUS_BY_ID: Record<string, { id: string; label: string; ar: string; cls: string; stage: Client['stage'] }> =
   Object.fromEntries(FEEDBACK_STATUSES.map((status) => [status.id, status]));

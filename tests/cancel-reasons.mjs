@@ -128,4 +128,42 @@ check('تبويب المراحل يعدّ أرقام التوزيع', app.includ
 check('مراحل «عملاء كامبين» تضم أرقام التوزيع', app.includes('const fromLeads ='));
 check('فلتر الإلغاء يشمل أرقام التوزيع', app.includes('const leadCancelReasonOf'));
 
+// ===== fresh stage أولاً + الأرقام الموزّعة فقط =====
+check(
+  '«fresh stage» أول خانة قبل «follow up» في لوحة الحالات',
+  app.indexOf("id: 'fresh-stage'") > -1 && app.indexOf("id: 'fresh-stage'") < app.indexOf("id: 'follow-up'"),
+  `fresh=${app.indexOf("id: 'fresh-stage'")} follow=${app.indexOf("id: 'follow-up'")}`
+);
+check(
+  'لوحة الحالات لا تُدخل الأرقام غير الموزّعة',
+  app.includes('includeUnassigned: false')
+);
+
+const mixed = buildWorkNumbers(
+  [],
+  [
+    { id: 'a', name: 'موزّع', phone: '01000000001', status: 'new', salesId: 'u-1' },
+    { id: 'b', name: 'غير موزّع', phone: '01000000002', status: 'new', salesId: '' },
+    { id: 'c', name: 'بلا حقل', phone: '01000000003', status: 'new' },
+  ],
+  new Map()
+);
+check('بلا خيار: كل الأرقام تعد (لعملاء كامبين والتقارير)', mixed.length === 3, `وجد ${mixed.length}`);
+
+const distributed = buildWorkNumbers(
+  [],
+  [
+    { id: 'a', name: 'موزّع', phone: '01000000001', status: 'new', salesId: 'u-1' },
+    { id: 'b', name: 'غير موزّع', phone: '01000000002', status: 'new', salesId: '' },
+    { id: 'c', name: 'بلا حقل', phone: '01000000003', status: 'new' },
+  ],
+  new Map(),
+  { includeUnassigned: false }
+);
+check('الموزّع فقط يبقى في لوحة الحالات', distributed.length === 1, `وجد ${distributed.length}`);
+check(
+  'والموزّع الجديد هو الذي يُعدّ في fresh stage',
+  distributed.length === 1 && distributed[0].bucket === 'fresh-stage' && distributed[0].phone === '01000000001'
+);
+
 console.log(`\n✅ نجحت ${passed} فحوصات لأسباب الإلغاء والعدّادات`);
