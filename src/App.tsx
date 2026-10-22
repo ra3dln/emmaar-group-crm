@@ -232,8 +232,12 @@ const RANK_AR: Record<string, string> = { admin: 'المدير التنفيذي'
 const rankLabel = (role?: string): string => RANK_LABEL[role || 'sales'] || 'Sales Agent';
 // لقب يظهر تحت الاسم في المحادثة: حساب المطوّر يُكتب تحته «System Developer»
 // حتى لو كانت رتبته إدارية (مثل حساب mohamed).
-const chatRank = (user?: { role?: string; developer?: boolean } | null): string =>
-  user && user.developer ? 'System Developer' : rankLabel(user?.role);
+// نعتمد على علامة developer إن وُجدت، وأيضاً على اسم المستخدم 'mohamed' حتى
+// تظهر اللقب على البيانات الحالية دون الحاجة لتعديل سجل الحساب في قاعدة البيانات.
+const isDeveloperAccount = (user?: { role?: string; developer?: boolean; username?: string } | null): boolean =>
+  !!user && (!!user.developer || String(user.username || '').trim().toLowerCase() === 'mohamed');
+const chatRank = (user?: { role?: string; developer?: boolean; username?: string } | null): string =>
+  isDeveloperAccount(user) ? 'System Developer' : rankLabel(user?.role);
 const rankAr = (role?: string): string => RANK_AR[role || 'sales'] || 'سيلز';
 const rankClass = (role?: string): string =>
   role === 'admin'
