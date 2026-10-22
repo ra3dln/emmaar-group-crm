@@ -337,8 +337,22 @@ async function fetchFromMeta(config, channel = 'facebook') {
         json = await graphGet(`/${form.id}/leads`, { fields: 'created_time,field_data', limit: '200', access_token: token });
       }
 
+      // ===== متابعة «التالي» في الأرقام =====
+      // طلب واحد بيرجع صفحة واحدة بس (فيسبوك بيسقّفها ١٠٠–٢٠٠ حتى لو limit أكبر).
+      // من غير المتابعة دي، أي فورم فيه أكثر من صفحة كان بيفقد أرقامه بصمت —
+      // نفس سبب «فيسبوك عنده ٣٨ وعندنا ٣٦».
+      const extraPages = [];
+      let nextUrl = json?.paging?.next || '';
+      for (let page = 0; nextUrl && page < 20; page += 1) {
+        const res = await fetch(nextUrl, { signal: AbortSignal.timeout(20000) });
+        const chunk = await res.json().catch(() => ({}));
+        if (!chunk || chunk.error) break;
+        extraPages.push(chunk);
+        nextUrl = chunk.paging?.next || '';
+      }
+
       let formMax = formCursor;
-      for (const lead of json.data || []) {
+      for (const lead of [...(json.data || []), ...extraPages.flatMap((chunk) => chunk.data || [])]) {
         const created = toUnixSeconds(lead.created_time);
         if (created > formMax) formMax = created;
 
