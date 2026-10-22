@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createStoreHandler, fileStorage } from "./server/store.js";
-import { createLeadSourceHandler, startAutoImport } from "./server/leadSource.js";
+import { createLeadSourceHandler, loadConfig as loadLeadConfig, startAutoImport, tokenExpiryAlerts } from "./server/leadSource.js";
 import { createPushHandler, startPushLoop } from "./server/push.js";
 import { createPublicHandler } from "./server/publicPage.js";
 import { createAuthHandler } from "./server/authApi.js";
@@ -80,7 +80,14 @@ function pushNotifications() {
     });
     if (!pushLoopStarted) {
       pushLoopStarted = true;
-      startPushLoop({ storeFile: DB_FILE, vapidFile: VAPID_FILE, stateFile: PUSH_STATE, intervalMs: 45000 });
+      startPushLoop({
+        storeFile: DB_FILE,
+        vapidFile: VAPID_FILE,
+        stateFile: PUSH_STATE,
+        intervalMs: 45000,
+        // تنبيهات انتهاء صلاحية توكن السحب — تصل الإدارة قبل الانتهاء بيومين
+        loadAlerts: () => tokenExpiryAlerts(loadLeadConfig(SOURCE_FILE)),
+      });
     }
   };
   return {

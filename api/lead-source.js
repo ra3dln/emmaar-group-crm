@@ -20,6 +20,7 @@ import {
   CHANNELS,
   channelConfigOf,
   collectLeads,
+  debugToken,
   discoverPages,
   fetchFormsForPage,
   normalizeConfig,
@@ -99,6 +100,8 @@ const statelessChannel = (config = {}) => ({
     ? config.forms.map((f) => ({ id: f.id, pageId: f.pageId, name: f.name || f.id }))
     : [],
   hasToken: !!config.token,
+  // ميعاد انتهاء التوكن (ثواني) — للمتصفح ليحسب «أيام متبقية» وينبّه قبل الانتهاء
+  tokenExpiresAt: Number(config.tokenExpiresAt) || 0,
   lastRun: config.lastRun || null,
 });
 
@@ -149,13 +152,14 @@ export default async function handler(req, res) {
       const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
       const channelCfg = channelConfigOf(config, channel) || {};
       const token = String(body.token || channelCfg.token || '').trim();
-      const { pages, warning } = await discoverPages(token);
-      const next = applyChannelPatch(config, { channel, token, pages });
+      const { pages, warning, tokenExpiresAt } = await discoverPages(token);
+      const next = applyChannelPatch(config, { channel, token, pages, tokenExpiresAt });
       await configStore.save(next);
       return reply(res, 200, {
         ok: true,
         pages: pages.map((p) => ({ id: p.id, name: p.name })),
         warning,
+        tokenExpiresAt,
         config: publicConfig(next),
       });
     }
@@ -184,8 +188,10 @@ export default async function handler(req, res) {
       return reply(res, 200, { ok: true, summary, config: publicConfig(next) });
     }
 
-    // «حفظ» وأي طلب آخر
-    const next = normalizeConfig(applyChannelPatch(config, body));
+    // «حفظ» وأي طلب آخر — لو الواجهة ألصقت توكن جديداً نسجّل ميعاد انتهائه للتنبيه قبله
+    const pastedToken = typeof body.token === 'string' && body.token.trim() && !body.clearToken ? body.token.trim() : '';
+    const expiryPatch = pastedToken ? { tokenExpiresAt: (await debugToken(pastedToken))?.expiresAt || 0 } : {};
+    const next = normalizeConfig(applyChannelPatch(config, { ...body, ...expiryPatch }));
     if (typeof body.acceptTestLeads === 'boolean') next.acceptTestLeads = body.acceptTestLeads;
     await configStore.save(next);
     return reply(res, 200, { ok: true, stateless: false, config: publicConfig(next) });
@@ -209,8 +215,8 @@ async function statelessHandler(req, res, url) {
       const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
       const channelCfg = channelConfigOf(body.config || {}, channel) || {};
       const token = String(body.token || channelCfg.token || '').trim();
-      const { pages, warning } = await discoverPages(token);
-      return reply(res, 200, { ok: true, pages, warning });
+      const { pages, warning, tokenExpiresAt } = await discoverPages(token);
+      return reply(res, 200, { ok: true, pages, warning, tokenExpiresAt });
     }
 
     if (action === 'forms') {

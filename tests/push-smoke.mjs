@@ -65,6 +65,11 @@ const users = [
     id: 'sales-2', username: 'sara', name: 'سارة', role: 'sales', isActive: true,
     password: hashPassword('SaraPass1234'),
   },
+  {
+    // مدير (إدارة فقط): تنبيهات النظام (انتهاء توكن السحب) تصله وحده لا المندوبين
+    id: 'boss-1', username: 'nour', name: 'نور', role: 'admin', isActive: true,
+    password: hashPassword('NourPass1234'),
+  },
 ];
 db = { version: 1, data: { crm_users: users } };
 
@@ -117,11 +122,12 @@ const check = (label, condition, extra = '') => {
 };
 
 // مفتاح جهاز حقيقي بصيغة Web Push (P-256 غير مضغوط + سر مصادقة ١٦ بايت)
-const deviceKeys = () => {
+// لكل جهاز مساره الخاص حتى نميّز أي جهاز استلم الإشعار في الاختبار
+const deviceKeys = (suffix = 'device-1') => {
   const ecdh = crypto.createECDH('prime256v1');
   ecdh.generateKeys();
   return {
-    endpoint: deviceUrl,
+    endpoint: `http://127.0.0.1:${device.address().port}/push/${suffix}`,
     keys: {
       p256dh: ecdh.getPublicKey().toString('base64url'),
       auth: crypto.randomBytes(16).toString('base64url'),
@@ -249,6 +255,43 @@ try {
   check('مركز الإشعارات يعرض تشخيص الإشعارات الخارجية', app.includes('pushHealth') && app.includes('الإشعارات الخارجية'));
   check('إعادة الاشتراك عند مفتاح قديم (InvalidStateError)', pushSrc.includes('stale.unsubscribe()'));
   check('ملف العامل يعرض الإشعار بمحاولة آمنة', swSrc.includes('showSafe') && swSrc.includes('requireInteraction'));
+
+  // ===== ١٢) تنبيهات النظام (انتهاء توكن السحب) — تصل الإدارة وحدها ولا تتكرر كل دورة =====
+  const bossLogin = await call('/api/auth?action=login', {
+    method: 'POST',
+    body: { username: 'nour', password: 'NourPass1234', loginType: 'admin' },
+  });
+  check('دخول المدير نجح', bossLogin.status === 200 && !!bossLogin.setCookie);
+  const bossCookie = String(bossLogin.setCookie).split(';')[0];
+  const bossSub = await call('/api/push/subscribe', {
+    method: 'POST',
+    cookie: bossCookie,
+    body: { subscription: deviceKeys('device-boss') },
+  });
+  check('المدير اشترك بجهازه', bossSub.status === 200 && bossSub.json?.ok === true);
+
+  const expiringAlert = {
+    id: 'lead-token-facebook-1790000000',
+    title: '⏰ توكن سحب فيسبوك ينتهي قريباً',
+    body: 'باقٍ يوم على انتهاء التوكن — ولّد توكن جديداً قبل أن يتوقف السحب.',
+    url: '/',
+  };
+  const beforeAlert = received.length;
+  const alertRun = await processPushesOnce({ storage, vapidStore, stateStore, systemAlerts: [expiringAlert] });
+  check('تنبيه انتهاء التوكن أُرسل مرة واحدة', alertRun.alerts === 1 && alertRun.sent === 1, JSON.stringify(alertRun));
+  const alertReq = received[received.length - 1] || { headers: {} };
+  check(
+    'التنبيه وصل لجهاز المدير وحده (جهاز المندوب ساكن)',
+    received.length === beforeAlert + 1 && String(alertReq.headers?.authorization || '').startsWith('vapid t='),
+    String(received.length - beforeAlert)
+  );
+
+  const alertAgain = await processPushesOnce({ storage, vapidStore, stateStore, systemAlerts: [expiringAlert] });
+  check('نفس التنبيه لا يتكرر خلال ١٢ ساعة', alertAgain.alerts === 0 && received.length === beforeAlert + 1, JSON.stringify(alertAgain));
+
+  // بلا تنبيهات مستحقة: الدورة العادية لا تُرسل شيئاً إضافياً
+  const calmRun = await processPushesOnce({ storage, vapidStore, stateStore, systemAlerts: [] });
+  check('دورة بلا تنبيهات لا تُرسل شيئاً', calmRun.sent === 0 && calmRun.alerts === 0, JSON.stringify(calmRun));
 
   console.log(`\n✅ كل اختبارات الإشعارات نجحت (${passed}).`);
 } finally {

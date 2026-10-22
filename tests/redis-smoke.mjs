@@ -104,6 +104,7 @@ const cronApi = (await import('../api/cron.js')).default;
 const authApi = (await import('../api/auth.js')).default;
 const { createStoreHandler } = await import('../server/store.js');
 const { hashPassword } = await import('../server/auth.js');
+const { tokenExpiryAlerts } = await import('../server/leadSource.js');
 
 // ---------- استدعاء دالة استضافة كما يفعل Vercel ----------
 // كوكي الجلسة بعد تسجيل الدخول — يُرسل مع كل طلب بيانات كما يفعل المتصفح
@@ -191,12 +192,38 @@ function installGraphMock() {
     const path = parsed.pathname;
 
     if (path.endsWith('/me/accounts')) {
+      // الصفحة الأولى ترجع صفحة بلا توكن (تُكمل على حدة) ومؤشّر «التالي»،
+      // والصفحة الثانية عبر after= ترجع صفحة ثالثة — نتأكد أن لا صفحة تضيع.
+      if (parsed.searchParams.get('after') === 'cursor-1') {
+        return json({ data: [{ id: 'page-third', name: 'صفحة ثالثة', access_token: 'PAGE-THIRD-TOKEN' }] });
+      }
       return json({
         data: [
           { id: 'page-fb', name: 'صفحة إعمار', access_token: 'PAGE-FB-TOKEN' },
-          { id: 'page-ig', name: 'صفحة إعمار على إنستجرام', access_token: 'PAGE-IG-TOKEN' },
+          // بلا access_token في القائمة: يجب أن تُكمل توكنها بالطلب الفردي ولا تُهمل
+          { id: 'page-ig', name: 'صفحة إعمار على إنستجرام' },
+        ],
+        paging: { cursors: { after: 'cursor-1' } },
+      });
+    }
+    // صفحات الأعمال: لا تظهر في /me/accounts — تُجلب من /me/businesses وتُدمج
+    if (path.endsWith('/me/businesses')) {
+      return json({
+        data: [
+          {
+            id: 'biz-1',
+            name: 'أعمال إعمار',
+            owned_pages: { data: [{ id: 'page-biz', name: 'صفحة الأعمال' }] }, // بلا توكن — تُكمل على حدة
+          },
         ],
       });
+    }
+    // طلب توكن صفحة على حدة (صفحة جاءت بلا توكن في القائمة)
+    if (path.endsWith('/page-ig')) return json({ id: 'page-ig', name: 'صفحة إعمار على إنستجرام', access_token: 'PAGE-IG-TOKEN' });
+    if (path.endsWith('/page-biz')) return json({ id: 'page-biz', name: 'صفحة الأعمال', access_token: 'PAGE-BIZ-TOKEN' });
+    // صلاحية التوكن وموعد انتهائه — نختبر به التنبيه قبل الانتهاء بيومين
+    if (path.endsWith('/debug_token')) {
+      return json({ data: { is_valid: true, expires_at: Math.floor(Date.now() / 1000) + 24 * 3600 } });
     }
     const formsMatch = /^\/v[\d.]+\/([^/]+)\/leadgen_forms$/.exec(path);
     if (formsMatch) return json({ data: [{ id: 'form-fb', name: 'فورم فيسبوك أكتوبر', status: 'ACTIVE', leads_count: 1 }, { id: 'form-ig', name: 'فورم إنستجرام أكتوبر', status: 'ACTIVE', leads_count: 1 }] });
@@ -481,9 +508,26 @@ try {
   await call(leadSourceApi, { method: 'POST', url: '/api/lead-source', body: { channel: 'facebook', enabled: true, type: 'meta', token: 'EAAG-demo', resetCursor: true } });
   const discovered = await call(leadSourceApi, { method: 'POST', url: '/api/lead-source', body: { channel: 'facebook', action: 'discover', token: 'EAAG-demo' } });
   check(
-    'فيسبوك (توكن): استكشاف الصفحات يرجع صفحاتك وتوكناتها',
-    discovered.json?.pages?.length === 2 && discovered.json.pages.some((p) => p.id === 'page-fb'),
+    'فيسبوك (توكن): الاستكشاف يجمع كل الصفحات (ترقيم + توكن مكتمل + صفحات أعمال)',
+    discovered.json?.pages?.length === 4 &&
+      ['page-fb', 'page-ig', 'page-third', 'page-biz'].every((id) => discovered.json.pages.some((p) => p.id === id)),
     JSON.stringify(discovered.json?.pages)
+  );
+  check(
+    'الاستكشاف يحفظ ميعاد انتهاء التوكن للتنبيه قبله',
+    Number(discovered.json?.tokenExpiresAt) > 0 &&
+      Number(discovered.json?.config?.tokenExpiresAt) === Number(discovered.json?.tokenExpiresAt),
+    JSON.stringify({ top: discovered.json?.tokenExpiresAt, config: discovered.json?.config?.tokenExpiresAt })
+  );
+  const expiryAlerts = tokenExpiryAlerts(discovered.json?.config || {});
+  check(
+    'توكن ينتهي خلال يومين يبني تنبيهاً واحداً للإدارة',
+    expiryAlerts.length === 1 && expiryAlerts[0].id === `lead-token-facebook-${discovered.json?.config?.tokenExpiresAt}`,
+    JSON.stringify(expiryAlerts)
+  );
+  check(
+    'توكن بعيد الانتهاء لا يبني تنبيهاً (لا إزعاج)',
+    tokenExpiryAlerts({ token: 'EAAG-demo', tokenExpiresAt: Math.floor(Date.now() / 1000) + 10 * 24 * 3600 }).length === 0
   );
 
   const pageForms = await call(leadSourceApi, { method: 'POST', url: '/api/lead-source', body: { channel: 'facebook', action: 'forms', pageId: 'page-fb' } });

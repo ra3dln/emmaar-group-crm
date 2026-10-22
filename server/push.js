@@ -358,6 +358,8 @@ function buildPushHandler({ getKeys, loadDb, saveDb, stateStore = null, auth = n
 
 // ---------- نواة معالجة التذكيرات والرسائل (مشتركة بين المحلي والاستضافة) ----------
 const RECENT_MS = 6 * 60 * 60 * 1000; // لا نرسل لتذكير أقدم من ٦ ساعات
+// تنبيهات النظام (مثل انتهاء توكن فيسبوك): لا تتكرر كل دورة — كل ١٢ ساعة مرة كافية
+const ALERT_REPEAT_MS = 12 * 60 * 60 * 1000;
 
 async function processPushTick({
   getKeys,
@@ -368,6 +370,7 @@ async function processPushTick({
   logger = console,
   minIntervalMs = 0,
   skipReminderUserIds = [],
+  systemAlerts = [],
 }) {
   const keys = await getKeys();
   const db = await loadDb();
@@ -376,6 +379,7 @@ async function processPushTick({
   const state = (await loadState()) || { reminders: {}, messages: {} };
   state.reminders = state.reminders || {};
   state.messages = state.messages || {};
+  state.alerts = state.alerts || {};
   const now = Date.now();
 
   // نداء يدوي متكرر (كل جهاز مفتوح): لا نضرب القاعدة أكثر من مرة كل ٢٠ ثانية
@@ -470,20 +474,50 @@ async function processPushTick({
     }
     return out;
   };
+
+  // ٣) تنبيهات النظام (انتهاء صلاحية توكن السحب مثلاً) — تصل الإدارة على أجهزتها
+  // حتى لو الموقع مقفول. تُرسل لمن يدير التوكن (admin / supervisor) لا للمندوبين،
+  // ولا تتكرر إلا كل ١٢ ساعة حتى لا تتحول إلى إزعاج يومي.
+  let alertCount = 0;
+  const managers = (data.crm_users || []).filter(
+    (u) => u && u.isActive !== false && (u.role === 'admin' || u.role === 'supervisor')
+  );
+  for (const alert of systemAlerts) {
+    if (!alert?.id || !managers.length) continue;
+    const last = Number(state.alerts[alert.id]) || 0;
+    if (now - last < ALERT_REPEAT_MS) continue;
+    let delivered = 0;
+    for (const manager of managers) {
+      delivered += await push(manager.id, {
+        kind: 'system',
+        title: alert.title,
+        body: alert.body,
+        tag: alert.id,
+        url: alert.url || '/',
+      });
+    }
+    // بلا أجهزة للإدارة أو فشل مؤقت: لا يُعلَّم كمُرسَل — يُعاد في الدورة القادمة
+    if (!delivered) continue;
+    state.alerts[alert.id] = now;
+    alertCount += 1;
+    changed = true;
+  }
+
   // نحفظ دائمًا وقت التشغيل ونتيجته (ولو لم يُرسل شيئاً) حتى يعرف المستخدم
   // من شاشة التشخيص أن المُشغّل يعمل فعلاً وأن المشكلة في الاشتراك أو الصلاحية.
   try {
     await saveState({
       reminders: prune(state.reminders),
       messages: prune(state.messages),
+      alerts: prune(state.alerts),
       lastRunAt: now,
-      lastResult: { sent, reminders: reminderCount, messages: messageCount, changed },
+      lastResult: { sent, reminders: reminderCount, messages: messageCount, alerts: alertCount, changed },
     });
   } catch (error) {
     logger.warn?.('[push] تعذّر حفظ حالة الإرسال:', String(error?.message || error));
   }
 
-  return { sent, reminders: reminderCount, messages: messageCount };
+  return { sent, reminders: reminderCount, messages: messageCount, alerts: alertCount };
 }
 
 // ---------- مسبار للسيرفر المحلي: ملفات JSON + setInterval ----------
@@ -503,7 +537,7 @@ export function createPushHandler({ storeFile, vapidFile, stateFile, auth = null
   return { handler, pushToUser, publicKey: keys.publicKey };
 }
 
-export function startPushLoop({ storeFile, vapidFile, stateFile, intervalMs = 60000, logger = console }) {
+export function startPushLoop({ storeFile, vapidFile, stateFile, intervalMs = 60000, logger = console, loadAlerts = null }) {
   const keys = loadOrCreateVapid(vapidFile);
   const getKeys = async () => keys;
   const loadDb = async () => {
@@ -513,15 +547,26 @@ export function startPushLoop({ storeFile, vapidFile, stateFile, intervalMs = 60
   const saveDb = async (data, version) => writeJson(storeFile, { version, data });
   const stateStore = fileJsonStore(stateFile, { reminders: {}, messages: {} });
 
-  const tick = () =>
-    processPushTick({
+  const tick = async () => {
+    // تنبيهات النظام (انتهاء توكن السحب) تُحسب في كل دورة من إعدادات القناة
+    let alerts = [];
+    if (loadAlerts) {
+      try {
+        alerts = (await loadAlerts()) || [];
+      } catch (error) {
+        logger.warn?.('[push] فشل حساب تنبيهات النظام:', String(error?.message || error));
+      }
+    }
+    return processPushTick({
       getKeys,
       loadDb,
       saveDb,
       loadState: stateStore.load,
       saveState: stateStore.save,
       logger,
+      systemAlerts: alerts,
     });
+  };
 
   const timer = setInterval(() => {
     tick().catch((error) => logger.warn?.('[push]', String(error?.message || error)));
@@ -542,10 +587,10 @@ export async function createPushHandlerFromStore({ storage, vapidStore, stateSto
 }
 
 // معالجة واحدة تُستدعى من المُشغّل الدوري (cron) على الاستضافة:
-// ترسل التذكيرات المستحقة ورسائل الشات مرة واحدة ثم تنتهي (بلا setInterval).
-export async function processPushesOnce({ storage, vapidStore, stateStore, logger = console }) {
+// ترسل التذكيرات المستحقة ورسائل الشات وتنبيهات النظام مرة واحدة ثم تنتهي (بلا setInterval).
+export async function processPushesOnce({ storage, vapidStore, stateStore, logger = console, systemAlerts = [] }) {
   const getKeys = createVapidAccessor(vapidStore);
   const loadDb = () => storage.load();
   const saveDb = (data, version) => storage.save({ version, data });
-  return processPushTick({ getKeys, loadDb, saveDb, loadState: stateStore.load, saveState: stateStore.save, logger });
+  return processPushTick({ getKeys, loadDb, saveDb, loadState: stateStore.load, saveState: stateStore.save, logger, systemAlerts });
 }

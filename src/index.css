@@ -2589,6 +2589,15 @@ html[data-mode="light"] .sb-cell.is-empty .sb-count { color: var(--text-dim); }
   background: var(--brand-primary-softer);
   color: var(--brand);
 }
+/* انتهاء صلاحية توكن السحب: أحمر — السحب متوقف فعلياً */
+.reminder-strip.is-danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+}
+.reminder-strip.is-danger .rs-icon {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
 @media (max-width: 560px) {
   .reminder-strip .rs-actions { width: 100%; }
   .reminder-strip .rs-actions .rc-action { flex: 1 1 auto; justify-content: center; }

@@ -12,7 +12,7 @@ import {
   Shield, UserCheck, Settings, Eye, EyeOff, Upload, Download,
   LogIn, Undo2, UserCog, MessageCircle, Send, ArrowRight, Moon, Sun, Menu,
   Rows, LayoutList, List, ShieldAlert, MapPinOff, Navigation,
-  ChevronRight, ChevronLeft, Filter,
+  ChevronRight, ChevronLeft, Filter, KeyRound,
   Workflow, BellRing, ClipboardList, MessagesSquare, Share2, LineChart,
   Megaphone, Globe, Link2, Facebook, ChevronDown, Palette
 } from 'lucide-react';
@@ -31,6 +31,16 @@ import {
 } from './arabicNumbers';
 import { buildXlsx, downloadBlob } from './xlsx';
 import { formNameOf, formKeyOf, activeFormNamesOf, UNKNOWN_FORM } from './campaignForms';
+import {
+  AUTO_ASSIGN_KEY,
+  activeRuleFor,
+  applyAutoRules,
+  distributeLeads,
+  parseRules,
+  upsertRule,
+  type AutoAssignRule,
+  type LeadAssignment,
+} from '../shared/autoAssign.js';
 import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
 import {
   FEEDBACK_STATUS_TO_STAGE,
@@ -1110,6 +1120,8 @@ function App() {
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [assignedLeads, setAssignedLeads] = useState<AssignedLead[]>([]);
+  // قواعد «التوزيع التلقائي»: فورم ← مندوبون بعينهم (تسافر بين الأجهزة)
+  const [autoAssignRules, setAutoAssignRules] = useState<AutoAssignRule[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // قائمة التبويبات الجانبية على الشاشات الصغيرة
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -1348,6 +1360,32 @@ function App() {
     if (!currentUser) return;
     resyncPush({ id: currentUser.id, name: currentUser.name }).then(setNotifState).catch(() => {});
   }, [currentUser?.id, showNotifyPanel]);
+
+  // ===== تنبيه انتهاء صلاحية توكن السحب (للإدارة فقط) =====
+  // التوكن ينتهي بعد مدة محددة (ساعتان للمستكشف، أو ٦٠ يوماً بعد التمديد)، وعند انتهائه
+  // يتوقف سحب أرقام الكامبينات بصمت. هنا نقرأ الإعدادات مرة عند الدخول ونعرض شريط
+  // تذكير قبل الانتهاء بيومين — حتى يجدّده الإدارة قبل أن ينقطع السحب.
+  const [tokenNotice, setTokenNotice] = useState<{ channel: 'facebook' | 'instagram'; label: string; expired: boolean } | null>(null);
+  useEffect(() => {
+    if (!currentUser || currentUser.role === 'sales') return;
+    let alive = true;
+    fetch('/api/lead-source', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((json) => {
+        if (!alive || json?.stateless || !json?.config) return;
+        const now = Date.now();
+        const warnOf = (cfg: any, channel: 'facebook' | 'instagram', label: string) => {
+          const expiresAt = Number(cfg?.tokenExpiresAt) || 0;
+          if (!cfg?.hasToken || !expiresAt || expiresAt * 1000 - now > 2 * 24 * 60 * 60 * 1000) return null;
+          return { channel, label, expired: expiresAt * 1000 <= now };
+        };
+        setTokenNotice(warnOf(json.config, 'facebook', 'فيسبوك') || warnOf(json.config.instagram, 'instagram', 'إنستجرام'));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [currentUser?.id, currentUser?.role]);
 
   // ===== إرسال التذكيرات المستحقة من أي جهاز مفتوح =====
   // الإشعار الخارجي كان يعتمد على مجدول خارجي وحده؛ فلو تأخر أو توقف تبقى التذكيرات
@@ -1686,6 +1724,7 @@ function App() {
     setUsers(allUsers);
     setTeams(allTeams);
     setAssignedLeads(allAssignedLeads);
+    setAutoAssignRules(parseRules(localStorage.getItem(AUTO_ASSIGN_KEY)));
     setMessages(getMessages());
     setCallLogs(getCallLogs());    // الحساب لم يعد موجوداً (حُذف، أو أُعيد ضبط النظام وبدأنا من جديد) → خروج تلقائي لشاشة الدخول
     const me = allUsers.find((u: User) => u.id === currentUser.id);
@@ -1845,45 +1884,46 @@ function App() {
     void pushKey('crm_messages');
   };
 
-  // ===== توزيع الأرقام: رقم واحد أو دفعة كاملة على مندوب واحد =====
+  // ===== توزيع الأرقام: رقم واحد أو دفعة كاملة أو توزيع تلقائي مختلط =====
   // كان التوزيع الجماعي بينادي التخصيص رقم رقم على نفس الحالة القديمة،
   // فينتج عنه رقم واحد فقط مُوزَّع (باقي الأرقام تُلغى). هنا تُطبَّق الدفعة كلها مرة واحدة.
-  const handleAssignLeads = (ids: string[], salesId: string) => {
-    if (!currentUser) return;
-    const unique = [...new Set((ids || []).filter(Boolean))];
-    if (!unique.length) return;
-    const picked = new Set(unique);
-    const targets = assignedLeads.filter((l: AssignedLead) => picked.has(l.id));
-    if (!targets.length) return;
-
-    const updated = assignedLeads.map((l: AssignedLead) => (picked.has(l.id) ? { ...l, salesId } : l));
+  //
+  // ownerOf = «رقم ← مندوب» لكل رقم على حدة، فتصلح لحالة واحدة:
+  //   • توزيع دفعة على مندوب واحد (كل القيم نفس المعرّف)
+  //   • التوزيع التلقائي بالتساوي على عدة مندوبين (كل رقم يأخذ مندوبه)
+  const applyLeadOwners = (ownerOf: Map<string, string>) => {
+    if (!currentUser || !ownerOf.size) return;
+    const updated = assignedLeads.map((l: AssignedLead) =>
+      ownerOf.has(l.id) ? { ...l, salesId: ownerOf.get(l.id) || '' } : l
+    );
     setAssignedLeads(updated);
     localStorage.setItem('crm_assigned_leads', JSON.stringify(updated));
     void pushKey('crm_assigned_leads');
 
-    // لو أي رقم من الموزَّعين تحوَّل لعميل بالفعل، ينتقل العميل نفسه للمندوب الجديد (مع حدث في خطه الزمني)
-    if (!salesId) return;
+    // لو أي رقم من الموزَّعين تحوَّل لعميل بالفعل، ينتقل العميل نفسه لمندوبه الجديد (مع حدث في خطه الزمني)
     const digits = (v: string) => normalizeDigits(String(v || '')).replace(/\D/g, '');
-    const wanted = new Set(
-      targets
-        .filter((l: AssignedLead) => (l.salesId || '') !== salesId && l.phone)
-        .map((l: AssignedLead) => digits(l.phone))
-        .filter(Boolean)
-    );
-    if (!wanted.size) return;
+    const ownerByPhone = new Map<string, string>();
+    for (const lead of assignedLeads) {
+      const owner = ownerOf.get(lead.id);
+      if (!owner || owner === (lead.salesId || '') || !lead.phone) continue;
+      const key = digits(lead.phone);
+      if (key) ownerByPhone.set(key, owner);
+    }
+    if (!ownerByPhone.size) return;
 
     const all: Client[] = JSON.parse(localStorage.getItem('crm_clients') || '[]');
     const movedAt = new Date().toISOString();
-    const ownerName = users.find((u: User) => u.id === salesId)?.name || 'سيلز آخر';
     let touched = false;
     const next = all.map((c) => {
       const own = [c.phone, ...(c.phones || [])].map((p) => digits(p));
-      if (!own.some((p) => p && wanted.has(p))) return c;
+      const owner = own.map((p) => (p ? ownerByPhone.get(p) : undefined)).find(Boolean);
+      if (!owner) return c;
       touched = true;
+      const ownerName = users.find((u: User) => u.id === owner)?.name || 'سيلز آخر';
       return {
         ...c,
-        userId: salesId,
-        assignedTo: salesId,
+        userId: owner,
+        assignedTo: owner,
         updatedAt: movedAt,
         activities: [
           { id: crypto.randomUUID(), type: 'assign', text: `تم تخصيص العميل إلى ${ownerName}`, at: movedAt, by: currentUser.name },
@@ -1897,6 +1937,57 @@ function App() {
       void pushKey('crm_clients');
     }
   };
+
+  const handleAssignLeads = (ids: string[], salesId: string) => {
+    const unique = [...new Set((ids || []).filter(Boolean))];
+    if (!unique.length) return;
+    applyLeadOwners(new Map(unique.map((id) => [id, salesId])));
+  };
+
+  // ===== حفظ قاعدة «التوزيع التلقائي» لفورم =====
+  // القاعدة تسافر مع باقي البيانات، فتصبح سياسة النظام لا إعداداً على جهاز واحد.
+  // عند التفعيل نوزّع فوراً الأرقام الموجودة غير المخصصة، والباقي يلحقه تلقائياً.
+  const handleSaveAutoRule = (formName: string, salesIds: string[], active: boolean) => {
+    const name = String(formName || '').trim();
+    if (!name) return 0;
+    const next = upsertRule(autoAssignRules, { formName: name, salesIds, active });
+    setAutoAssignRules(next);
+    localStorage.setItem(AUTO_ASSIGN_KEY, JSON.stringify(next));
+    void pushKey(AUTO_ASSIGN_KEY);
+    if (!active) return 0;
+
+    const { assignments } = distributeLeads({
+      leads: assignedLeads,
+      salesIds,
+      formName: name,
+      formOf: formKeyOf,
+      onlyUnassigned: true,
+    });
+    if (!assignments.length) return 0;
+    applyLeadOwners(new Map(assignments.map((item) => [item.id, item.salesId])));
+    return assignments.length;
+  };
+
+  // ===== تطبيق القواعد على أي رقم جديد يصل =====
+  // أول ما يوصل رقم من فورم له قاعدة (سحب تلقائي أو استيراد)، يتوزّع على مختاريه وحدهم
+  // بالتساوي بلا أي ضغطة — ومن ليس في قائمة الفورم لا يصله منه شيء.
+  useEffect(() => {
+    if (!currentUser || currentUser.role === 'sales') return;
+    if (!autoAssignRules.some((rule) => rule.active !== false && rule.salesIds.length)) return;
+    // لا رقم غير مخصّص = لا عمل (المزامنة تنادي هذا الفحص كل ثانية تقريباً)
+    if (!assignedLeads.some((lead: AssignedLead) => !lead.salesId)) return;
+    const activeSalesIds = users
+      .filter((u: User) => u.isActive && (u.role === 'sales' || u.role === 'supervisor'))
+      .map((u: User) => String(u.id));
+    const { assignments } = applyAutoRules({
+      leads: assignedLeads,
+      rules: autoAssignRules,
+      activeSalesIds,
+      formOf: formKeyOf,
+    });
+    if (!assignments.length) return;
+    applyLeadOwners(new Map(assignments.map((item: LeadAssignment) => [item.id, item.salesId])));
+  }, [assignedLeads, autoAssignRules, users.length, currentUser?.id]);
 
   // ===== تحويل رقم موزّع إلى عميل كامل =====
   // يقفل الدورة: الرقم ييجي من فيسبوك/الإدارة ← ضغطة واحدة ← عميل في المراحل والخط الزمني.
@@ -2722,6 +2813,35 @@ function App() {
             </div>
           </div>
         )}
+        {/* تنبيه صلاحية توكن السحب: يظهر للإدارة قبل الانتهاء بيومين — لا يُغلق ولا يختفي */}
+        {tokenNotice && (
+          <div className={`reminder-strip${tokenNotice.expired ? ' is-danger' : ''}`} role="status" aria-live="polite">
+            <span className="rs-icon" aria-hidden="true"><KeyRound className="w-4 h-4" /></span>
+            <div className="rs-body">
+              <b>{tokenNotice.expired ? `انتهى توكن سحب ${tokenNotice.label} — السحب متوقف` : `توكن سحب ${tokenNotice.label} ينتهي خلال يومين`}</b>
+              <small>
+                ولّد توكن جديداً من Graph API Explorer (بصلاحياته الخمس) وألصقه في إعدادات سحب الأرقام — حتى لا يتوقف وصول أرقام الكامبينات.
+              </small>
+            </div>
+            <div className="rs-actions">
+              <button
+                type="button"
+                className="rc-action is-done"
+                onClick={() => {
+                  // نفتح تبويب القناة مباشرة في «فريق العمل» — نفس التبويب المحفوظ داخلياً
+                  try {
+                    localStorage.setItem('crm_admin_users_tab', tokenNotice.channel);
+                  } catch {
+                    /* لا شيء */
+                  }
+                  setActiveTab('admin-users');
+                }}
+              >
+                تجديد التوكن الآن
+              </button>
+            </div>
+          </div>
+        )}
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && isSalesView && <DashboardView stats={stats} clients={clients} numbers={workNumbers} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} onOpenStatus={setStatusBoard} onCompleteReminder={completeReminder} onActed={markReminderAction} />}
           {activeTab === 'clients' && isSalesView && <ClientsView
@@ -2835,7 +2955,7 @@ function App() {
             setAssignedLeads(updated);
             localStorage.setItem('crm_assigned_leads', JSON.stringify(updated));
             void pushKey('crm_assigned_leads');
-          }} onAssign={handleAssignLeads} />}
+          }} onAssign={handleAssignLeads} autoRules={autoAssignRules} onSaveAutoRule={handleSaveAutoRule} />}
           {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={scopedUsers} />}
           {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
           {activeTab === 'chat' && isSalesView && <SalesChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} readOnly={!!impersonator} />}
@@ -8445,7 +8565,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, active
   );
 }
 
-function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onImport, onAssign, activeForms = [] }: any) {
+function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onImport, onAssign, activeForms = [], autoRules = [], onSaveAutoRule }: any) {
   const salesUsers = users.filter((u: User) => (u.role === 'sales' || u.role === 'supervisor') && u.isActive);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'unassigned'>('all');
@@ -8497,6 +8617,45 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
     const count = visible.length;
     onAssign?.(visible.map((l: AssignedLead) => l.id), salesId);
     setFlash(`تم توزيع ${count} ${count === 1 ? 'رقم' : 'أرقام'} على ${nameOf(salesId)} ✓`);
+  };
+
+  // ===== التوزيع التلقائي: فورم ← مندوبون بعينهم =====
+  // القاعدة محفوظة لكل فورم على حدة (وتسافر بين الأجهزة)، والتعديل هنا مسودة
+  // لا تُحفظ إلا بالضغط على «تشغيل/تحديث» حتى لا تتغير سياسة التوزيع بالخطأ في أثناء الاختيار.
+  const ruleOf = (autoRules as AutoAssignRule[]).find(
+    (rule) => String(rule.formName || '') === activeForm
+  ) || null;
+  const ruleActive = !!(ruleOf && ruleOf.active !== false && (ruleOf.salesIds || []).length);
+  const [autoIds, setAutoIds] = useState<string[]>([]);
+  const savedIdsKey = ruleOf ? (ruleOf.salesIds || []).join(',') : '';
+  useEffect(() => {
+    // عند تغيير الفورم نعرض مختاري هذا الفورم بدل مختاري الفورم السابق
+    setAutoIds((savedIdsKey ? savedIdsKey.split(',') : []).filter((id: string) => salesUsers.some((u: User) => u.id === id)));
+  }, [activeForm, savedIdsKey]);
+
+  const toggleAuto = (id: string) =>
+    setAutoIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+
+  // عدد الأرقام غير المخصصة في هذا الفورم — هي التي ستتوزع الآن
+  const autoPending = activeForm === 'all' ? 0 : formLeads.filter((l: AssignedLead) => !l.salesId).length;
+  const autoNow = activeForm !== 'all' && autoIds.length
+    ? distributeLeads({ leads: formLeads, salesIds: autoIds, formName: activeForm, formOf: formKeyOf, onlyUnassigned: true }).assignments.length
+    : 0;
+
+  const startAuto = () => {
+    if (activeForm === 'all' || !autoIds.length) return;
+    const done = Number(onSaveAutoRule?.(activeForm, autoIds, true)) || 0;
+    const names = autoIds.map((id) => nameOf(id)).join(' و');
+    setFlash(
+      done > 0
+        ? `تم توزيع ${done} رقم بالتساوي على ${names} ✓ — وأي رقم جديد من «${activeForm}» هيتوزع عليهم أوتوماتيك، وغيرهم مايصلهوش.`
+        : `التوزيع التلقائي شغّال على «${activeForm}» ← ${names} ✓ — أول ما يوصل رقم جديد هيوصله واحد منهم بالتساوي.`
+    );
+  };
+  const stopAuto = () => {
+    if (activeForm === 'all') return;
+    onSaveAutoRule?.(activeForm, autoIds, false);
+    setFlash(`تم إيقاف التوزيع التلقائي لفورم «${activeForm}» — الأرقام الجديدة هتستنى التوزيع اليدوي.`);
   };
 
   return (
@@ -8569,6 +8728,155 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
             : `كل توزيع من هذه الشاشة يقع على أرقام «${activeForm}» فقط — ${formLeads.length} رقم.`}
         </p>
       </div>
+
+      {/* ===== التوزيع التلقائي: اختار الفورم ← اختار السيلز ← أرقامه تتوزع عليهم بس =====
+          اللي مش مختار في القائمة مايصلهوش من الفورم ده ولا رقم، لا الموجود ولا الجديد. */}
+      {salesUsers.length > 0 && (
+        <div className="panel p-3.5">
+          <div className="flex items-start justify-between gap-2 flex-wrap">
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-[var(--text)] flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-[var(--brand)]" /> التوزيع التلقائي
+                <span className="text-[9.5px] font-bold text-[var(--brand)] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] rounded-full px-1.5 py-0.5">جديد</span>
+              </p>
+              <p className="text-[11px] text-[var(--text-dim)] mt-1 leading-relaxed">
+                اختار السيلز اللي أرقام الفورم دي تتوزع عليهم بس، واضغط «تشغيل التوزيع التلقائي» — كل رقم جديد
+                من الفورم هيتوزع عليهم بالتساوي أوتوماتيك، واللي مش مختار مايصلهوش منها ولا رقم.
+              </p>
+            </div>
+            <span className={`st-chip ${ruleActive ? 'st-closed' : 'st-negotiation'} shrink-0`}>
+              {ruleActive ? 'مفعّل' : 'موقوف'}
+            </span>
+          </div>
+
+          {activeForm === 'all' ? (
+            // بدون تحديد فورم لا نعرف أرقام مين تتوزع — فنعرض الاختيار هنا مباشرة
+            // بدل سطر نص فقط، حتى لا تبدو اللوحة فاضية أو غير موجودة.
+            <div className="mt-3 rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3">
+              <label htmlFor="auto-form-select" className="block text-[11px] font-bold text-[var(--text)] mb-1.5">
+                اختار الفورم اللي أرقامه تتوزع أوتوماتيك
+              </label>
+              <select
+                id="auto-form-select"
+                value=""
+                onChange={(e) => e.target.value && setForm(e.target.value)}
+                className="w-full sm:w-80 bg-[var(--surface)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm text-[var(--text-strong)]"
+              >
+                <option value="" className="bg-gray-900">— اختر الفورم —</option>
+                {formOptions.map((option) => (
+                  <option key={option.name} value={option.name} className="bg-gray-900">
+                    {option.name} ({option.count} رقم)
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-[var(--text-dim)] mt-2 leading-relaxed">
+                التوزيع التلقائي يتظبط لكل فورم لوحده — بعد اختيار الفورم هتظهر أسماء السيلز تختار منهم.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* قائمة مسندلة: اختار اسم من هنا ينضم لقائمة المختارين (والضغط عليه تحت يشيله) */}
+              <div className="mt-3">
+                <label htmlFor="auto-sales-select" className="block text-[11px] font-bold text-[var(--text-dim)] mb-1">
+                  أضف سيلز للقائمة
+                </label>
+                <select
+                  id="auto-sales-select"
+                  value=""
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    if (id) setAutoIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+                  }}
+                  className="w-full sm:w-72 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm text-[var(--text-strong)]"
+                >
+                  <option value="" className="bg-gray-900">— اختر السيلز —</option>
+                  {salesUsers
+                    .filter((u: User) => !autoIds.includes(u.id))
+                    .map((u: User) => (
+                      <option key={u.id} value={u.id} className="bg-gray-900">
+                        {u.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {salesUsers.map((u: User) => {
+                  const on = autoIds.includes(u.id);
+                  const mine = formLeads.filter((l: AssignedLead) => l.salesId === u.id).length;
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => toggleAuto(u.id)}
+                      aria-pressed={on}
+                      title={on ? 'مختار — الأرقام الجديدة تتوزع عليه' : 'غير مختار — مايصلهوش من الفورم ده'}
+                      className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11.5px] font-bold transition-colors ${
+                        on
+                          ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
+                          : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
+                      }`}
+                    >
+                      <span className={`w-3.5 h-3.5 rounded-full grid place-items-center border ${on ? 'border-[var(--brand)] bg-[var(--brand)] text-black' : 'border-[var(--border-strong)]'}`}>
+                        {on ? <Check className="w-2.5 h-2.5" /> : null}
+                      </span>
+                      {u.name}
+                      <span className="text-[10px] text-[var(--text-dim)]">{mine}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  onClick={startAuto}
+                  disabled={!autoIds.length}
+                  className="gradient-primary text-[var(--text-strong)] px-4 py-2 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                >
+                  <Zap className="w-3.5 h-3.5" /> {ruleActive ? 'تحديث التوزيع التلقائي' : 'تشغيل التوزيع التلقائي'}
+                </button>
+                <button
+                  onClick={() => setAutoIds(salesUsers.map((u: User) => u.id))}
+                  className="bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text-muted)] px-3 py-2 rounded-[var(--r-md)] font-bold text-xs hover:text-[var(--text)] transition-colors"
+                >
+                  تحديد الكل
+                </button>
+                <button
+                  onClick={() => setAutoIds([])}
+                  disabled={!autoIds.length}
+                  className="bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text-muted)] px-3 py-2 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-40 hover:text-[var(--text)] transition-colors"
+                >
+                  مسح الاختيار
+                </button>
+                {ruleActive && (
+                  <button
+                    onClick={stopAuto}
+                    className="bg-amber-500/10 border border-amber-400/40 text-amber-200 px-3 py-2 rounded-[var(--r-md)] font-bold text-xs hover:bg-amber-500/20 transition-colors"
+                  >
+                    إيقاف التلقائي
+                  </button>
+                )}
+              </div>
+
+              <p className="text-[11px] text-[var(--text-dim)] mt-2 leading-relaxed">
+                {!autoIds.length
+                  ? 'مفيش سيلز مختار — اختار اسم واحد على الأقل من فوق.'
+                  : `المختارون: ${autoIds.map((id) => nameOf(id)).join(' • ')} — عندهم ${autoIds.reduce((sum, id) => sum + formLeads.filter((l: AssignedLead) => l.salesId === id).length, 0)} رقم من هذا الفورم.`}
+                {autoNow > 0 && (
+                  <span className="block text-emerald-300 mt-1">
+                    {autoNow} رقم غير مخصص هيتوزع عليهم بالتساوي دلوقتي ({autoPending} غير مخصص في الفورم).
+                  </span>
+                )}
+                {ruleActive && (
+                  <span className="block text-[var(--brand)] mt-1">
+                    شغّال بالفعل على: {(ruleOf!.salesIds || []).map((id: string) => nameOf(id)).join(' • ')} — أي رقم جديد من «{activeForm}» يتوزع عليهم وحدهم.
+                  </span>
+                )}
+              </p>
+            </>
+          )}
+        </div>
+      )}
 
       {/* أدوات التوزيع: بحث + تصفية + توزيع جماعي */}
       <div className="panel p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
@@ -9004,6 +9312,8 @@ const LEAD_SOURCE_DEFAULTS = {
   assignCursor: 0,
   perSalesLimit: 0,
   acceptTestLeads: true,
+  // ميعاد انتهاء صلاحية التوكن (ثواني) — ننبّه قبله بيومين حتى لا يتوقف السحب فجأة
+  tokenExpiresAt: 0,
   lastRun: null as any,
 };
 
@@ -9190,7 +9500,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
         });
         const json = await res.json();
         if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الاستكشاف');
-        applyConfig(localSourceView(writeLocalChannel(channel, { type: 'meta', token, pages: json.pages })));
+        applyConfig(localSourceView(writeLocalChannel(channel, { type: 'meta', token, pages: json.pages, tokenExpiresAt: json.tokenExpiresAt || 0 })));
         setPages(json.pages.map((p: any) => ({ id: p.id, name: p.name })));
         setForms([]);
         setSelected({});
@@ -9481,6 +9791,31 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
                  توكن Graph API Explorer يعيش ساعتين فقط. لتجنّب انتهائه: بعد توليده اضغط <span dir="ltr">Open in Access Token Debugger</span> ثم <span dir="ltr">Extend Access Token</span> — فيصبح صالحاً ٦٠ يوماً.
               </span>
             </p>
+
+            {/* تنبيه صلاحية التوكن: ننبّه قبل الانتهاء بيومين — فلا يتوقف السحب فجأة */}
+            {view.hasToken && Number(view.tokenExpiresAt) > 0 && (() => {
+              const msLeft = Number(view.tokenExpiresAt) * 1000 - Date.now();
+              const days = Math.ceil(msLeft / (24 * 60 * 60 * 1000));
+              if (msLeft <= 0) {
+                return (
+                  <div className="mt-2 rounded-[var(--r-md)] px-3 py-2 text-[11px] font-bold bg-red-500/10 border border-red-400/30 text-red-300">
+                    ⛔ انتهت صلاحية هذا التوكن — السحب متوقف حتى تولّد توكن جديداً وتلصقه هنا.
+                  </div>
+                );
+              }
+              if (msLeft <= 2 * 24 * 60 * 60 * 1000) {
+                return (
+                  <div className="mt-2 rounded-[var(--r-md)] px-3 py-2 text-[11px] font-bold bg-amber-500/10 border border-amber-400/30 text-amber-300">
+                    ⏰ التوكن ينتهي خلال {days <= 1 ? 'أقل من يوم' : `${days} أيام`} — ولّد توكن جديداً الآن (من Graph API Explorer مع صلاحياته الخمس) قبل أن يتوقف السحب تلقائياً.
+                  </div>
+                );
+              }
+              return (
+                <p className="mt-2 text-[11px] text-emerald-400/75">
+                  ✓ التوكن محفوظ — صالح حتى {new Date(Number(view.tokenExpiresAt) * 1000).toLocaleDateString('ar-EG')}. سيصلك تنبيه قبل انتهائه بيومين.
+                </p>
+              );
+            })()}
           </div>
 
           {pageOptions.length > 0 && (

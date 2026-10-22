@@ -13,7 +13,7 @@
 // يعمل أيضاً مع Vercel Cron تلقائياً: Vercel يرسل نفس القيمة في ترويسة
 // Authorization: Bearer <CRON_SECRET> — فلا حاجة لأي تعديل إضافي في هذه الحالة.
 
-import { CHANNELS, isChannelOn, normalizeConfig, publicConfig, runAutoImportCore } from '../server/leadSource.js';
+import { CHANNELS, isChannelOn, normalizeConfig, publicConfig, runAutoImportCore, tokenExpiryAlerts } from '../server/leadSource.js';
 import { redisJsonStore, redisStorage, safeEqual } from '../server/store.js';
 import { supabaseJsonStore, supabaseStorage } from '../server/supabase.js';
 import { processPushesOnce } from '../server/push.js';
@@ -83,11 +83,12 @@ export default async function handler(req, res) {
     // ===== التذكيرات ورسائل الشات: تُرسَل من المُشغّل الدوري (كل دقيقة) =====
     // هنا يأتي دور processPushesOnce على الاستضافة (بديل setInterval المحلي):
     // يقرأ التذكيرات المستحقة من القاعدة ويرسل إشعاراً لكل جهاز المسجَّل مرة واحدة فقط.
+    // ونمرّر معها تنبيهات انتهاء صلاحية توكن السحب — تصل الإدارة قبل الانتهاء بيومين.
     let push = null;
     try {
       const vapidStore = useSupabase ? supabaseJsonStore(process.env, VAPID_KEY) : redisJsonStore(process.env, VAPID_KEY);
       const stateStore = useSupabase ? supabaseJsonStore(process.env, PUSH_STATE_KEY) : redisJsonStore(process.env, PUSH_STATE_KEY);
-      push = await processPushesOnce({ storage, vapidStore, stateStore });
+      push = await processPushesOnce({ storage, vapidStore, stateStore, systemAlerts: tokenExpiryAlerts(config) });
     } catch (error) {
       // فشل الإشعارات لا يوقف سحب الأرقام — يُسجَّل ويُعاد في الدورة القادمة
       push = { error: String(error?.message || error) };

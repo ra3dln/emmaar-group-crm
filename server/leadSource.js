@@ -10,6 +10,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileStorage } from './store.js';
 import { authConfigured, isManagerRole, sessionFromRequest } from './auth.js';
+// قواعد «التوزيع التلقائي» التي تختارها الإدارة (فورم ← مندوبون بعينهم).
+// نفس ملف المنطق يعمل في المتصفح، فالنتيجة هنا وهناك متطابقة تماماً.
+import { applyAutoRules, AUTO_ASSIGN_KEY, parseRules } from '../shared/autoAssign.js';
 
 const GRAPH_VERSION = 'v25.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -36,6 +39,7 @@ const CHANNEL_DEFAULTS = {
   cursorTime: 0, // آخر وقت سُحبت عنده أرقام من ميتا
   assignCursor: 0, // موضع المناوبة في توزيع الأرقام
   perSalesLimit: 0, // أقصى عدد أرقام لكل مندوب في الدفعة الواحدة (٠ = بلا حد)
+  tokenExpiresAt: 0, // ميعاد انتهاء صلاحية التوكن بالثواني (٠ = لا يُعرف أو لا ينتهي)
   lastRun: null,
 };
 
@@ -388,57 +392,145 @@ export const fetchLeads = async (config, channel = 'facebook') => {
   }));
 };
 
-// --- الاستكشاف: صفحات المستخدم + نماذج كل صفحة ---
+// ===== صلاحية التوكن: متى ينتهي؟ =====
+// فيسبوك يخبّرنا بموعد انتهاء أي توكن عبر /debug_token (expires_at بالثواني، و٠ = لا ينتهي).
+// به ننبّه الإدارة قبل انتهاء التوكن بيومين — فلا يتوقف سحب الأرقام فجأة بصمت.
+export async function debugToken(token) {
+  try {
+    const json = await graphGet('/debug_token', { input_token: token, access_token: token });
+    const data = json.data || {};
+    return { valid: data.is_valid !== false, expiresAt: Number(data.expires_at) || 0 };
+  } catch {
+    return null; // التشخيص اختياري — فشله لا يمنع الاستكشاف ولا السحب
+  }
+}
+
+// قبل كم يوم ننبّه؟ (يومان كما طُلب — قابل للتغيير من هنا)
+export const TOKEN_REMIND_BEFORE_MS = 2 * 24 * 60 * 60 * 1000;
+
+// تنبيهات انتهاء صلاحية توكنات السحب — تُمرَّر إلى محرك الإشعارات ليصلها الإدارة
+// على أجهزتها حتى لو الموقع مقفول. التنبيه يتكرر كل ١٢ ساعة حتى يُجدَّد التوكن،
+// ومعرّف التنبيه يحتوي ميعاد الانتهاء — فبمجرد التجديد يصبح تنبيهاً جديداً لا حاجة له.
+export function tokenExpiryAlerts(config = {}, now = Date.now()) {
+  const alerts = [];
+  for (const channel of CHANNELS) {
+    const cfg = channelConfigOf(config, channel) || {};
+    const expiresAt = Number(cfg.tokenExpiresAt) || 0;
+    const hasToken = !!(String(cfg.token || '').trim() || cfg.hasToken);
+    if (!expiresAt || !hasToken) continue; // لا توكن أو ميعاد غير معروف
+    const msLeft = expiresAt * 1000 - now;
+    if (msLeft > TOKEN_REMIND_BEFORE_MS) continue; // باقي أكثر من يومين — لا إزعاج
+    const label = CHANNEL_LABELS[channel];
+    const expired = msLeft <= 0;
+    const days = Math.max(1, Math.round(msLeft / (24 * 60 * 60 * 1000)));
+    alerts.push({
+      id: `lead-token-${channel}-${expiresAt}`,
+      title: expired ? `⛔ انتهى توكن سحب ${label} — السحب متوقف` : `⏰ توكن سحب ${label} ينتهي قريباً`,
+      body: expired
+        ? `ولّد توكن جديداً من Graph API Explorer وألصقه في إعدادات سحب الأرقام (${label}) — حتى لا يتوقف وصول أرقام الكامبينات.`
+        : `باقٍ ${days} يوم على انتهاء توكن سحب ${label} — ولّد توكن جديداً وألصقه قبل انتهائه حتى لا يتوقف السحب تلقائياً.`,
+      url: '/',
+    });
+  }
+  return alerts;
+}
+
+// --- الاستكشاف: كل صفحات المستخدم التي يديرها (أدمن/مشرف) + نماذج كل صفحة ---
+// الهدف: لا تضيع أي صفحة. ثلاثة أسباب كانت تُخفي صفحات فعلياً:
+//   ١) طلب واحد فقط بلا متابعة «التالي» — كل ما بعد أول ١٠٠ صفحة كان يضيع.
+//   ٢) الصفحة التي لا يرجع فيسبوك توكنها في القائمة كانت تُهمل بصمت (سبب «صفحة واحدة فقط»).
+//   ٣) صفحات الأعمال (Business Manager) لا تظهر في /me/accounts أصلاً — تُجلب من هنا وتُدمج.
 export async function discoverPages(token) {
   if (!token) throw new Error('ألصق التوكن أولاً');
 
-  // الطريق الأول (الأسرع): كل الصفحات مع توكنها في طلب واحد.
-  // بعض الصلاحيات تسقط هنا فيرد فيسبوك بخطأ صلاحية — عندها نجرّب طريقاً بديلاً واحداً واحداً.
-  let pages = [];
+  const byId = new Map();
   let firstError = null;
+
+  // ١) صفحات المستخدم — مع متابعة «التالي» حتى آخر دفعة (١٠ طلبات كحد أقصى)
+  let after = '';
+  for (let request = 0; request < 10; request += 1) {
+    const params = { fields: 'id,name,access_token', limit: '100', access_token: token };
+    if (after) params.after = after;
+    let json;
+    try {
+      json = await graphGet('/me/accounts', params);
+    } catch (error) {
+      if (!firstError) firstError = error;
+      break;
+    }
+    for (const row of json.data || []) {
+      if (!row || !row.id) continue;
+      const id = String(row.id);
+      const prev = byId.get(id) || {};
+      byId.set(id, {
+        id,
+        name: row.name || prev.name || id,
+        token: String(row.access_token || prev.token || '').trim(),
+      });
+    }
+    after = json.paging?.cursors?.after || '';
+    if (!after || !(json.data || []).length) break;
+  }
+
+  // ٢) صفحات الأعمال: صفحات الأدمن داخل Business Manager قد لا تظهر في /me/accounts أبداً
+  // (يحتاج business_management) — نجلبها وندمجها، وفشلها لا يمنع بقية الاستكشاف.
   try {
-    const json = await graphGet('/me/accounts', {
-      fields: 'id,name,access_token',
+    const json = await graphGet('/me/businesses', {
+      fields: 'id,name,owned_pages{id,name,access_token}',
       limit: '100',
       access_token: token,
     });
-    pages = (json.data || [])
-      .filter((page) => page.access_token)
-      .map((page) => ({ id: String(page.id), name: page.name || page.id, token: page.access_token }));
-  } catch (error) {
-    firstError = error;
-  }
-
-  // الطريق البديل: اجلب قائمة الصفحات فقط، ثم اطلب توكن كل صفحة على حدة.
-  // هذا يتجاوز خطأ #200 الذي يظهر عندما يطلب فيسبوك صلاحية معيّنة لكل صفحة.
-  let warning = '';
-  let skipped = [];
-  if (!pages.length) {
-    const json = await graphGet('/me/accounts', { fields: 'id,name', limit: '100', access_token: token }).catch((error) => {
-      throw firstError || error;
-    });
-    const list = json.data || [];
-    for (const page of list) {
-      try {
-        const info = await graphGet(`/${page.id}`, { fields: 'access_token,name', access_token: token });
-        if (info.access_token) {
-          pages.push({ id: String(page.id), name: info.name || page.name || page.id, token: info.access_token });
-          continue;
-        }
-      } catch {
-        /* نتجاهلها ونخبر المستخدم بها في التحذير */
+    for (const business of json.data || []) {
+      for (const row of business?.owned_pages?.data || []) {
+        if (!row || !row.id) continue;
+        const id = String(row.id);
+        const prev = byId.get(id) || {};
+        byId.set(id, {
+          id,
+          name: row.name || prev.name || id,
+          token: String(row.access_token || prev.token || '').trim(),
+        });
       }
-      skipped.push(page.name || String(page.id));
     }
-    if (skipped.length && pages.length) {
-      warning = `تم تجاهل ${skipped.length} صفحة لأن فيسبوك لم يمنح توكنها: ${skipped.join('، ')} — أعد توليد التوكن مع صلاحية pages_manage_ads.`;
-    }
+  } catch {
+    // business_management غير ممنوح لهذه الجلسة — نكتفي بصفحات /me/accounts
   }
 
-  if (!pages.length) {
+  if (!byId.size) {
     throw firstError || new Error('التوكن صحيح لكنه لا يرى أي صفحة — تأكد أنك اخترت صلاحيات الصفحات عند توليد التوكن وأن لديك صفحة');
   }
-  return { pages, warning };
+
+  // ٣) الصفحات التي لم يرجع فيسبوك توكنها في القائمة: نطلب توكن كل واحدة على حدة.
+  // (هذا هو سبب «مطلع صفحة واحدة» — الصفحة التي تسقط توكناتها كانت تُهمل صامتاً.)
+  const pages = [];
+  const skipped = [];
+  for (const page of byId.values()) {
+    if (page.token) {
+      pages.push(page);
+      continue;
+    }
+    try {
+      const info = await graphGet(`/${page.id}`, { fields: 'access_token,name', access_token: token });
+      if (info.access_token) {
+        pages.push({ id: page.id, name: info.name || page.name, token: String(info.access_token).trim() });
+        continue;
+      }
+    } catch {
+      /* تُعرض في التحذير أدناه */
+    }
+    skipped.push(page.name || page.id);
+  }
+
+  let warning = '';
+  if (skipped.length) {
+    warning = `تم تجاهل ${skipped.length} صفحة لأن فيسبوك لم يمنح توكنها: ${skipped.join('، ')} — أعد توليد التوكن مع صلاحية pages_manage_ads.`;
+  }
+
+  // ٤) ميعاد انتهاء صلاحية التوكن — نحفظه لننبّه قبل انتهائه بيومين
+  const debug = await debugToken(token);
+  const tokenExpiresAt = debug && debug.expiresAt > 0 ? debug.expiresAt : 0;
+
+  return { pages, warning, tokenExpiresAt };
 }
 
 export async function fetchFormsForPage(pageId, pageToken) {
@@ -499,6 +591,8 @@ const publicChannel = (config = {}) => ({
   intervalMinutes: config.intervalMinutes || DEFAULTS.intervalMinutes,
   perSalesLimit: Number(config.perSalesLimit) || 0,
   hasToken: !!config.token,
+  // ميعاد انتهاء التوكن (ثواني) — تُحسب منه «أيام متبقية» للتنبيه قبل الانتهاء
+  tokenExpiresAt: Number(config.tokenExpiresAt) || 0,
   lastRun: config.lastRun || null,
 });
 
@@ -662,8 +756,25 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
 
     const built = buildAssignments({ fetched, knownPhones, at });
 
-    if (built.added.length) {
-      data.crm_assigned_leads = [...built.added, ...assigned];
+    // ===== التوزيع التلقائي: فورم اختارت له الإدارة مندوبين بعينهم =====
+    // القاعدة تُطبَّق هنا لحظة الوصول، فالأرقام تُسحب وتُوزَّع ٢٤/٧ بلا متصفح مفتوح،
+    // ومن ليس في قائمة الفورم لا يصله منه رقم (كل رقم يُوزَّع على مختاريه وحدهم).
+    const rules = parseRules(data[AUTO_ASSIGN_KEY]);
+    const activeSalesIds = (Array.isArray(data.crm_users) ? data.crm_users : [])
+      .filter((user) => user && user.isActive !== false && (user.role === 'sales' || user.role === 'supervisor'))
+      .map((user) => String(user.id));
+    const auto = rules.length
+      ? applyAutoRules({
+          leads: built.added,
+          rules,
+          activeSalesIds,
+          // الأرقام الجديدة تحمل formName صريحاً، وهو مفتاح القاعدة نفسه
+          formOf: (lead) => String(lead?.formName || ''),
+        })
+      : { leads: built.added, assignments: [], byRule: {} };
+
+    if (auto.leads.length) {
+      data.crm_assigned_leads = [...auto.leads, ...assigned];
       await storage.save({ version: (Number(db.version) || 0) + 1, data });
     }
 
@@ -677,7 +788,9 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       duplicates: built.duplicates,
       invalid: built.invalid,
       perUser: built.perUser,
-      unassigned: built.unassigned,
+      unassigned: Math.max(built.unassigned - auto.assignments.length, 0),
+      autoAssigned: auto.assignments.length,
+      autoByForm: auto.byRule,
       channels,
     };
     config.assignCursor = built.assignCursor;
@@ -743,7 +856,14 @@ export function applyChannelPatch(config, body = {}) {
       }));
   }
   if (typeof body.token === 'string' && body.token.trim()) patch.token = body.token.trim();
-  if (body.clearToken) patch.token = '';
+  if (body.clearToken) {
+    patch.token = '';
+    patch.tokenExpiresAt = 0; // توكن مُمسوح: لا تنبيه انتهاء لتوكن لم يعد موجوداً
+  }
+  // ميعاد انتهاء صلاحية التوكن (ثواني، ٠ = لا ينتهي أو مجهول) — يصل من الاستكشاف
+  if (Number.isFinite(Number(body.tokenExpiresAt)) && Number(body.tokenExpiresAt) >= 0) {
+    patch.tokenExpiresAt = Number(body.tokenExpiresAt);
+  }
   if (body.resetCursor) {
     patch.cursorTime = 0;
     patch.formCursors = {};
@@ -836,7 +956,10 @@ export function createLeadSourceHandler({ storeFile, configFile, auth = null }) 
         const current = loadConfig(configFile);
         // المفاتيح العامة للنظام (لیست لقناة بعينها)
         const globalPatch = typeof body.acceptTestLeads === 'boolean' ? { acceptTestLeads: body.acceptTestLeads } : {};
-        const saved = saveConfig(configFile, { ...applyChannelPatch(current, body), ...globalPatch });
+        // لو الواجهة ألصقت توكن جديداً مباشرة (بلا استكشاف) نسجّل ميعاد انتهائه حتى يستمر التنبيه
+        const pastedToken = typeof body.token === 'string' && body.token.trim() && !body.clearToken ? body.token.trim() : '';
+        const expiryPatch = pastedToken ? { tokenExpiresAt: (await debugToken(pastedToken))?.expiresAt || 0 } : {};
+        const saved = saveConfig(configFile, { ...applyChannelPatch(current, { ...body, ...expiryPatch }), ...globalPatch });
         return reply(res, 200, { ok: true, config: publicConfig(saved) });
       }
 
@@ -846,13 +969,14 @@ export function createLeadSourceHandler({ storeFile, configFile, auth = null }) 
         const channel = body?.channel === 'instagram' ? 'instagram' : 'facebook';
         const channelCfg = channelConfigOf(current, channel) || {};
         const token = String(body?.token || '').trim() || channelCfg.token || '';
-        const { pages, warning } = await discoverPages(token);
+        const { pages, warning, tokenExpiresAt } = await discoverPages(token);
         // نحفظ التوكن وبيانات الصفحات في قناته كي يعمل السحب لاحقاً بدون إعادة لصق
-        saveConfig(configFile, applyChannelPatch(current, { channel, token, pages }));
+        saveConfig(configFile, applyChannelPatch(current, { channel, token, pages, tokenExpiresAt }));
         return reply(res, 200, {
           ok: true,
           pages: pages.map((p) => ({ id: p.id, name: p.name })),
           warning,
+          tokenExpiresAt,
         });
       }
 
