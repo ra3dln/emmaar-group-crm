@@ -180,14 +180,28 @@ try {
     !/myNumbers\.has\(digits\(f\.clientPhone\)\)/.test(app) &&
       !/f\.clientPhone && myPhones\.has/.test(app)
   );
-  check('الحساب الإداري وحده يرى كل البيانات', /if \(currentUser\.role === 'admin' && !isDeveloper\) return null;/.test(app));
+  check(
+    'نطاق البيانات مصدره واحد (dataScopeOf) ويحترم إعداد الحساب الصريح',
+    app.includes('const dataScopeOf =') &&
+      app.includes("if (user.dataScope === 'all') return null;") &&
+      app.includes("const ownOnly = user.dataScope === 'own' || isDeveloperAccount(user);") &&
+      /const myScopeIds: Set<string> \| null = dataScopeOf\(currentUser, allUsers\);/.test(app)
+  );
+  check(
+    'لوحة الأرقام والمكالمات تستخدم نفس النطاق لا الرتبة',
+    /const myLeads = scopedLeads\.filter\(\(l: AssignedLead\) => inMyScope\(l\.salesId\)\);/.test(app) &&
+      /setCallLogs\(getCallLogs\(\)\.filter\(\(l: CallLog\) => inMyScope\(l\.salesId\)\)\)/.test(app)
+  );
+  check(
+    'يمكن ضبط نطاق الحساب من شاشة تعديل المستخدم',
+    app.includes('نطاق البيانات') && /form\.dataScope/.test(app)
+  );
   // حساب المطوّر إداري في القاعدة (ليدير الحسابات) لكنه سيلز في كل الواجهة،
   // وكان نطاقه الكامل يخلط أرقامه وفيدباكه بأرقام بقية المندوبين (حساب محمد وSHEROQ).
   check(
     'حساب المطوّر محصور في بياناته هو (لا يرى أرقام غيره)',
-    /const isDeveloper = isDeveloperAccount\(currentUser\)/.test(app) &&
-      /const isDeveloperAccount = \(user/.test(app) &&
-      /isDeveloperAccount\(user\) \? 'System Developer'/.test(app)
+    /isDeveloperAccount\(user\) \? 'System Developer'/.test(app) &&
+      /const ownOnly = user\.dataScope === 'own' \|\| isDeveloperAccount\(user\);/.test(app)
   );
 
   console.log(`\n✅ كل اختبارات فصل الحسابات نجحت (${passed}).`);

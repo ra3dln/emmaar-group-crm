@@ -259,6 +259,28 @@ const selfRoleOf = (user?: { role?: string; developer?: boolean } | null): strin
 const isCeoRole = (role?: string): boolean => role === 'admin';
 const isManagerRole = (role?: string): boolean => role === 'admin' || role === 'supervisor';
 
+// ===== نطاق بيانات الحساب — مصدر واحد للحقيقة =====
+// null = يرى كل بيانات الشركة. غير ذلك = معرّفات الحسابات المسموح له بها.
+// الترتيب: إعداد صريح على الحساب (dataScope) ثم قاعدة الرتبة.
+// «بياناته فقط» مطلوب لحساب إداري يشتغل كسيلز فعلياً (حساب المطوّر مثلاً):
+// كانت رتبته الإدارية تفتح له أرقام وفيدباك كل المندوبين ويعمل كأنه هو صاحبها.
+const dataScopeOf = (
+  user?: { id?: string; role?: string; team?: string; developer?: boolean; username?: string; dataScope?: string } | null,
+  allUsers: User[] = []
+): Set<string> | null => {
+  if (!user || !user.id) return new Set<string>();
+  if (user.dataScope === 'all') return null;
+  const ownOnly = user.dataScope === 'own' || isDeveloperAccount(user);
+  if (!ownOnly && user.role === 'admin') return null;
+  if (!ownOnly && user.role === 'supervisor' && String(user.team || '').trim()) {
+    return new Set<string>([
+      user.id,
+      ...allUsers.filter((u: User) => u.team === user.team).map((u: User) => u.id),
+    ]);
+  }
+  return new Set<string>([user.id]);
+};
+
 // ===== غرفة المدراء الجماعية =====
 // كل حساب إدارة (CEO أو Team Leader) — الحالي أو الذي يُضاف لاحقاً — يدخل الغرفة تلقائياً.
 const MANAGERS_GROUP_ID = 'managers';
@@ -1743,17 +1765,7 @@ function App() {
     // في كل الواجهة كسيلز عادي. كان دوره الإداري يمنحه نطاقاً كاملاً — فيرى أرقام كل
     // المندوبين وفيدباكهم (وهو الخلط المُبلَّغ عنه: حساب محمد وحساب SHEROQ).
     // نطاقه الآن بياناته هو فقط، ولو احتاج يشوف شغل غيره يستخدم «الدخول إلى الحساب».
-    const isDeveloper = isDeveloperAccount(currentUser);
-    const myScopeIds: Set<string> | null = (() => {
-      if (currentUser.role === 'admin' && !isDeveloper) return null;
-      if (currentUser.role === 'supervisor' && String(currentUser.team || '').trim()) {
-        return new Set<string>([
-          currentUser.id,
-          ...allUsers.filter((u: User) => u.team === currentUser.team).map((u: User) => u.id),
-        ]);
-      }
-      return new Set<string>([currentUser.id]);
-    })();
+    const myScopeIds: Set<string> | null = dataScopeOf(currentUser, allUsers);
     const inMyScope = (id?: string) => !myScopeIds || (!!id && myScopeIds.has(id));
 
     setUsers(allUsers);
@@ -1803,7 +1815,7 @@ function App() {
     setProperties(
       allProperties.filter((p: Property) => {
         if (p.scope !== 'private') return true;
-        if (currentUser.role === 'admin') return true;
+        if (!myScopeIds) return true;
         if (currentUser.role === 'supervisor') return !!teamIds && teamIds.has(ownerOf(p));
         return ownerOf(p) === currentUser.id;
       })
@@ -2368,6 +2380,12 @@ function App() {
   const scopedReminders = teamMemberIds ? reminders.filter((r) => inTeam(r.userId)) : reminders;
   const scopedProperties = teamMemberIds ? properties.filter((p) => inTeam(p.userId)) : properties;
 
+  // النطاق نفسه المستخدم في تحميل البيانات (dataScopeOf) — للتصفية وقت العرض كذلك،
+  // حتى لا يعتمد أي تبويب على «currentUser.role === 'admin'» فيفتح كل شيء لحساب
+  // إداري محدود النطاق (حساب المطوّر).
+  const scopeIds = dataScopeOf(currentUser, users);
+  const inMyScope = (id?: string) => !scopeIds || (!!id && scopeIds.has(id));
+
   const activeReminders = reminders.filter(r => !r.isCompleted);
 
   // ===== كل رقم في نطاق المستخدم: عملاء مسجّلون + أرقام التوزيع =====
@@ -2375,10 +2393,7 @@ function App() {
   // التوزيع — وهي شغل المندوب الحقيقي — ما كانتش بتتعدّ والرقم يفضل صفر ثابت.
   const workNumbers = (() => {
     const snapshots = feedbackByPhone(scopedFeedbacks, scopedCallLogs);
-    const myLeads =
-      currentUser.role === 'sales'
-        ? scopedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)
-        : scopedLeads;
+    const myLeads = scopedLeads.filter((l: AssignedLead) => inMyScope(l.salesId));
     // الأرقام الموزّعة فقط تدخل لوحة الحالات: الرقم غير الموزّع ليس «مرحلة جديدة»
     // عند أحد، وكان يظهر في fresh stage وكأنه شغل الفريق (فكل أرقام الفورمات تُعدّ).
     // مكانه «توزيع الأرقام» حتى يُوزّع فعلاً.
@@ -2491,19 +2506,10 @@ function App() {
       createdAt: new Date().toISOString(),
     };
     saveCallLogs([log, ...getCallLogs()]);
-    // سجل هذا الحساب فقط (الإدارة ترى الكل، وقائد الفريق فريقه)
-    setCallLogs(
-      getCallLogs().filter((l: CallLog) =>
-        currentUser.role === 'admin'
-          ? true
-          : currentUser.role === 'supervisor' && String(currentUser.team || '').trim()
-            ? l.salesId === currentUser.id ||
-              JSON.parse(localStorage.getItem('crm_users') || '[]').some(
-                (u: User) => u.id === l.salesId && u.team === currentUser.team
-              )
-            : l.salesId === currentUser.id
-      )
-    );
+    // سجل هذا الحساب فقط — بنفس نطاقه (الإدارة الكاملة ترى الكل، والحساب المحدود النطاق
+    // يبقى على سجله هو؛ كان الاعتماد على الرتبة يرمي كل مكالمات الشركة في ذاكرته
+    // فتظهر أرقام وفيدباك الجميع على لوحته).
+    setCallLogs(getCallLogs().filter((l: CallLog) => inMyScope(l.salesId)));
 
     addClientActivity(
       target.id,
@@ -2918,8 +2924,8 @@ function App() {
               void pushKey('crm_assigned_leads');
             }}
           />}
-          {activeTab === 'pipeline' && currentUser.role !== 'sales' && !isDeveloper && <AdminPipelineView clients={scopedClients} users={scopedUsers} currentUser={currentUser} onUpdateStage={handleUpdateClientStage} onSelectClient={setSelectedClient} />}
-          {activeTab === 'pipeline' && isSalesView && <PipelineView clients={clients} numbers={workNumbers} onUpdateStage={handleUpdateClientStage} />}
+          {activeTab === 'pipeline' && (!scopeIds || currentUser.role === 'supervisor') && <AdminPipelineView clients={scopedClients} users={scopedUsers} currentUser={currentUser} onUpdateStage={handleUpdateClientStage} onSelectClient={setSelectedClient} />}
+          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} onUpdateStage={handleUpdateClientStage} />}
           {activeTab === 'properties' && <PropertiesView properties={filteredProperties} users={users} currentUser={currentUser} searchTerm={propertySearch} onSearch={setPropertySearch} onSelect={setSelectedProperty} onAdd={() => setShowAddProperty(true)} />}
           {activeTab === 'reminders' && isSalesView && <RemindersView reminders={reminders} onComplete={(id: string) => {
             markReminderAction(id);
@@ -10942,6 +10948,14 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
     isActive: user.isActive,
     // «إداري وسيلز في نفس الوقت»: يبقى رتبته كما هي ويستقبل أرقاماً أيضاً
     receivesLeads: user.receivesLeads === true,
+    // نطاق البيانات: يحسم هل الحساب يرى أرقام وفيدباك غيره
+    dataScope: (user.dataScope === 'own'
+      ? 'own'
+      : user.dataScope === 'all'
+        ? 'all'
+        : user.role === 'admin'
+          ? 'all'
+          : 'own') as 'own' | 'all',
   });
   // الإدارة فقط ترى وتغيّر كلمات المرور
   const canSeePasswords = currentUser.role === 'admin';
@@ -11134,6 +11148,20 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
             </p>
             <input type="text" value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })}
               placeholder="اسم الفريق (اختياري)" className="mt-2 w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
+          </div>
+
+          {/* نطاق البيانات: يحسم اذا كان الحساب يشوف أرقام وفيدباك غيره — حتى لو رتبته إدارية */}
+          <div>
+            <label className="block text-sm text-[var(--text)] mb-1">نطاق البيانات</label>
+            <select value={form.dataScope}
+              onChange={(e) => setForm({ ...form, dataScope: e.target.value as 'own' | 'all' })}
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]">
+              <option value="own" className="bg-gray-900">بياناته فقط — أرقامه وعملاؤه وفيدباكه</option>
+              <option value="all" className="bg-gray-900">كل البيانات — أرقام وفيدباك كل الفريق</option>
+            </select>
+            <p className="text-xs text-[var(--text-dim)] mt-1">
+              «بياناته فقط» هو الصحيح لأي إداري يشتغل كسيلز: يمنعه من رؤية أرقام غيره وفيدباكهم.
+            </p>
           </div>
 
           <button type="button" disabled={activeLocked} onClick={() => setForm({ ...form, isActive: !form.isActive })}
