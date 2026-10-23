@@ -25,6 +25,7 @@ import {
   fetchFormsForPage,
   normalizeConfig,
   publicConfig,
+  resetChannelCursors,
   runAutoImportCore,
 } from '../server/leadSource.js';
 import { redisJsonStore, redisStorage } from '../server/store.js';
@@ -176,6 +177,15 @@ export default async function handler(req, res) {
       if (!page) return reply(res, 404, { ok: false, error: 'الصفحة غير موجودة في إعدادات هذه القناة — أعد الاستكشاف' });
       const forms = await fetchFormsForPage(page.id, page.token);
       return reply(res, 200, { ok: true, forms });
+    }
+
+    // إعادة سحب كل الأرقام من البداية (تصفير المؤشرات): تُستخدم لاسترجاع أرقام كامبين
+    // مفقودة — السحب يمنع التكرار بالهاتف، والدورة التالية تعيد قراءة كل التاريخ.
+    if (action === 'reset') {
+      const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
+      const next = normalizeConfig(resetChannelCursors(config, channel));
+      await configStore.save(next);
+      return reply(res, 200, { ok: true, config: publicConfig(next) });
     }
 
     // السحب الفعلي: يُنظَّف ويُوزَّع ويُحفظ في قاعدة البيانات مباشرة

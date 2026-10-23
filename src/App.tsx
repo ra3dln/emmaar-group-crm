@@ -262,17 +262,18 @@ const isManagerRole = (role?: string): boolean => role === 'admin' || role === '
 // ===== نطاق بيانات الحساب — مصدر واحد للحقيقة =====
 // null = يرى كل بيانات الشركة. غير ذلك = معرّفات الحسابات المسموح له بها.
 // الترتيب: إعداد صريح على الحساب (dataScope) ثم قاعدة الرتبة.
-// «بياناته فقط» مطلوب لحساب إداري يشتغل كسيلز فعلياً (حساب المطوّر مثلاً):
-// كانت رتبته الإدارية تفتح له أرقام وفيدباك كل المندوبين ويعمل كأنه هو صاحبها.
+// الحساب الإداري (بما فيه حساب المطوّر) يرى كل بيانات الشركة افتراضياً — هذا هو الأصل،
+// و«بياناته فقط» لا تُطبَّق إلا لو اختارها بنفسه من «تعديل الحساب» (dataScope = own).
+// تقييد الإدارة تلقائياً كان يخفي عنها أرقام الكامبين الموزّعة على مندوبين آخرين،
+// والأسوأ: أي حفظ بعدها كان يرفع قائمة ناقصة فتتحوّل الأرقام المختفية إلى شواهد حذف.
 const dataScopeOf = (
   user?: { id?: string; role?: string; team?: string; developer?: boolean; username?: string; dataScope?: string } | null,
   allUsers: User[] = []
 ): Set<string> | null => {
   if (!user || !user.id) return new Set<string>();
   if (user.dataScope === 'all') return null;
-  const ownOnly = user.dataScope === 'own' || isDeveloperAccount(user);
-  if (!ownOnly && user.role === 'admin') return null;
-  if (!ownOnly && user.role === 'supervisor' && String(user.team || '').trim()) {
+  if (user.role === 'admin' && user.dataScope !== 'own') return null;
+  if (user.role === 'supervisor' && user.dataScope !== 'own' && String(user.team || '').trim()) {
     return new Set<string>([
       user.id,
       ...allUsers.filter((u: User) => u.team === user.team).map((u: User) => u.id),
@@ -1822,6 +1823,25 @@ function App() {
     );
   };
 
+  // ===== أي تعديل على الأرقام الموزّعة يتم على القائمة الكاملة المحفوظة =====
+  // الذاكرة (assignedLeads) لا تحمل إلا أرقام هذا الحساب. الكتابة منها مباشرة كانت
+  // ترفع قائمة ناقصة، فتُسجَّل شواهد حذف لكل رقم خارج النطاق فيختفي من كل الأجهزة
+  // (وهو سبب اختفاء أرقام الكامبين). هنا يُطبَّق التعديل على المخزون الكامل ثم يُرشَّح للعرض.
+  const writeAssignedLeads = (mutate: (all: AssignedLead[]) => AssignedLead[]) => {
+    let all: AssignedLead[] = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
+      all = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      all = [];
+    }
+    const next = mutate(all);
+    localStorage.setItem('crm_assigned_leads', JSON.stringify(next));
+    const scope = dataScopeOf(currentUser, JSON.parse(localStorage.getItem('crm_users') || '[]'));
+    setAssignedLeads(scope ? next.filter((l: AssignedLead) => scope.has(String(l.salesId || ''))) : next);
+    void pushKey('crm_assigned_leads');
+  };
+
   const handleLogout = () => {
     // إنهاء الجلسة على السيرفر أيضاً: الكوكي يُبطَل فلا تُقرأ بيانات بلا دخول جديد
     try {
@@ -1948,12 +1968,9 @@ function App() {
   //   • التوزيع التلقائي بالتساوي على عدة مندوبين (كل رقم يأخذ مندوبه)
   const applyLeadOwners = (ownerOf: Map<string, string>) => {
     if (!currentUser || !ownerOf.size) return;
-    const updated = assignedLeads.map((l: AssignedLead) =>
-      ownerOf.has(l.id) ? { ...l, salesId: ownerOf.get(l.id) || '' } : l
+    writeAssignedLeads((all) =>
+      all.map((l: AssignedLead) => (ownerOf.has(l.id) ? { ...l, salesId: ownerOf.get(l.id) || '' } : l))
     );
-    setAssignedLeads(updated);
-    localStorage.setItem('crm_assigned_leads', JSON.stringify(updated));
-    void pushKey('crm_assigned_leads');
 
     // لو أي رقم من الموزَّعين تحوَّل لعميل بالفعل، ينتقل العميل نفسه لمندوبه الجديد (مع حدث في خطه الزمني)
     const digits = (v: string) => normalizeDigits(String(v || '')).replace(/\D/g, '');
@@ -2094,11 +2111,9 @@ function App() {
     // تحديث حالة الرقم الموزّع إلى «تم التواصل»
     let nextLeads: AssignedLead[] = [];
     try {
-      nextLeads = (JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]') as AssignedLead[]).map((l) =>
-        l.id === lead.id ? { ...l, status: 'contacted' as const } : l
+      writeAssignedLeads((all) =>
+        all.map((l: AssignedLead) => (l.id === lead.id ? { ...l, status: 'contacted' as const } : l))
       );
-      localStorage.setItem('crm_assigned_leads', JSON.stringify(nextLeads));
-      setAssignedLeads(nextLeads);
     } catch {
       /* لا شيء */
     }
@@ -2930,10 +2945,9 @@ function App() {
             onLeadViewed={(id: string) => {
               const target = assignedLeads.find((l: AssignedLead) => l.id === id);
               if (!target || target.status !== 'new') return;
-              const updated = assignedLeads.map((l: AssignedLead) => (l.id === id ? { ...l, status: 'viewed' as const, viewedAt: new Date().toISOString() } : l));
-              setAssignedLeads(updated);
-              localStorage.setItem('crm_assigned_leads', JSON.stringify(updated));
-              void pushKey('crm_assigned_leads');
+              writeAssignedLeads((all) => all.map((l: AssignedLead) =>
+                l.id === id ? { ...l, status: 'viewed' as const, viewedAt: new Date().toISOString() } : l
+              ));
             }}
           />}
           {activeTab === 'pipeline' && (!scopeIds || currentUser.role === 'supervisor') && <AdminPipelineView clients={scopedClients} users={scopedUsers} currentUser={currentUser} onUpdateStage={handleUpdateClientStage} onSelectClient={setSelectedClient} />}
@@ -3008,26 +3022,19 @@ function App() {
             onMarkViewed={(id: string) => {
               const target = assignedLeads.find((l: AssignedLead) => l.id === id);
               if (!target || target.status !== 'new') return;
-              const updated = assignedLeads.map((l: AssignedLead) => (l.id === id ? { ...l, status: 'viewed' as const, viewedAt: new Date().toISOString() } : l));
-              setAssignedLeads(updated);
-              localStorage.setItem('crm_assigned_leads', JSON.stringify(updated));
-              void pushKey('crm_assigned_leads');
+              writeAssignedLeads((all) => all.map((l: AssignedLead) =>
+                l.id === id ? { ...l, status: 'viewed' as const, viewedAt: new Date().toISOString() } : l
+              ));
             }}
           />}
           {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={scopedLeads} users={scopedUsers} currentUser={currentUser} activeForms={activeCampaignForms} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
             // الحذف يقع على القائمة الكاملة المحفوظة لا على المعروض في الذاكرة:
             // الحساب محدود النطاق يحمل أرقامه وحده، والكتابة من نسخته المعروضة
             // كانت تمسح أرقام بقية الفريق من قاعدة البيانات.
-            const all: AssignedLead[] = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
-            localStorage.setItem('crm_assigned_leads', JSON.stringify(all.filter((l: AssignedLead) => l.id !== id)));
-            setAssignedLeads(assignedLeads.filter((l: AssignedLead) => l.id !== id));
-            void pushKey('crm_assigned_leads');
+            writeAssignedLeads((all) => all.filter((l: AssignedLead) => l.id !== id));
           }} onDeleteMany={(ids: string[]) => {
             const target = new Set(ids);
-            const all: AssignedLead[] = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
-            localStorage.setItem('crm_assigned_leads', JSON.stringify(all.filter((l: AssignedLead) => !target.has(l.id))));
-            setAssignedLeads(assignedLeads.filter((l: AssignedLead) => !target.has(l.id)));
-            void pushKey('crm_assigned_leads');
+            writeAssignedLeads((all) => all.filter((l: AssignedLead) => !target.has(l.id)));
           }} onAssign={handleAssignLeads} autoRules={autoAssignRules} onSaveAutoRule={handleSaveAutoRule} />}
           {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={scopedUsers} />}
           {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
@@ -9820,6 +9827,43 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       setBusy('');
     }
   };
+  // ===== إعادة سحب تاريخي كامل: تسترجع أرقام الكامبين المفقودة =====
+  // تصفير مؤشر «آخر سحب» يجعل الدورة القادمة تقرأ كل تاريخ النماذج المختارة،
+  // والسحب يمنع التكرار بالهاتف فيُضاف المفقود فقط — بلا نسخ ولا حذف يدوي.
+  const resetAndPull = async () => {
+    if (busyRef.current) return;
+    const ok = window.confirm('إعادة سحب كل أرقام الكامبين من البداية؟\nيقرأ النظام كل تاريخ النماذج المختارة ويعيد إضافة أي رقم مفقود بدون تكرار.');
+    if (!ok) return;
+    setBusy('reset');
+    setNotice('');
+    try {
+      if (remote === false) {
+        const local: any = readLocalSource();
+        applyConfig(localSourceView(writeLocalSource({
+          cursorTime: 0,
+          formCursors: {},
+          lastRun: null,
+          instagram: { ...(local.instagram || {}), cursorTime: 0, formCursors: {}, lastRun: null },
+        })));
+      } else {
+        const res = await fetch('/api/lead-source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'reset', channel }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر تصفير مؤشر السحب');
+        applyConfig(json.config);
+      }
+      busyRef.current = '';
+      setBusy('');
+      await runNow();
+    } catch (error: any) {
+      setNotice(error?.message || 'تعذّر إعادة السحب');
+      setBusy('');
+    }
+  };
+
   runRef.current = runNow;
 
   // على الاستضافة لا توجد حلقة سحب في الخلفية — نشغّلها في المتصفح ما دام الموقع مفتوحاً
@@ -10178,6 +10222,15 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
           {busy === 'run' ? 'جارٍ السحب...' : 'جلب الأرقام الآن (تجربة)'}
         </button>
       </div>
+
+      {/* أرقام كامبين ناقصة؟ هذا الزر يقرأ كل تاريخ النماذج المختارة من جديد */}
+      <button
+        onClick={resetAndPull}
+        disabled={busy !== ''}
+        className="w-full mt-2 bg-amber-500/10 border border-amber-400/30 text-amber-200 py-2.5 rounded-[var(--r-md)] font-bold text-xs hover:bg-amber-500/20 transition-colors disabled:opacity-60"
+      >
+        {busy === 'reset' ? 'جارٍ إعادة السحب...' : 'إعادة سحب كل الأرقام من البداية (لاسترجاع المفقود)'}
+      </button>
 
       {notice && <p className="text-xs text-amber-300 mt-3 whitespace-pre-line leading-relaxed">{notice}</p>}
     </div>

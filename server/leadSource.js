@@ -163,6 +163,16 @@ export function mapTable(table) {
 export const channelConfigOf = (config, channel) =>
   channel === 'instagram' ? (config?.instagram || null) : (config || null);
 
+// إعادة سحب تاريخي كامل لقناة: تصفير مؤشرات آخر سحب حتى تُقرأ أرقام الكامبين من جديد.
+// آمنة تماماً: السحب يمنع التكرار بمقارنة الهاتف، ومعرّفات الأرقام تُولَّد جديدة
+// فلو ضاع رقم (بحذف أو جهاز قديم) يعود بدل أن يظل مفقوداً للأبد.
+export function resetChannelCursors(config = {}, channel = 'facebook') {
+  const clear = (cfg) => ({ ...(cfg || {}), cursorTime: 0, formCursors: {}, lastRun: null });
+  if (channel === 'instagram') return { ...config, instagram: clear(config.instagram) };
+  const { instagram, ...rest } = config;
+  return { ...clear(rest), ...(instagram ? { instagram } : {}) };
+}
+
 export const isChannelOn = (config, channel) => {
   const cfg = channelConfigOf(config, channel);
   if (!cfg) return false;

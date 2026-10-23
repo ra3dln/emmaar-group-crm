@@ -184,7 +184,7 @@ try {
     'نطاق البيانات مصدره واحد (dataScopeOf) ويحترم إعداد الحساب الصريح',
     app.includes('const dataScopeOf =') &&
       app.includes("if (user.dataScope === 'all') return null;") &&
-      app.includes("const ownOnly = user.dataScope === 'own' || isDeveloperAccount(user);") &&
+      /if \(user\.role === 'admin' && user\.dataScope !== 'own'\) return null;/.test(app) &&
       /const myScopeIds: Set<string> \| null = dataScopeOf\(currentUser, allUsers\);/.test(app)
   );
   check(
@@ -196,12 +196,20 @@ try {
     'يمكن ضبط نطاق الحساب من شاشة تعديل المستخدم',
     app.includes('نطاق البيانات') && /form\.dataScope/.test(app)
   );
-  // حساب المطوّر إداري في القاعدة (ليدير الحسابات) لكنه سيلز في كل الواجهة،
-  // وكان نطاقه الكامل يخلط أرقامه وفيدباكه بأرقام بقية المندوبين (حساب محمد وSHEROQ).
+  // الحساب الإداري (ومنهم حساب المطوّر) يرى كل أرقام الشركة افتراضياً — «بياناته فقط»
+  // لا تُطبَّق إلا لو اختارها صريحاً. التقييد التلقائي كان يخفي عنه أرقام الكامبين
+  // الموزّعة على مندوبين آخرين، فيبدو كأن الأرقام اختفت من النظام.
   check(
-    'حساب المطوّر محصور في بياناته هو (لا يرى أرقام غيره)',
+    'الإدارة (وحساب المطوّر) ترى أرقام الكامبين كلها ما لم تُقيَّد صريحاً',
     /isDeveloperAccount\(user\) \? 'System Developer'/.test(app) &&
-      /const ownOnly = user\.dataScope === 'own' \|\| isDeveloperAccount\(user\);/.test(app)
+      /if \(user\.role === 'admin' && user\.dataScope !== 'own'\) return null;/.test(app)
+  );
+  // أخطر ما في الحادثة: الكتابة من القائمة المرشَّحة تُسجّل شواهد حذف لبقية الأرقام.
+  check(
+    'تعديل الأرقام الموزّعة يتم على القائمة الكاملة المحفوظة (لا على المرشَّحة)',
+    app.includes('const writeAssignedLeads =') &&
+      /localStorage\.getItem\('crm_assigned_leads'\)/.test(app.slice(app.indexOf('const writeAssignedLeads ='))) &&
+      !/setAssignedLeads\(updated\);\s*\n\s*localStorage\.setItem\('crm_assigned_leads', JSON\.stringify\(updated\)\)/.test(app)
   );
 
   console.log(`\n✅ كل اختبارات فصل الحسابات نجحت (${passed}).`);
