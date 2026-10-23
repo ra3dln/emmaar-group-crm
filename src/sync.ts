@@ -41,6 +41,8 @@ export const markUnauthorized = (): void => {
   if (authRequired) return;
   authRequired = true;
   online = false;
+  // ما نُبقيش نسخة من بيانات غيرنا بعد ما الجلسة تنتهي
+  lastServerData = null;
   try {
     window.dispatchEvent(new Event(AUTH_EVENT));
   } catch {
@@ -103,6 +105,55 @@ let serverVersion = -1;
 let snapshot: Record<string, string> = {};
 let busy = false;
 let online = false;
+// آخر نسخة كاملة جاية من السيرفر (كل الحسابات) — للسؤال «الرقم ده عند حدّ تاني؟»
+// من غير ما نحط بيانات غيرنا في ذاكرة الحساب. تُمسح مع تسجيل الخروج.
+let lastServerData: StoreData | null = null;
+
+// من صاحب هذا الرقم (عميل مسجّل) في آخر نسخة من السيرفر — '' يعني مش موجود
+export const ownerOfPhoneOnServer = (phone: string): { ownerId: string; ownerName: string } | null => {
+  const key = String(phone || '').replace(/\D/g, '');
+  if (!key || !lastServerData) return null;
+  const users = Array.isArray(lastServerData.crm_users) ? (lastServerData.crm_users as any[]) : [];
+  const clients = Array.isArray(lastServerData.crm_clients) ? (lastServerData.crm_clients as any[]) : [];
+  for (const client of clients) {
+    const phones = [client?.phone, ...(client?.phones || [])].map((p: unknown) => String(p || '').replace(/\D/g, ''));
+    if (!phones.includes(key)) continue;
+    const ownerId = String(client?.assignedTo || client?.userId || '');
+    const owner = users.find((u: any) => String(u?.id) === ownerId);
+    return { ownerId, ownerName: String(owner?.name || ownerId || 'غير معروف') };
+  }
+  return null;
+};
+
+// كل الأرقام المسجّلة كعملاء على السيرفر (لكل الحسابات) — لمقارنة الأرقام
+export const clientPhonesOnServer = (): Set<string> => {
+  const out = new Set<string>();
+  if (!lastServerData) return out;
+  const clients = Array.isArray(lastServerData.crm_clients) ? (lastServerData.crm_clients as any[]) : [];
+  for (const client of clients) {
+    for (const p of [client?.phone, ...(client?.phones || [])]) {
+      const key = String(p || '').replace(/\D/g, '');
+      if (key) out.add(key);
+    }
+  }
+  return out;
+};
+
+// صاحب الرقم كرقم موزّع (في عهدة مندوب) على السيرفر — '' يعني الرقم حر
+export const leadOwnerOfPhoneOnServer = (phone: string): { ownerId: string; ownerName: string } | null => {
+  const key = String(phone || '').replace(/\D/g, '');
+  if (!key || !lastServerData) return null;
+  const users = Array.isArray(lastServerData.crm_users) ? (lastServerData.crm_users as any[]) : [];
+  const leads = Array.isArray(lastServerData.crm_assigned_leads) ? (lastServerData.crm_assigned_leads as any[]) : [];
+  for (const lead of leads) {
+    if (String(lead?.phone || '').replace(/\D/g, '') !== key) continue;
+    const ownerId = String(lead?.salesId || '');
+    if (!ownerId) return null;
+    const owner = users.find((u: any) => String(u?.id) === ownerId);
+    return { ownerId, ownerName: String(owner?.name || ownerId || 'غير معروف') };
+  }
+  return null;
+};
 
 const safeParse = (raw: string | null): any[] => {
   try {
@@ -267,6 +318,9 @@ const tick = async (): Promise<void> => {
       const fullRes = await apiFetch(API, { cache: 'no-store', headers: apiHeaders() });
       if (!fullRes.ok) throw new Error(`pull failed: ${fullRes.status}`);
       const store = await fullRes.json();
+      // نسخة السيرفر الكاملة: نستخدمها بسؤال «الرقم ده عند حدّ تاني؟»
+      // (من غير ما تدخل ذاكرة الحساب — تتبقى في المزامنة فقط)
+      if (store?.data && typeof store.data === 'object') lastServerData = store.data as StoreData;
       const serverReset = resetAt(store.data);
       if (serverReset > localResetStamp()) {
         // النظام أُعيد ضبطه من جهاز آخر: نمسح بيانات هذا الجهاز ونأخذ نسخة السيرفر كما هي

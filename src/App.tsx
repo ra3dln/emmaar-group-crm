@@ -17,7 +17,7 @@ import {
   Megaphone, Globe, Link2, Facebook, ChevronDown, Palette
 } from 'lucide-react';
 import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, TabType } from './types';
-import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, syncNow } from './sync';
+import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, syncNow, ownerOfPhoneOnServer, leadOwnerOfPhoneOnServer, clientPhonesOnServer } from './sync';
 import { buildPreview, buildSampleCsv, buildFakeCampaignCsv, decodeText, parseTable, type ImportPreview } from './leadImport';
 import { alarm, loadAlarmSettings, saveAlarmSettings, DEFAULT_ALARM_SETTINGS, type AlarmSettings } from './alarm';
 import { enablePush, disablePush, pushState, sendTestPush, pushSupported, registerWorker, resyncPush, localNotification, flushPush, pushHealth, type PushState, type PushHealth } from './push';
@@ -38,6 +38,7 @@ import {
   distributeLeads,
   isAssignableSales,
   parseRules,
+  phoneKeyOf,
   upsertRule,
   type AutoAssignRule,
   type LeadAssignment,
@@ -2440,12 +2441,25 @@ function App() {
 
   const activeReminders = reminders.filter(r => !r.isCompleted);
 
+  // ===== أرقام العملاء المسجّلين عند غيري =====
+  // الرقم الواحد عند مالك واحد: لو رقم معمول كعميل عند مندوب تاني، ما يظهرش
+  // في لوحة Cases/Marhal ولا في «عملاء كامبين» عند غيره ولا يتحط في follow up لوحده.
+  // المصدر: نسخة السيرفر (كل الحسابات) — من غير ما تدخل ذاكرة الحساب.
+  const otherClientPhones = (() => {
+    const mine = new Set(phonesOfClients(clients));
+    const out = new Set<string>();
+    for (const p of clientPhonesOnServer()) if (!mine.has(p)) out.add(p);
+    return out;
+  })();
+
   // ===== كل رقم في نطاق المستخدم: عملاء مسجّلون + أرقام التوزيع =====
   // لوحة «حالات عملائي» و«المراحل» كانتا تعدّان العملاء المسجّلين فقط، فأرقام
   // التوزيع — وهي شغل المندوب الحقيقي — ما كانتش بتتعدّ والرقم يفضل صفر ثابت.
   const workNumbers = (() => {
     const snapshots = feedbackByPhone(scopedFeedbacks, scopedCallLogs);
-    const myLeads = scopedLeads.filter((l: AssignedLead) => inMyScope(l.salesId));
+    const myLeads = scopedLeads.filter(
+      (l: AssignedLead) => inMyScope(l.salesId) && !otherClientPhones.has(phoneKeyOf(l.phone))
+    );
     // الأرقام الموزّعة فقط تدخل لوحة الحالات: الرقم غير الموزّع ليس «مرحلة جديدة»
     // عند أحد، وكان يظهر في fresh stage وكأنه شغل الفريق (فكل أرقام الفورمات تُعدّ).
     // مكانه «توزيع الأرقام» حتى يُوزّع فعلاً.
@@ -3046,7 +3060,11 @@ function App() {
           {activeTab === 'admin-forms' && currentUser.role !== 'sales' && <AdminFormsSheetView clients={fullClients} leads={fullLeads} />}
           {/* الأرقام الجديدة التي وصلت للمندوب من الكامبينات — الكارت يفتح التفاصيل */}
           {activeTab === 'new-leads' && isSalesView && <NewLeadsViewForSales
-            assignedLeads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id && l.status !== 'closed')}
+            assignedLeads={assignedLeads.filter((l: AssignedLead) =>
+              l.salesId === currentUser.id &&
+              l.status !== 'closed' &&
+              !otherClientPhones.has(phoneKeyOf(l.phone))
+            )}
             onAdd={() => setShowAddAssignedLead(true)}
             onConvert={handleConvertLeadToClient}
             onMarkViewed={(id: string) => {
@@ -8751,9 +8769,13 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
     .map((name) => ({ name, count: formCounts.get(name) || 0 }))
     .sort((a, b) => b.count - a.count);
   const activeForm = form === 'all' || formOptions.some((option) => option.name === form) ? form : 'all';
+  // الأرقام المحوَّلة لعميل (status = closed) خرجت من «توزيع الأرقام»:
+  // سجلها بقى هو العميل نفسه (تبان في «عملاء كامبين»)، فما ينفعش تفضل
+  // معروضة هنا كرقم «غير مخصص» وكأنها لسه متاحة للتوزيع.
+  const openLeads = (assignedLeads as AssignedLead[]).filter((lead: AssignedLead) => lead.status !== 'closed');
   const formLeads = activeForm === 'all'
-    ? assignedLeads
-    : assignedLeads.filter((lead: AssignedLead) => formKeyOf(lead) === activeForm);
+    ? openLeads
+    : openLeads.filter((lead: AssignedLead) => formKeyOf(lead) === activeForm);
 
   const nameOf = (id?: string) => users.find((u: User) => u.id === id)?.name || 'غير مخصص';
   const q = normalizeArabicText(query).trim();
@@ -10492,6 +10514,22 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
     if (!owner) {
       setError('اختر السيلز المسؤول عن العميل أولاً');
       return;
+    }
+    // ===== رقم واحد = مالك واحد =====
+    // لو الرقم ده عميل عند مندوب تاني، ما يتسجّلش عند اتنين.
+    // ولو الرقم موزّع (في عهدة مندوب تاني) ما ينفعش يتحوّل لعميل عند غيره.
+    const phoneKey = phoneKeyOf(form.phone);
+    if (phoneKey) {
+      const clientOwner = ownerOfPhoneOnServer(phoneKey);
+      if (clientOwner && clientOwner.ownerId && clientOwner.ownerId !== owner) {
+        setError(`الرقم ده مسجّل بالفعل عند ${clientOwner.ownerName} — الرقم ما يتسجّلش عند اتنين.`);
+        return;
+      }
+      const leadOwner = leadOwnerOfPhoneOnServer(phoneKey);
+      if (leadOwner && leadOwner.ownerId && leadOwner.ownerId !== owner) {
+        setError(`الرقم ده موزّع على ${leadOwner.ownerName} — سيبه له أو رجّعه للتوزيع الأول.`);
+        return;
+      }
     }
     // إلغاء بلا سبب لا يُحفظ — السبب هو الذي يكتب الكومنت ويُحفظ للفلترة
     if (form.feedbackStatus === 'cancellation' && !form.cancelReason) {

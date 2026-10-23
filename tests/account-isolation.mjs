@@ -200,7 +200,7 @@ try {
   );
   check(
     'لوحة الأرقام والمكالمات تستخدم نفس النطاق لا الرتبة',
-    /const myLeads = scopedLeads\.filter\(\(l: AssignedLead\) => inMyScope\(l\.salesId\)\);/.test(app) &&
+    /const myLeads = scopedLeads\.filter\([\s\S]{0,140}inMyScope\(l\.salesId\)[\s\S]{0,140}\);/.test(app) &&
       /setCallLogs\(getCallLogs\(\)\.filter\(\(l: CallLog\) => inMyScope\(l\.salesId\)\)\)/.test(app)
   );
   check(
@@ -232,6 +232,11 @@ try {
     app.includes('isManagerAccount(user)') &&
       /isManagerAccount\(u\)/.test(app) &&
       server.includes('isManagerAccount(u)')
+  );
+  // رقم واحد = مالك واحد: عميل حدّ ما يظهرش عند غيره ولا في follow up عنده
+  check(
+    'رقم عميل حدّ تاني ما بيظهرش في لوحة الحساب',
+    app.includes('otherClientPhones') && app.includes('clientPhonesOnServer')
   );
   // أخطر ما في الحادثة: الكتابة من القائمة المرشَّحة تُسجّل شواهد حذف لبقية الأرقام.
   check(

@@ -243,5 +243,27 @@ check(
   'الرقم المحوَّل لعميل يخرج من الشغل المعلّق',
   app.includes("status: 'closed' as const")
 );
+// ===== ٩) رقم واحد = مالك واحد =====
+check(
+  'لوحة الحالات ما بتعرضش رقم عميل حدّ تاني (ولا بيقع في follow up لوحده)',
+  app.includes('const otherClientPhones =') &&
+    app.includes('otherClientPhones.has(phoneKeyOf(l.phone))') &&
+    sync.includes('clientPhonesOnServer')
+);
+check(
+  'الرقم المسجّل عند غيرك ما يتحوّلش لعميل عندك (ولا لو موزّع عنده)',
+  app.includes('ownerOfPhoneOnServer(phoneKey)') &&
+    app.includes('leadOwnerOfPhoneOnServer(phoneKey)') &&
+    sync.includes('export const ownerOfPhoneOnServer') &&
+    sync.includes('export const leadOwnerOfPhoneOnServer')
+);
+check(
+  'الأرقام المحوَّلة لعميل بتخرج من «توزيع الأرقام» (مش معروضة «غير مخصص»)',
+  app.includes('const openLeads =') && app.includes("lead.status !== 'closed'")
+);
+check(
+  'نسخة السيرفر بتتفضّح للجرد بس (مالهاش غيرنا في ذاكرة الحساب)',
+  sync.includes('lastServerData = null') && sync.includes('lastServerData = store.data')
+);
 
 console.log(`\n✅ نجحت ${passed} فحوصات للتوزيع التلقائي`);
