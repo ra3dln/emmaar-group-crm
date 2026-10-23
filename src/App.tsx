@@ -2995,7 +2995,13 @@ function App() {
             setFeedbackPreset({ clientId: client.id, clientName: client.name, clientPhone: client.phone });
             setShowAddFeedback(true);
           }} />}
-          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} />}
+          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} onConvert={handleConvertLeadToClient} onLeadViewed={(id: string) => {
+            const target = assignedLeads.find((l: AssignedLead) => l.id === id);
+            if (!target || target.status !== 'new') return;
+            writeAssignedLeads((all) => all.map((l: AssignedLead) =>
+              l.id === id ? { ...l, status: 'viewed' as const, viewedAt: new Date().toISOString() } : l
+            ));
+          }} />}
           {activeTab === 'properties' && <PropertiesView properties={filteredProperties} users={users} currentUser={currentUser} searchTerm={propertySearch} onSearch={setPropertySearch} onSelect={setSelectedProperty} onAdd={() => setShowAddProperty(true)} />}
           {activeTab === 'reminders' && isSalesView && <RemindersView reminders={reminders} onComplete={(id: string) => {
             markReminderAction(id);
@@ -4924,8 +4930,7 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
             <MessageSquare className="w-3.5 h-3.5" />
             <b>{comments}</b>
           </button>
-          <button type="button" onClick={() => openComposer()}
-            title="إضافة فيدباك (حالة + كومنت)" className="icon-btn !w-8 !h-8 text-amber-300"><MessageSquare className="w-3.5 h-3.5" /></button>
+          {/* نفس ترتيب كارت العملاء بعد شيل الزر الأصفر: الأزرار تحت الکارت */}
           <a href={`tel:${client?.phone}`} title="الاتصال بالعميل"
             className="icon-btn !w-8 !h-8 text-emerald-300"><PhoneCall className="w-3.5 h-3.5" /></a>
           <WhatsAppButton name={client?.name} phones={[client?.phone, ...(client?.phones || [])]} />
@@ -5698,8 +5703,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                         </>
                       ) : (
                         <>
-                          <button type="button" onClick={() => openComposer(client!)}
-                            title="إضافة فيدباك (حالة + كومنت)" className="icon-btn !w-8 !h-8 text-amber-300"><MessageSquare className="w-3.5 h-3.5" /></button>
+                          {/* زر «إضافة كومنت» الأصفر اتشال: الكومنت بيتكتب بعد المكالمة
+                              من شريط الحالات نفسه، فما بقاش له ضرورة هنا. */}
                           <button type="button" onClick={() => onCall?.(client)} title="الاتصال بالعميل"
                             className="icon-btn !w-8 !h-8 text-emerald-300"><PhoneCall className="w-3.5 h-3.5" /></button>
                           <WhatsAppButton name={client!.name} phones={[client!.phone, ...(client!.phones || [])]} />
@@ -5814,8 +5819,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                       </>
                     ) : (
                       <>
-                        <button type="button" onClick={() => openComposer(client!)}
-                          title="إضافة فيدباك (حالة + كومنت)" className="icon-btn !w-8 !h-8 text-amber-300"><MessageSquare className="w-3.5 h-3.5" /></button>
+                        {/* زر «إضافة كومنت» الأصفر اتشال — الفيدباك يُسجّل من شريط الحالات */}
                         <button type="button" onClick={() => onCall?.(client)} title="الاتصال بالعميل"
                           className="icon-btn !w-8 !h-8 text-emerald-300"><PhoneCall className="w-3.5 h-3.5" /></button>
                         <WhatsAppButton name={client!.name} phones={[client!.phone, ...(client!.phones || [])]} />
@@ -5942,12 +5946,62 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
   );
 }
 
-function PipelineView({ clients, numbers = [], onUpdateStage, currentUser, onSelectClient, onRefresh }: any) {
+// ===== كارت رقم التوزيع في المراحل: نفس شكل كارت العميل، بلا فيدباك =====
+// الرقم لسه مش عميل مسجّل (زي تبويب العملاء بالحرف): الأيقونات تحته — اتصال +
+// «أضف إلى عملائي». أول ما يتحوّل عميل ينزل بكارت العميل الكامل بشريط الفيدباك.
+function LeadStageCard({ lead, record, onLeadViewed, onConvert }: any) {
+  const src = SOURCE_KINDS[sourceKindOf(String(lead?.description || record?.note || ''))];
+  const SrcIcon = src.Icon;
+  const sourceText = formatLeadDescription(lead?.description || '') || 'رقم وارد';
+  const phone = record?.phone || lead?.phone || '';
+  return (
+    <motion.article
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      whileHover={{ y: -1 }}
+      onClick={() => lead && onLeadViewed?.(lead.id)}
+      className={`client-card ${src.cls}`}
+    >
+      <div className="cc-avatar">{String(record?.name || lead?.name || '#').trim().charAt(0) || '#'}</div>
+
+      <div className="cc-body">
+        <div className="cc-line">
+          <b className="cc-name">{record?.name || lead?.name}</b>
+          <span className={`cc-src ${src.cls}`} title={sourceText}>
+            <SrcIcon className="w-3 h-3" />
+            {sourceText}
+          </span>
+        </div>
+        <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
+        <p className="cc-note">
+          وصل من {sourceText}{lead?.createdAt ? ` — ${formatDateTime(lead.createdAt)}` : ''}
+        </p>
+      </div>
+
+      <div className="cc-actions" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="comments-pill" title="الرقم لسه في التوزيع — الفيدباك يُكتب بعد تحويله عميلاً">
+          <MessageSquare className="w-3.5 h-3.5" />
+          <b>0</b>
+        </button>
+        <a href={`tel:${phone}`} className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل"><PhoneCall className="w-3.5 h-3.5" /></a>
+        {onConvert && lead && lead.status !== 'closed' && (
+          <button type="button" onClick={() => onConvert(lead)} title="ينشئ عميلاً بهذا الرقم في قائمتك"
+            className="text-[10.5px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-2.5 py-1.5 rounded-[var(--r-sm)] font-bold hover:bg-emerald-500/30 whitespace-nowrap">
+             أضف إلى عملائي
+          </button>
+        )}
+      </div>
+    </motion.article>
+  );
+}
+
+function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, currentUser, onSelectClient, onRefresh, onConvert, onLeadViewed }: any) {
   // كل رقم في نطاقي: العميل بحالته، والرقم الموزّع بحالة آخر فيدباك عليه.
   // بدون كده أعمدة المراحل كانت تعرض صفراً رغم وجود أرقام في التوزيع.
   // كل بطاقة عميل تحمل نفس كارت تبويب «العملاء» (بشريط الفيدباك بتسع حالات وصندوق
   // الحالة + الكومنت)، فتسجيل الفيدباك وتحرّك المرحلة يتم من هنا مباشرة.
   const clientById = new Map<string, Client>((clients || []).map((c: Client) => [String(c.id), c]));
+  const leadById = new Map<string, any>((leads || []).map((l: any) => [String(l.id), l]));
   const stageItems = numbers.length
     ? numbers.map((record: any) => ({
         ...record,
@@ -5990,11 +6044,13 @@ function PipelineView({ clients, numbers = [], onUpdateStage, currentUser, onSel
                       onRefresh={onRefresh}
                     />
                   ) : (
-                    <div key={record.key || record.id} className="bg-[var(--tint-1)] rounded-[var(--r-sm)] p-3">
-                      <p className="font-medium text-[var(--text-strong)] text-sm">{record.name}</p>
-                      <p className="text-xs text-[var(--text-muted)]" dir="ltr">{record.phone}</p>
-                      <span className="inline-block mt-1.5 text-[10.5px] text-[var(--text-dim)]">رقم في التوزيع</span>
-                    </div>
+                    <LeadStageCard
+                      key={`lead-${record.leadId || record.key || record.id}`}
+                      record={record}
+                      lead={leadById.get(String(record.leadId))}
+                      onLeadViewed={onLeadViewed}
+                      onConvert={onConvert}
+                    />
                   )
                 ))}
               </div>
@@ -7470,115 +7526,79 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: any)
 // ===== الفيدباك اليومي للمندوب: **كارت لكل رقم**، والكومنتات مرصوصة تحت بعضها =====
 // أى كومنت يكتبه المندوب على أى عميل (من تبويب العملاء أو من الاتصال أو من إضافة فيدباك)
 // ينزل هنا فوراً منسوباً لكاتبه — حتى لو كان العميل مسجلاً باسم الإدارة أو باسم مندوب آخر.
-function DailyFeedbackView({ feedbacks, clients, currentUser, onDelete, onAdd, callLogs = [] }: any) {
+function DailyFeedbackView({ feedbacks, clients, currentUser, callLogs = [] }: any) {
   const [historyClient, setHistoryClient] = useState<Client | null>(null);
   const norm = (value: any) => normalizeDigits(String(value || '')).replace(/\D/g, '');
-  // كومنتاتي أنا وحدي: الفيدباك منسوب لصاحبه (userId). الربط بالرقم كان يجعل
-  // فيدباك مندوب يظهر لمندوب آخر حصل على نفس الرقم — وهو ما شكا منه الفريق.
+  // فيدباكي أنا وحدي: الفيدباك منسوب لصاحبه (userId)، والربط بالرقم كان يجعل
+  // فيدباك مندوب يظهر لمندوب آخر حصل على نفس الرقم.
   const mine = (feedbacks || []).filter((f: DailyFeedback) => f.userId === currentUser?.id);
-
-  // تجميع: كارت واحد لكل رقم
-  const byNumber = new Map<string, DailyFeedback[]>();
+  const byPhone = new Map<string, DailyFeedback[]>();
   for (const f of mine) {
-    const key = norm(f.clientPhone) || `name:${f.clientName}`;
-    byNumber.set(key, [...(byNumber.get(key) || []), f]);
+    const key = norm(f.clientPhone) || `name:${normalizeArabicText(f.clientName || '')}`;
+    byPhone.set(key, [...(byPhone.get(key) || []), f]);
   }
-  const groups = Array.from(byNumber.entries())
-    .map(([key, list]) => {
-      const sorted = [...list].sort((a, b) => Date.parse(b.date || b.createdAt) - Date.parse(a.date || a.createdAt));
-      return { key, list: sorted, latest: Date.parse(sorted[0]?.date || sorted[0]?.createdAt) || 0 };
+  // التبويب يعرض **عملاءك** لا قائمة كومنتات: كارت لكل عميل، والضغط عليه يفتح
+  // كل الفيدباك بتاعه في الخط الزمني — عرض فقط، لا كتابة ولا حذف من هنا.
+  const cards = (clients || [])
+    .map((client: Client) => {
+      const list = (byPhone.get(norm(client.phone)) || [])
+        .slice()
+        .sort((a: DailyFeedback, b: DailyFeedback) => Date.parse(b.date || b.createdAt) - Date.parse(a.date || a.createdAt));
+      return {
+        client,
+        list,
+        lastStatus: list[0]?.status || latestFeedbackStatusOf(client) || '',
+        lastText: String(list[0]?.feedback || '').replace(/^فيدباك:\s*/, '').replace(/^من المكالمة:\s*/, ''),
+        latest: Date.parse(list[0]?.date || list[0]?.createdAt) || 0,
+        updated: Date.parse(client.updatedAt) || 0,
+      };
     })
-    .sort((a, b) => b.latest - a.latest);
-
-  // فتح سجل كل التعليقات لصاحب الكارت (حتى لو العميل مش موجود في قائمة العملاء)
-  const openHistory = (group: { key: string; list: DailyFeedback[] }) => {
-    const first = group.list[0];
-    const found = (clients || []).find(
-      (c: Client) => norm(c.phone) === norm(first?.clientPhone) || normalizeArabicText(c.name) === normalizeArabicText(first?.clientName)
-    );
-    setHistoryClient(
-      found || ({
-        id: `phone-${group.key}`,
-        name: first?.clientName || 'عميل',
-        phone: first?.clientPhone || '',
-        userId: currentUser?.id || '',
-        phones: [],
-        property: '',
-        budget: '',
-        monthlyInstallment: '',
-        deliveryPeriod: '',
-        status: 'campaign',
-        stage: 'new',
-        feedback: '',
-        priority: 'medium',
-        source: '',
-        createdAt: '',
-        updatedAt: '',
-        activities: [],
-      } as Client)
-    );
-  };
+    .sort((a: any, b: any) => b.latest - a.latest || b.updated - a.updated);
+  const totalFeedbacks = cards.reduce((sum: number, card: any) => sum + card.list.length, 0);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="page-intro">
         <div>
-          <div className="page-intro"><div><h2>الفيدباك اليومي</h2></div></div>
+          <h2>الفيدباك</h2>
           <p className="text-xs text-[var(--text-muted)] mt-1">
-            {mine.length} كومنت على {groups.length} رقم — كل رقم في كارت، والكومنتات مرصوصة تحته
+            {cards.length} عميل • {totalFeedbacks} فيدباك — اضغط على أي عميل لعرض كل الفيدباك بتاعه (عرض فقط)
           </p>
         </div>
-        <button onClick={onAdd} className="gradient-primary text-[var(--text-strong)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 glow-primary">
-          <Plus className="w-4 h-4" /> إضافة فيدباك
-        </button>
       </div>
 
-      {groups.length === 0 && (
+      {cards.length === 0 && (
         <div className="panel p-8 text-center">
           <MessageSquare className="w-12 h-12 text-[var(--text-dim)] mx-auto mb-3" />
-          <p className="text-[var(--text-muted)] text-sm">لا يوجد فيدباك بعد — أي كومنت تكتبه على عميل من تبويب «العملاء» ينزل هنا فوراً.</p>
+          <p className="text-[var(--text-muted)] text-sm">لا يوجد عملاء عندك بعد — أول عميل يتحوّل من أرقامك هيظهر هنا بكل فيدباكه.</p>
         </div>
       )}
 
-      <div className="space-y-3">
-        {groups.map((group) => (
-          <div
-            key={group.key}
-            className="fb-card cursor-pointer"
-            onClick={() => openHistory(group)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openHistory(group); }}
-            title="اضغط لعرض كل التعليقات بالتوقيت"
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+        {cards.map((card: any) => (
+          <button
+            key={card.client.id}
+            type="button"
+            onClick={() => setHistoryClient(card.client)}
+            className="panel p-4 text-right w-full hover:border-[var(--accent-border)] transition-colors"
+            title="عرض كل الفيدباك والخط الزمني لهذا العميل"
           >
-            <div className="fb-head">
-              <span className="fb-avatar">{(group.list[0]?.clientName || '؟').trim().charAt(0)}</span>
-              <div className="fb-who">
-                <b className="fb-name">{group.list[0]?.clientName || 'عميل'}</b>
-                <span className="fb-phone" dir="ltr">{group.list[0]?.clientPhone}</span>
-              </div>
-              <span className="fb-count">{group.list.length} كومنت</span>
+            <div className="flex items-center gap-2.5">
+              <span className="fb-avatar">{String(card.client.name || '؟').trim().charAt(0)}</span>
+              <span className="min-w-0 flex-1">
+                <b className="block text-sm font-bold text-[var(--text-strong)] truncate">{card.client.name}</b>
+                <span className="block text-xs text-[var(--text-muted)]" dir="ltr">{card.client.phone}</span>
+              </span>
+              <span className="fb-count shrink-0">{card.list.length} فيدباك</span>
             </div>
-            <div className="fb-body">
-              {group.list.map((feedback: DailyFeedback) => (
-                <div key={feedback.id} className="fb-row">
-                  <div className="min-w-0 flex-1">
-                    <p className="fb-text">
-                      <FeedbackChip status={feedback.status} />
-                      {' '}{String(feedback.feedback || '').replace(/^فيدباك:\s*/, '').replace(/^من المكالمة:\s*/, '')}
-                    </p>
-                    <p className="fb-meta">
-                      {formatDateTime(feedback.date)}
-                      {feedback.callStatus === 'no-answer' ? ' • لم يرد ' : feedback.callStatus === 'called' ? ' • تم الرد ' : ''}
-                    </p>
-                  </div>
-                  <button onClick={(e) => { e.stopPropagation(); onDelete(feedback.id); }} title="حذف هذا الكومنت" className="fb-del">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              {card.lastStatus ? <FeedbackChip status={card.lastStatus} /> : <span className="text-[10.5px] text-[var(--text-dim)]">بدون فيدباك بعد</span>}
+              {card.list[0] && <span className="text-[10.5px] text-[var(--text-dim)]">{formatDateTime(card.list[0].date || card.list[0].createdAt)}</span>}
             </div>
-          </div>
+            {card.lastText && (
+              <p className="mt-2 text-xs text-[var(--text)] leading-relaxed line-clamp-2">{card.lastText}</p>
+            )}
+          </button>
         ))}
       </div>
 
