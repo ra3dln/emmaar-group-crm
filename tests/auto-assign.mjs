@@ -118,23 +118,23 @@ check(
   applyAutoRules({ leads: [lead('1')], rules, activeSalesIds: [saif, abdo] }).assignments.length === 0
 );
 
-// ===== ٣) من يستقبل الأرقام تلقائياً (حساب المطوّر ليس منهم) =====
+// ===== ٣) من يستقبل الأرقام تلقائياً (حساب المطوّر منهم مثل أي سيلز) =====
 check('السيلز يستقبل أرقاماً', isAssignableSales({ role: 'sales', isActive: true }));
 check('قائد الفريق يستقبل أرقاماً', isAssignableSales({ role: 'supervisor', isActive: true }));
 check('الإداري الذي اختار «يعمل سيلزاً» يستقبل', isAssignableSales({ role: 'admin', receivesLeads: true, isActive: true }));
 check('الإداري العادي ما يستقبلش', isAssignableSales({ role: 'admin', isActive: true }) === false);
 check(
-  'حساب المطوّر ما يستقبلش أرقاماً تلقائية (رقمه بتكليف صريح فقط)',
-  isAssignableSales({ role: 'admin', developer: true, isActive: true }) === false &&
-    isAssignableSales({ role: 'sales', developer: true, isActive: true }) === false
+  'حساب المطوّر يظهر في التوزيع ويستقبل أرقاماً زي أي مندوب',
+  isAssignableSales({ role: 'admin', developer: true, isActive: true }) &&
+    isAssignableSales({ username: 'mohamed', role: 'admin', receivesLeads: true, isActive: true })
 );
 check('الحساب الموقوف ما يستقبلش', isAssignableSales({ role: 'sales', isActive: false }) === false);
 check(
-  'قاعدة تشير لحساب المطوّر تُهمَل عند التوزيع (الواجهة والسيرفر يستبعدانه)',
+  'قاعدة فورم تختار حساب المطوّر توزّع عليه فعلاً (الواجهة والسيرفر متطابقان)',
   (() => {
     // المتصلون (الواجهة والسيرفر) يحسبون «النشطين» بنفس دالة isAssignableSales
     const team = [
-      { id: 'u-dev', role: 'admin', developer: true, isActive: true },
+      { id: 'u-dev', username: 'mohamed', role: 'admin', developer: true, isActive: true },
       { id: ahmed, role: 'sales', isActive: true },
     ];
     const activeIds = team.filter(isAssignableSales).map((u) => u.id);
@@ -143,7 +143,7 @@ check(
       rules: upsertRule([], { formName: FORM, salesIds: ['u-dev'] }),
       activeSalesIds: activeIds,
     });
-    return res.assignments.length === 0 && res.leads[0].salesId === '';
+    return res.assignments.length === 1 && res.assignments[0].salesId === 'u-dev';
   })()
 );
 

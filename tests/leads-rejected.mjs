@@ -163,9 +163,9 @@ const config = () =>
     isAssignableSales({ role: 'admin' }) === false
   );
   check(
-    'حساب المطوّر لا يستقبل أرقاماً تلقائياً (رقمه يوصله بتكليف صريح فقط)',
-    isAssignableSales({ role: 'admin', developer: true }) === false &&
-      isAssignableSales({ role: 'sales', developer: true }) === false
+    'حساب المطوّر يستقبل أرقاماً زي أي مندوب (كان مستبعداً من التوزيع)',
+    isAssignableSales({ role: 'admin', developer: true }) === true &&
+      isAssignableSales({ role: 'sales', developer: true }) === true
   );
 
   // السيرفر يوزّع على الإداري الذي يعمل سيلزاً

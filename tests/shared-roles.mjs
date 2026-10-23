@@ -63,12 +63,12 @@ check(
 );
 check('حساب بلا معرّف = نطاق فارغ', [...(dataScopeOf({ role: 'sales' }, all) || [])].length === 0);
 
-// ===== ٤) التوزيع التلقائي: حساب المطوّر ليس هدفاً تلقائياً =====
+// ===== ٤) التوزيع التلقائي: حساب المطوّر هدف عادي مثل أي مندوب =====
 check('السيلز يستقبل أرقاماً', isAssignableSales(sales) === true);
 check('قائد الفريق يستقبل أرقاماً', isAssignableSales(lead) === true);
 check('الإداري الذي اختار «يعمل سيلزاً» يستقبل', isAssignableSales({ role: 'admin', receivesLeads: true, isActive: true }) === true);
 check('الإداري العادي ما يستقبلش', isAssignableSales(ceo) === false);
-check('حساب المطوّر ما يستقبلش أرقاماً تلقائية', isAssignableSales(dev) === false);
+check('حساب المطوّر يستقبل أرقاماً ويظهر في التوزيع', isAssignableSales(dev) === true);
 check('الحساب الموقوف ما يستقبلش', isAssignableSales({ ...sales, isActive: false }) === false);
 
 console.log(`\n✅ نجحت ${passed} فحوصات لحساب المطوّر`);
