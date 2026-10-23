@@ -2991,8 +2991,11 @@ function App() {
               ));
             }}
           />}
-          {activeTab === 'pipeline' && (!scopeIds || currentUser.role === 'supervisor') && <AdminPipelineView clients={scopedClients} users={scopedUsers} currentUser={currentUser} onUpdateStage={handleUpdateClientStage} onSelectClient={setSelectedClient} />}
-          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} onUpdateStage={handleUpdateClientStage} />}
+          {activeTab === 'pipeline' && (!scopeIds || currentUser.role === 'supervisor') && <AdminPipelineView clients={scopedClients} users={scopedUsers} currentUser={currentUser} onUpdateStage={handleUpdateClientStage} onSelectClient={setSelectedClient} onAddFeedback={(client: Client) => {
+            setFeedbackPreset({ clientId: client.id, clientName: client.name, clientPhone: client.phone });
+            setShowAddFeedback(true);
+          }} />}
+          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} />}
           {activeTab === 'properties' && <PropertiesView properties={filteredProperties} users={users} currentUser={currentUser} searchTerm={propertySearch} onSearch={setPropertySearch} onSelect={setSelectedProperty} onAdd={() => setShowAddProperty(true)} />}
           {activeTab === 'reminders' && isSalesView && <RemindersView reminders={reminders} onComplete={(id: string) => {
             markReminderAction(id);
@@ -4819,6 +4822,172 @@ function FeedbackBar({ client, onPick }: { client: any; onPick?: (statusId: stri
   return <StatusMenu value={active} onPick={(id) => onPick?.(id)} className="fb-bar-menu" />;
 }
 
+// ===== كارت العميل الواحد: نفس الكارت في تبويب «العملاء» وفي «المراحل» =====
+// نفس الشكل بالحرف (الأفاتار + مصدر الرقم + شريط الفيدباك بتسع حالات + آخر كومنت +
+// الهاتف + الأزرار)، لأن المراحل كانت تعرض سطرين بلا وسيلة لتسجيل فيدباك.
+// صندوق الفيدباك (حالة + كومنت إلزامي) داخلي هنا، والحفظ يتحرك معه المرحلة تلقائياً،
+// فالسيلز يسجّل الفيدباك من المراحل بلا رجوع لتبويب العملاء.
+function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onSetStage, onRefresh }: any) {
+  const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState('');
+  const [commentText, setCommentText] = useState('');
+  const [cancelReason, setCancelReason] = useState('');
+  const src = SOURCE_KINDS[sourceKindOf(`${client?.source} ${client?.status}`)];
+  const SrcIcon = src.Icon;
+  const sourceText = sourceLabelOf(client);
+  const comments = commentCountOf(client);
+  const last = lastCommentOf(client);
+  const facts = ([
+    client?.budget ? { k: 'الميزانية', v: displayPrice(client.budget) } : null,
+    client?.property ? { k: 'العقار', v: client.property } : null,
+    client?.monthlyInstallment ? { k: 'القسط', v: displayPrice(client.monthlyInstallment) } : null,
+    client?.deliveryPeriod ? { k: 'التسليم', v: client.deliveryPeriod } : null,
+  ].filter(Boolean) as Array<{ k: string; v: string }>);
+  const meta = status ? FEEDBACK_STATUS_BY_ID[status] : null;
+
+  // فتح الصندوق: من شريط الحالة (بقيمة مختارة) أو من زر الفيدباك
+  const openComposer = (statusId?: string) => {
+    const picked = statusId || latestFeedbackStatusOf(client) || '';
+    const keptReason = picked === 'cancellation' ? latestCancelReasonOf(client) : '';
+    setOpen(true);
+    setStatus(picked);
+    setCancelReason(keptReason);
+    setCommentText(
+      picked === 'no-answer' ? NO_ANSWER_COMMENT : picked === 'cancellation' ? cancelReasonLabelOf(keptReason) : ''
+    );
+  };
+  const closeComposer = () => {
+    setOpen(false);
+    setStatus('');
+    setCommentText('');
+    setCancelReason('');
+  };
+
+  const submit = () => {
+    const text = commentText.trim();
+    if (!status || !text || (status === 'cancellation' && !cancelReason)) return;
+    const picked = FEEDBACK_STATUS_BY_ID[status];
+    if (!picked) return;
+    // نفس مسار تبويب العملاء: كومنت + حالة في الخط الزمني، والمصدر واحد
+    addClientActivity(client.id, 'feedback', text, currentUser?.name || '', {
+      authorId: currentUser?.id,
+      status,
+      ...(status === 'cancellation' && cancelReason ? { cancelReason } : {}),
+      callStatus: status === 'no-answer' ? 'no-answer' : 'called',
+    });
+    if (picked.stage && client.stage !== picked.stage) onSetStage?.(client.id, picked.stage);
+    closeComposer();
+    onRefresh?.();
+    void pushKey('crm_clients');
+  };
+
+  return (
+    <>
+      <motion.article
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        whileHover={{ y: -1 }}
+        onClick={() => onSelect?.(client)}
+        className={`client-card ${src.cls}`}
+      >
+        <div className="cc-avatar">{client?.name?.[0] || '#'}</div>
+
+        <div className="cc-body">
+          <div className="cc-line">
+            <b className="cc-name">{client?.name}</b>
+            <span className={`cc-src ${src.cls}`} title={sourceText}>
+              <SrcIcon className="w-3 h-3" />
+              {sourceText}
+            </span>
+            {client?.stage === 'lost' && <span className="st-chip st-lost">ضائع</span>}
+            <FeedbackBar client={client} onPick={(statusId: string) => openComposer(statusId)} />
+          </div>
+
+          {last?.text && (
+            <p className="cc-lastfb"><FeedbackChip status={last.status} /> {last.text}</p>
+          )}
+
+          <a className="cc-phone" dir="ltr" href={`tel:${client?.phone}`} onClick={(e) => e.stopPropagation()}>{client?.phone}</a>
+
+          {facts.length > 0 && (
+            <div className="cc-facts">
+              {facts.map((f) => (
+                <span className="cc-fact" key={f.k}><i>{f.k}</i>{f.v}</span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="cc-actions" onClick={(e) => e.stopPropagation()}>
+          <button type="button" className="comments-pill" title="كل التعليقات بالتوقيت — اضغط لعرضها"
+            onClick={() => onOpenComments?.(client)}>
+            <MessageSquare className="w-3.5 h-3.5" />
+            <b>{comments}</b>
+          </button>
+          <button type="button" onClick={() => openComposer()}
+            title="إضافة فيدباك (حالة + كومنت)" className="icon-btn !w-8 !h-8 text-amber-300"><MessageSquare className="w-3.5 h-3.5" /></button>
+          <a href={`tel:${client?.phone}`} title="الاتصال بالعميل"
+            className="icon-btn !w-8 !h-8 text-emerald-300"><PhoneCall className="w-3.5 h-3.5" /></a>
+          <WhatsAppButton name={client?.name} phones={[client?.phone, ...(client?.phones || [])]} />
+        </div>
+      </motion.article>
+
+      {open && (
+        <form
+          className="feedback-composer"
+          onClick={(e) => e.stopPropagation()}
+          onSubmit={(e) => { e.preventDefault(); submit(); }}
+        >
+          <StatusMenu
+            value={status}
+            label="اختر حالة الفيدباك"
+            className="fc-status-menu"
+            stopPropagation={false}
+            onPick={(optionId) => {
+              setStatus(optionId);
+              if (optionId === 'cancellation') {
+                setCancelReason('');
+                setCommentText('');
+                return;
+              }
+              setCancelReason('');
+              if (optionId === 'no-answer' && !commentText.trim()) setCommentText(NO_ANSWER_COMMENT);
+            }}
+          />
+          {status === 'cancellation' && (
+            <CancelReasonPicker
+              value={cancelReason}
+              onChange={(reason) => {
+                setCancelReason(reason);
+                setCommentText(reason ? cancelReasonLabelOf(reason) : '');
+              }}
+            />
+          )}
+          <div className="fc-row">
+            <input
+              autoFocus
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+              placeholder={meta ? `اكتب كومنت «${meta.label}» — إلزامي ليُحفظ الفيدباك` : 'اختر حالة الفيدباك ثم اكتب الكومنت'}
+              className="quick-comment-input"
+            />
+            <button type="submit" disabled={!commentText.trim() || !meta || (status === 'cancellation' && !cancelReason)}
+              title={!meta ? 'اختر حالة أولاً' : status === 'cancellation' && !cancelReason ? 'اختر سبب الإلغاء' : 'حفظ الفيدباك (الحالة + الكومنت)'}>
+              حفظ
+            </button>
+            <button type="button" title="إلغاء" onClick={closeComposer}>✕</button>
+          </div>
+          <p className="fc-hint">
+            {status === 'cancellation' && !cancelReason
+              ? 'اختر سبب الإلغاء — والكومنت هيتكتب تلقائياً'
+              : meta ? `الحالة: ${meta.label} — ${meta.ar}` : 'لازم تختار حالة وتكتب كومنت معاً'}
+          </p>
+        </form>
+      )}
+    </>
+  );
+}
+
 // ===== قائمة سبب الإلغاء =====
 // تظهر لحظة اختيار «cancellation» في أي صندوق فيدباك في النظام، واختيار سبب يكتب
 // الكومنت تلقائياً (نفس سلوك «no answer») ويُحفظ السبب مع العميل فلترةً لاحقاً.
@@ -5673,7 +5842,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
 
 // Pipeline View
 // ===== تبويب المراحل للإدارة: اسم السيلز ← أرقامه وعدد كومنتات كل رقم ← ضغطة على الرقم تفتح الكومنتات =====
-function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelectClient }: any) {
+function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelectClient, onAddFeedback }: any) {
   const quick = [
     { id: 'new', label: 'new', cls: 'qs-new' },
     { id: 'followup', label: 'follow up', cls: 'qs-follow' },
@@ -5748,6 +5917,11 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
                               {s.label}
                             </button>
                           ))}
+                          {/* نفس فيدباك تبويب العملاء (حالة + كومنت) من شاشة المراحل */}
+                          <button type="button" className="qs-btn" title="إضافة فيدباك (حالة + كومنت)"
+                            onClick={() => onAddFeedback?.(client)}>
+                            فيدباك
+                          </button>
                         </div>
                       </div>
                     );
@@ -5768,11 +5942,18 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
   );
 }
 
-function PipelineView({ clients, numbers = [], onUpdateStage }: any) {
+function PipelineView({ clients, numbers = [], onUpdateStage, currentUser, onSelectClient, onRefresh }: any) {
   // كل رقم في نطاقي: العميل بحالته، والرقم الموزّع بحالة آخر فيدباك عليه.
   // بدون كده أعمدة المراحل كانت تعرض صفراً رغم وجود أرقام في التوزيع.
+  // كل بطاقة عميل تحمل نفس كارت تبويب «العملاء» (بشريط الفيدباك بتسع حالات وصندوق
+  // الحالة + الكومنت)، فتسجيل الفيدباك وتحرّك المرحلة يتم من هنا مباشرة.
+  const clientById = new Map<string, Client>((clients || []).map((c: Client) => [String(c.id), c]));
   const stageItems = numbers.length
-    ? numbers.map((record: any) => ({ ...record, stage: record.stage }))
+    ? numbers.map((record: any) => ({
+        ...record,
+        stage: record.stage,
+        client: record.client || (record.clientId ? clientById.get(String(record.clientId)) : undefined),
+      }))
     : (clients || []).map((client: Client) => ({ key: client.id, client, stage: client.stage, name: client.name, phone: client.phone }));
   const stages = [
     { id: 'new', label: 'جديد', color: 'stg-new' },
@@ -5798,21 +5979,23 @@ function PipelineView({ clients, numbers = [], onUpdateStage }: any) {
               </div>
               <div className="space-y-2">
                 {stageClients.map((record: any) => (
-                  <div key={record.key || record.id} className="bg-[var(--tint-1)] rounded-[var(--r-sm)] p-3">
-                    <p className="font-medium text-[var(--text-strong)] text-sm">{record.name}</p>
-                    <p className="text-xs text-[var(--text-muted)]" dir="ltr">{record.phone}</p>
-                    {record.client ? (
-                      <select
-                        value={record.client.stage}
-                        onChange={(e) => onUpdateStage(record.client.id, e.target.value as Client['stage'])}
-                        className="mt-1.5 w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-2 py-1 text-xs text-[var(--text-strong)]"
-                      >
-                        {stages.map((s) => <option key={s.id} value={s.id} className="bg-gray-900">{s.label}</option>)}
-                      </select>
-                    ) : (
+                  record.client ? (
+                    <ClientFeedbackCard
+                      key={`client-${record.client.id}`}
+                      client={record.client}
+                      currentUser={currentUser}
+                      onSelect={onSelectClient}
+                      onOpenComments={onSelectClient}
+                      onSetStage={onUpdateStage}
+                      onRefresh={onRefresh}
+                    />
+                  ) : (
+                    <div key={record.key || record.id} className="bg-[var(--tint-1)] rounded-[var(--r-sm)] p-3">
+                      <p className="font-medium text-[var(--text-strong)] text-sm">{record.name}</p>
+                      <p className="text-xs text-[var(--text-muted)]" dir="ltr">{record.phone}</p>
                       <span className="inline-block mt-1.5 text-[10.5px] text-[var(--text-dim)]">رقم في التوزيع</span>
-                    )}
-                  </div>
+                    </div>
+                  )
                 ))}
               </div>
             </div>
