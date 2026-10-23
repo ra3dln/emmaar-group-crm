@@ -2851,15 +2851,18 @@ function App() {
               )}
             </motion.button>
 
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              onClick={() => setShowAddClient(true)}
-              title="عميل جديد"
-              className="btn-primary"
-            >
-              <Plus className="w-4 h-4" />
-              <span className="hidden lg:inline">عميل جديد</span>
-            </motion.button>
+            {/* تبويب «الفيدباك» عرض فقط (قراءة سجل الفيدباك) — فزر إضافة عميل مخفي فيه */}
+            {activeTab !== 'daily-feedback' && activeTab !== 'admin-feedback' && (
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                onClick={() => setShowAddClient(true)}
+                title="عميل جديد"
+                className="btn-primary"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden lg:inline">عميل جديد</span>
+              </motion.button>
+            )}
 
             {/* زر واحد للخروج: داخل حساب سيلز يرجعك للإدارة، وفي حسابك يُسجّل الخروج */}
             <motion.button
@@ -10691,7 +10694,9 @@ function StatusBadge({ status }: { status: Client['status'] }) {
 
 // Modal Components (simplified)
 function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
-  const isAdmin = currentUser?.role !== 'sales';
+  // حساب «المطوّر» إداري في القاعدة لكنه يعمل سيلزاً — فالعميل يُسجّل باسمه هو،
+  // بلا قائمة اختيار مندوب (كانت تطلب منه اختيار سيلز قبل الحفظ).
+  const isAdmin = currentUser?.role !== 'sales' && !isDeveloperAccount(currentUser);
   // المدير يضيف العميل لمندوب بعينه حتى يظهر للفريق (الإدارة مالها تبويب عملاء خاص)
   const reps = (users || []).filter((u: User) => u.role === 'sales' || u.role === 'supervisor');
   const [form, setForm] = useState({
