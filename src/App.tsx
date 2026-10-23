@@ -1849,6 +1849,11 @@ function App() {
     setImpersonator(currentUser);
     setCurrentUser(target);
     localStorage.setItem('current_user', JSON.stringify(target));
+    // نبدأ من صفحة نظيفة: لا تبقى لوحة أو نافذة من حساب الإدارة مفتوحة
+    setStatusBoard(null);
+    setSelectedClient(null);
+    setCallClient(null);
+    setSelectedUserFeedback(null);
     setActiveTab(target.role === 'sales' || target.developer ? 'dashboard' : 'admin-users');
     setLoginAnimation(target);
   };
@@ -1864,6 +1869,13 @@ function App() {
     setImpersonator(null);
     setCurrentUser(restored);
     localStorage.setItem('current_user', JSON.stringify(restored));
+    // نغلق أي صفحة/نافذة فُتحت من داخل حساب السيلز (لوحة حالة، عميل، مكالمة):
+    // لو بقيت مفتوحة كانت ستُعاد بنفس بياناتها فوق حساب الإدارة، فيبدو كأن
+    // بيانات المندوب انتقلت للمدير بدل أن تكون شاشة عالقة.
+    setStatusBoard(null);
+    setSelectedClient(null);
+    setCallClient(null);
+    setSelectedUserFeedback(null);
     // نرجع المدير لنفس الصفحة التي كان فيها قبل الدخول لحساب السيلز
     setActiveTab(startTabFor(restored));
     setLoginAnimation(restored);
@@ -2569,7 +2581,7 @@ function App() {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.35, ease: 'easeOut' }}
-      className="app-root"
+      className={`app-root${impersonator ? ' has-impersonator' : ''}`}
     >
       <div className="bg-orb bg-orb-1"></div>
       <div className="bg-orb bg-orb-2"></div>
@@ -3003,9 +3015,18 @@ function App() {
             }}
           />}
           {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={scopedLeads} users={scopedUsers} currentUser={currentUser} activeForms={activeCampaignForms} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
-            const updated = assignedLeads.filter(l => l.id !== id);
-            setAssignedLeads(updated);
-            localStorage.setItem('crm_assigned_leads', JSON.stringify(updated));
+            // الحذف يقع على القائمة الكاملة المحفوظة لا على المعروض في الذاكرة:
+            // الحساب محدود النطاق يحمل أرقامه وحده، والكتابة من نسخته المعروضة
+            // كانت تمسح أرقام بقية الفريق من قاعدة البيانات.
+            const all: AssignedLead[] = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
+            localStorage.setItem('crm_assigned_leads', JSON.stringify(all.filter((l: AssignedLead) => l.id !== id)));
+            setAssignedLeads(assignedLeads.filter((l: AssignedLead) => l.id !== id));
+            void pushKey('crm_assigned_leads');
+          }} onDeleteMany={(ids: string[]) => {
+            const target = new Set(ids);
+            const all: AssignedLead[] = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
+            localStorage.setItem('crm_assigned_leads', JSON.stringify(all.filter((l: AssignedLead) => !target.has(l.id))));
+            setAssignedLeads(assignedLeads.filter((l: AssignedLead) => !target.has(l.id)));
             void pushKey('crm_assigned_leads');
           }} onAssign={handleAssignLeads} autoRules={autoAssignRules} onSaveAutoRule={handleSaveAutoRule} />}
           {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={scopedUsers} />}
@@ -8075,7 +8096,7 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert, onAdd }:
 
 // Admin Leads View - For Admin to assign leads to sales
 // ===== حصة كل سيلز: زر واحد يفتح كل السيلز، والضغط على اسم يفتح كم رقم اتوزّع له =====
-function SalesShareModal({ leads, users, onClose }: any) {
+function SalesShareModal({ leads, users, onClose, onDeleteMany }: any) {
   const [q, setQ] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -8197,6 +8218,21 @@ function SalesShareModal({ leads, users, onClose }: any) {
 
         {current && (
           <div className="flex-1 overflow-y-auto pt-4 space-y-2.5">
+            {/* حذف كل أرقام هذا الحساب مرة واحدة — بدل حذفها رقماً رقماً */}
+            {current.total > 0 && onDeleteMany && (
+              <button
+                type="button"
+                onClick={() => {
+                  const count = current.total;
+                  if (!window.confirm(`حذف ${count} رقم من حساب ${current.user.name} نهائياً؟ لا يمكن الرجوع بعدها.`)) return;
+                  onDeleteMany(current.leads.map((l: AssignedLead) => l.id));
+                  setOpenId(null);
+                }}
+                className="w-full py-2.5 rounded-[var(--r-md)] border border-red-500/40 bg-red-500/10 text-red-300 font-bold text-sm hover:bg-red-500/20 transition-colors"
+              >
+                حذف كل أرقام {current.user.name} ({current.total})
+              </button>
+            )}
             {current.leads.length === 0 && (
               <div className="text-center py-16 text-[var(--text-muted)] text-sm">لم يُوزَّع له أي رقم بعد</div>
             )}
@@ -8654,7 +8690,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, active
   );
 }
 
-function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onImport, onAssign, activeForms = [], autoRules = [], onSaveAutoRule }: any) {
+function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onDeleteMany, onImport, onAssign, activeForms = [], autoRules = [], onSaveAutoRule }: any) {
   // نفس قاعدة السيرفر حرفياً (isAssignableSales): سيلز/قائد فريق + حساب «مطوّر»
   // إداري يعمل سيلزاً أيضاً. والاشتراط بـ u.isActive كان يُخفي أي حساب قديم
   // لم يُكتب له الحقل أصلاً، فلا يظهر في توزيع الأرقام ولا يقبل رقمأ.
@@ -9113,7 +9149,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
       )}
 
       {/* حصة كل سيلز: كل السيلز وعدد الأرقام لكل واحد، والضغط على الاسم يفتح أرقامه */}
-      {showShare && <SalesShareModal leads={formLeads} users={users} onClose={() => setShowShare(false)} />}
+      {showShare && <SalesShareModal leads={formLeads} users={users} onClose={() => setShowShare(false)} onDeleteMany={onDeleteMany} />}
     </div>
   );
 }

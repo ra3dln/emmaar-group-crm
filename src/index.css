@@ -423,8 +423,10 @@ html[data-mode="light"] {
   --nav-w: var(--sidebar-w);
 }
 
-/* داخل حساب سيلز: شريط التنبيه معروض أعلى الشاشة، فينزل كل شيء بمقداره */
-.app-shell.has-impersonator {
+/* داخل حساب سيلز: شريط التنبيه معروض أعلى الشاشة، فينزل كل شيء بمقداره.
+   يُضبط على .app-root أيضاً لأن صفحات كاملة (لوحة الحالات) تُرسم خارجه. */
+.app-shell.has-impersonator,
+.app-root.has-impersonator {
   --imp-h: var(--imp-bar-h);
 }
 
@@ -2608,9 +2610,13 @@ html[data-mode="light"] .sb-cell.is-empty .sb-count { color: var(--text-dim); }
 .status-board {
   position: fixed;
   inset: 0;
+  /* داخل حساب سيلز ينزل تحت شريط «أنت داخل حساب» — بدونها كان سهم الرجوع
+     والعنوان يغطيهما الشريط، فيبدو أنك محبوس في الصفحة ولا مخرج لك. */
+  inset-block-start: var(--imp-h);
   z-index: 70;
   background: var(--bg);
   overflow-y: auto;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 .status-board-head {
   position: sticky;
