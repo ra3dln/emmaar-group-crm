@@ -6001,8 +6001,9 @@ function LeadStageCard({ lead, record, onLeadViewed, onConvert }: any) {
 function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, currentUser, onSelectClient, onRefresh, onConvert, onLeadViewed }: any) {
   // كل رقم في نطاقي: العميل بحالته، والرقم الموزّع بحالة آخر فيدباك عليه.
   // بدون كده أعمدة المراحل كانت تعرض صفراً رغم وجود أرقام في التوزيع.
-  // كل بطاقة عميل تحمل نفس كارت تبويب «العملاء» (بشريط الفيدباك بتسع حالات وصندوق
-  // الحالة + الكومنت)، فتسجيل الفيدباك وتحرّك المرحلة يتم من هنا مباشرة.
+  // كل بطاقة تحمل نفس كارت تبويب «العملاء» (بشريط الفيدباك بتسع حالات وصندوق
+  // الحالة + الكومنت)، والعمود نفسه يُفتح بزر فيعرض أرقامه بكروت العملاء نفسها.
+  const [openStage, setOpenStage] = useState<string | null>(null);
   const clientById = new Map<string, Client>((clients || []).map((c: Client) => [String(c.id), c]));
   const leadById = new Map<string, any>((leads || []).map((l: any) => [String(l.id), l]));
   const stageItems = numbers.length
@@ -6021,6 +6022,57 @@ function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, curren
     { id: 'lost', label: 'ضائع', color: 'stg-lost' },
   ];
 
+  // كارت واحد لكل رقم: العميل بكارت تبويب «العملاء» بالحرف، والرقم الموزّع بكارت
+  // الرقم بأيقوناته — فلا يفرق شكل المراحل عن تبويب العملاء.
+  const renderItem = (record: any) =>
+    record.client ? (
+      <ClientFeedbackCard
+        key={`client-${record.client.id}`}
+        client={record.client}
+        currentUser={currentUser}
+        onSelect={onSelectClient}
+        onOpenComments={onSelectClient}
+        onSetStage={onUpdateStage}
+        onRefresh={onRefresh}
+      />
+    ) : (
+      <LeadStageCard
+        key={`lead-${record.leadId || record.key || record.id}`}
+        record={record}
+        lead={leadById.get(String(record.leadId))}
+        onLeadViewed={onLeadViewed}
+        onConvert={onConvert}
+      />
+    );
+
+  // ===== «الدخول» على عمود: أرقام المرحلة كلها بكروت تبويب العملاء =====
+  if (openStage) {
+    const stage = stages.find((s) => s.id === openStage);
+    const items = stageItems.filter((record: any) => record.stage === openStage);
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={() => setOpenStage(null)} className="icon-btn" title="رجوع للمراحل">
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <div className="min-w-0 flex-1">
+            <h2 className="page-heading">{stage?.label}</h2>
+            <p className="page-sub">{items.length} رقم — بنفس كروت تبويب العملاء</p>
+          </div>
+          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${stage?.color || ''}`} />
+        </div>
+
+        {items.length === 0 ? (
+          <div className="panel p-10 text-center">
+            <p className="text-[var(--text-muted)]">مفيش أرقام في المرحلة دي</p>
+          </div>
+        ) : (
+          <div className="clients-grid">{items.map(renderItem)}</div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="page-intro"><div><h2>مراحل العملاء</h2></div></div>
@@ -6029,33 +6081,19 @@ function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, curren
           const stageClients = stageItems.filter((record: any) => record.stage === stage.id);
           return (
             <div key={stage.id} className="panel p-4">
-              <div className="flex items-center gap-2.5 pb-3 mb-3 border-b border-[var(--border)]">
+              <button
+                type="button"
+                onClick={() => setOpenStage(stage.id)}
+                className="flex items-center gap-2.5 pb-3 mb-3 border-b border-[var(--border)] w-full text-right"
+                title="دخول المرحلة — تعرض أرقامها بكروت تبويب العملاء"
+              >
                 <span className={`w-2 h-2 rounded-full shrink-0 ${stage.color}`} />
                 <h3 className="panel-title flex-1">{stage.label}</h3>
                 <span className="text-xs font-bold text-[var(--text-muted)] tabular-nums">{stageClients.length}</span>
-              </div>
+                <ChevronLeft className="w-4 h-4 text-[var(--text-dim)]" />
+              </button>
               <div className="space-y-2">
-                {stageClients.map((record: any) => (
-                  record.client ? (
-                    <ClientFeedbackCard
-                      key={`client-${record.client.id}`}
-                      client={record.client}
-                      currentUser={currentUser}
-                      onSelect={onSelectClient}
-                      onOpenComments={onSelectClient}
-                      onSetStage={onUpdateStage}
-                      onRefresh={onRefresh}
-                    />
-                  ) : (
-                    <LeadStageCard
-                      key={`lead-${record.leadId || record.key || record.id}`}
-                      record={record}
-                      lead={leadById.get(String(record.leadId))}
-                      onLeadViewed={onLeadViewed}
-                      onConvert={onConvert}
-                    />
-                  )
-                ))}
+                {stageClients.map(renderItem)}
               </div>
             </div>
           );
