@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node tests/auth-smoke.mjs && node tests/push-smoke.mjs && node tests/public-page-smoke.mjs && node tests/redis-smoke.mjs && node tests/sync-tombstone.mjs && node tests/store-merge.mjs && node tests/arabic-numbers.mjs && node tests/attendance.mjs && node tests/xlsx-export.mjs && node tests/campaign-forms.mjs && node tests/cancel-reasons.mjs && node tests/auto-assign.mjs && node tests/shared-roles.mjs && node tests/discover-pages.mjs && node tests/leads-pagination.mjs && node tests/leads-rejected.mjs && node tests/lead-source-routes.mjs && node tests/account-isolation.mjs",
+    "test": "node tests/auth-smoke.mjs && node tests/push-smoke.mjs && node tests/public-page-smoke.mjs && node tests/redis-smoke.mjs && node tests/sync-tombstone.mjs && node tests/store-merge.mjs && node tests/arabic-numbers.mjs && node tests/attendance.mjs && node tests/xlsx-export.mjs && node tests/campaign-forms.mjs && node tests/cancel-reasons.mjs && node tests/auto-assign.mjs && node tests/shared-roles.mjs && node tests/mobile-ui.mjs && node tests/discover-pages.mjs && node tests/leads-pagination.mjs && node tests/leads-rejected.mjs && node tests/lead-source-routes.mjs && node tests/account-isolation.mjs",
     "test:store-merge": "node tests/store-merge.mjs",
     "test:search": "node tests/arabic-numbers.mjs",
     "test:attendance": "node tests/attendance.mjs",

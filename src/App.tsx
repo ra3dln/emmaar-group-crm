@@ -3882,7 +3882,9 @@ function LoginTransition({ user, onDone }: { user: User; onDone: () => void }) {
       animate={leaving ? { opacity: 0, scale: 1.06 } : { opacity: 1, scale: 1 }}
       transition={{ duration: 0.3 }}
       aria-hidden={leaving}
-      className={`app-root fixed inset-0 z-[200] flex items-center justify-center overflow-hidden ${leaving ? 'pointer-events-none' : ''}`}
+      /* pointer-events-none دائماً: الطبقة دي زخرفة فقط، وما تبقطش أي لمسة
+         على الشاشة تحتها — حتى لو اتأخرت إزالتها، الموقع يفضل شغّال. */
+      className="app-root fixed inset-0 z-[200] flex items-center justify-center overflow-hidden pointer-events-none"
       dir="rtl"
     >
 
@@ -4101,10 +4103,12 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
         </p>
 
         <div className="login-card">
-          <motion.form
+          {/* نموذج عادي (مش motion.form): أي تحويل (transform) على عنصر أب للحقول
+              يجعل iOS لا يفعّل الكيبورد عند الضغط — فيبدو الحقل «مش شغّال»
+              والكتابة لا تعمل. الاهتزاز عند الخطأ بقى بالحدّ (box-shadow). */}
+          <form
             onSubmit={handleLogin}
-            animate={shake ? { x: [0, -10, 10, -7, 7, -3, 0] } : { x: 0 }}
-            transition={{ duration: 0.45 }}
+            className={shake ? 'login-nudge' : ''}
           >
             <div className="login-field">
               <label className="login-label" htmlFor="login-username">اسم المستخدم</label>
@@ -4117,6 +4121,10 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
                 placeholder="اسم المستخدم"
                 dir="ltr"
                 autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="next"
                 required
               />
             </div>
@@ -4132,6 +4140,10 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
                 placeholder="كلمة المرور"
                 dir="ltr"
                 autoComplete="current-password"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="go"
                 required
               />
             </div>
@@ -4171,7 +4183,7 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
                 </>
               )}
             </button>
-          </motion.form>
+          </form>
         </div>
 
         <button type="button" onClick={() => setLoginType(null)} className="login-back">
@@ -11850,7 +11862,7 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
               {!preview.mapping.phone && <span className="text-amber-400">لم يتم العثور على عمود أرقام واضح</span>}
             </p>
 
-            <div className="max-h-64 overflow-y-auto rounded-[var(--r-md)] border border-[var(--border)]">
+            <div className="max-h-64 overflow-y-auto rounded-[var(--r-md)] border border-[var(--border)] table-scroll">
               <table className="w-full text-sm">
                 <thead className="bg-[var(--tint-1)] sticky top-0">
                   <tr className="text-[var(--text-muted)] text-xs">

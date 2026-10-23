@@ -186,8 +186,10 @@ html[data-mode="light"] {
 * { box-sizing: border-box; }
 
 html {
-  /* كل المقاسات في Tailwind نسبية لهذا الحجم — فالحجم يحدد كثافة الواجهة */
-  font-size: 15px;
+  /* كل المقاسات في Tailwind نسبية لهذا الحجم — فيتحدّد حجم الخط مع الشاشة
+     تلقائياً: 14px على هاتف صغير و15px على شاشة كبيرة، فكل الواجهة بتتناسب
+     مع الجهاز بدل ما تطلع مكثّفة على الموبايل أو واسعة على اللابتوب. */
+  font-size: clamp(14px, 0.25vw + 13.1px, 15px);
   -webkit-text-size-adjust: 100%;
 }
 
@@ -393,6 +395,7 @@ html[data-mode="light"] {
 .app-root {
   position: relative;
   min-height: 100vh;
+  min-height: 100dvh;
   color: var(--text);
   background: var(--bg);
 }
@@ -419,6 +422,7 @@ html[data-mode="light"] {
   position: relative;
   z-index: 1;
   min-height: 100vh;
+  min-height: 100dvh;
   /* عرض القائمة الجانبية الفعلي — يتغيّر مع الطي (rail) وعلى الهاتف (درج مغلق) */
   --nav-w: var(--sidebar-w);
 }
@@ -2747,7 +2751,7 @@ html[data-mode="light"] .status-lost { color: #8f1b15; }
    ٧) الموبايل
    ================================================================ */
 @media (max-width: 900px) {
-  html { font-size: 13.75px; }
+  /* حجم الخط بيتظبط فوق بـclamp — مش هنا */
   .app-sidebar {
     position: fixed;
     top: 0;
@@ -2795,6 +2799,63 @@ html[data-mode="light"] .status-lost { color: #8f1b15; }
   .stat-strip { border-radius: var(--r-md); }
   .stat-value { font-size: 1rem; }
   .sb-count { font-size: 1.25rem; }
+}
+
+/* ================================================================
+   ٨) قواعد اللمس — أندرويد وآيفون وأي جهاز بلمس
+   ----------------------------------------------------------------
+   ثلاثة أسباب كانت بتخلي الموبايل «ميشتغلش»:
+   ١) حقل أصغر من 16px: iOS يكبّر الصفحة تلقائياً عند التركيز عليه، فيزحلق
+      الحقل تحت الكيبورد ويبدو أن الكتابة لا تعمل، والأزرار تختلّ عن مكانها
+      فما تستجيب. → كل حقل 16px على الأقل على أي جهاز بلمس.
+   ٢) target أصغر من 40px: الضغطة بخطأ فتفوّت الزر. → أهداف أكبر.
+   ٣) تأخير 300ms وتكبير بالنقر المزدوج. → touch-action: manipulation.
+   ================================================================ */
+@media (hover: none) and (pointer: coarse) {
+  /* `!important` لأن أدوات Tailwind (text-sm …) أقوى من العنصر نفسه */
+  input, textarea, select { font-size: 16px !important; }
+  button, a, [role='button'], .side-link, .icon-btn, .qs-btn, .fs-btn, .chip {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* أهداف لمس مريحة */
+  .icon-btn { width: 40px; height: 40px; }
+  .app-topbar .icon-btn,
+  .app-topbar .btn-primary { width: 40px; height: 40px; }
+  .side-link { min-height: 44px; }
+  .qs-btn, .fs-btn { min-height: 40px; }
+  .btn-primary, .btn-success, .btn-warn { min-height: 42px; }
+  .login-role { min-height: 56px; }
+  /* النصوص داخل الأزرار ما تتحدّدش بالضغط (بيغيّر شكل الصفحة على الآيفون) */
+  button, .side-link, .icon-btn { user-select: none; -webkit-user-select: none; }
+}
+
+/* اهتزاز خفيف عند خطأ الدخول — بالحدّ (box-shadow) مش بالتحويل (transform):
+   التحويل على عنصر الحقول يجعل iOS لا يفعّل الكيبورد عند الضغط عليها. */
+.login-nudge { animation: login-nudge 0.45s ease; }
+@keyframes login-nudge {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  25% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 40%, transparent); }
+  60% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent); }
+}
+
+/* جدول يفيض أفقياً لازم ينزلق جوّه (مش يقصّ الشاشة ويفوّي أزراره) */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+@media (max-width: 640px) {
+  .table-scroll { border-radius: var(--r-sm); }
+  /* آخر عمود (الأزرار) ما يبقاش بره الشاشة */
+  .table-scroll table { min-width: 460px; }
+}
+
+/* النوافذ على الهاتف: ارتفاع الشاشة الحقيقي (dvh) مش vh — مع vh كانت
+   النافذة أطول من الشاشة المرئية (شريط المتصفح مخفي) فزرار الأسفل بره الشاشة. */
+@media (max-width: 900px) {
+  .panel { max-height: 92dvh !important; }
+  .app-content { padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); }
 }
 
 /* ================================================================
