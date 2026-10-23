@@ -7,6 +7,8 @@
 //   • السيرفر (server/leadSource.js) — يطبّقها لحظة سحب رقم جديد، فيعمل ٢٤/٧ بلا متصفح.
 // نفس الملف محمول هنا حتى لا تختلف نتيجة المكانين أبداً.
 
+import { isDeveloperAccount } from './roles.js';
+
 // مفتاح المزامنة: قواعد التوزيع تسافر بين الأجهزة مثل أي بيانات أخرى
 export const AUTO_ASSIGN_KEY = 'crm_lead_auto_assign';
 
@@ -16,19 +18,29 @@ const cleanIds = (value) =>
 
 export const formNameOfLead = (lead) => String(lead?.formName || '').trim();
 
+// مفتاح الرقم: أرقام فقط (مع توحيد الأرقام العربية والإنجليزية) —
+// نفس المنطق في الواجهة (normalizeDigits) والسيرفر، فيتطابق الرقم في المكانين.
+export const phoneKeyOf = (value) =>
+  String(value ?? '')
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/\D/g, '');
+
 // من يستقبل أرقاماً؟
 //   • سيلز أو قائد فريق (وظيفته الأصلية)
-//   • أو حساب «مطوّر» — رتبته إدارية (يرى قوائم الإدارة ويعمل بها) لكن يعمل سيلزاً أيضاً
-//     فيظهر في التوزيع ويأخذ أرقاماً مثل أي مندوب.
+//   • أو حساب إداري اختار صراحةً أن يستقبل أرقاماً (receivesLeads).
+// حساب «المطوّر» (إداري في القاعدة، سيلز في الشغل) **ليس** هدفاً تلقائياً:
+// كان يظهر في قائمة التوزيع ويأخذ أرقاماً مع كل مندوب بلا أن يطلب أحد ذلك.
+// أي رقم يوصله يوصله بتكليف صريح من الإدارة (توزيع يدوي)، لا توزيع تلقائي.
 // غياب isActive يُعتبر نشاطاً: نفس قاعدة السيرفر وباقي القوائم، فلا يختفي حساب
 // قديم لم يُكتب له الحقل أصلاً.
 // هذا الملف مشترك بين الواجهة والسيرفر، فيبقى حكم «من يستقبل رقماً» واحداً في المكانين.
 export const isAssignableSales = (user) =>
   !!user &&
   user.isActive !== false &&
+  !isDeveloperAccount(user) &&
   (user.role === 'sales' ||
     user.role === 'supervisor' ||
-    user.developer === true ||
     user.receivesLeads === true);
 
 // سجل القاعدة: معرّفه هو اسم الفورم نفسه، فيبقى للفورم الواحد سجل واحد فقط
@@ -85,12 +97,15 @@ export function upsertRule(rules, patch, at = new Date().toISOString()) {
 // ثم الأقدم وصولاً أولاً. المندوبون المتساوون في الحمل يُخدَمون بالتناوب.
 //   onlyUnassigned = true  => لا نلمس رقماً في عهدة أحد (توزيع آمن)
 //   onlyUnassigned = false => كل أرقام الفورم تُعاد وتُقسم من جديد
-export function distributeLeads({ leads = [], salesIds = [], formName = '', formOf, onlyUnassigned = true }) {
+//   excludePhones          => أرقام عند أحد بالفعل (مسجّلة كعميل): ما تتوزّع تاني،
+//                            عشان الرقم الواحد ما يبقاش عند أكتر من شخص.
+export function distributeLeads({ leads = [], salesIds = [], formName = '', formOf, onlyUnassigned = true, excludePhones = [] }) {
   const eligible = cleanIds(salesIds);
   if (!eligible.length) return { assignments: [], loads: {} };
 
   const nameOf = typeof formOf === 'function' ? formOf : formNameOfLead;
   const target = String(formName || '').trim();
+  const excluded = new Set(asList(excludePhones).map((value) => phoneKeyOf(value)).filter(Boolean));
 
   const loads = new Map(eligible.map((id) => [id, 0]));
   for (const lead of asList(leads)) {
@@ -101,6 +116,9 @@ export function distributeLeads({ leads = [], salesIds = [], formName = '', form
   const pending = asList(leads)
     .filter((lead) => {
       if (!lead) return false;
+      // الرقم موجود عند حدّ سلفاً (عميل مسجّل) => ما يتوزّعش على حدّ تاني
+      const phone = phoneKeyOf(lead.phone);
+      if (phone && excluded.has(phone)) return false;
       const owner = String(lead.salesId || '');
       if (onlyUnassigned) return !owner;
       return !owner || loads.has(owner);
@@ -133,7 +151,8 @@ export function distributeLeads({ leads = [], salesIds = [], formName = '', form
 
 // تطبيق كل القواعد المفعّلة على قائمة الأرقام كاملة (ترجع نسخة جديدة)
 //   activeSalesIds: الحسابات النشطة فعلاً — قاعدة تشير لحساب محذوف/موقوف لا تعمل
-export function applyAutoRules({ leads = [], rules = [], activeSalesIds = [], formOf } = {}) {
+//   excludePhones: أرقام عند أحد بالفعل (عملاء مسجّلون) — ما تتوزّع تاني
+export function applyAutoRules({ leads = [], rules = [], activeSalesIds = [], formOf, excludePhones = [] } = {}) {
   const active = new Set(cleanIds(activeSalesIds));
   const list = asList(leads).map((lead) => ({ ...lead }));
   const assignments = [];
@@ -145,7 +164,7 @@ export function applyAutoRules({ leads = [], rules = [], activeSalesIds = [], fo
     if (!salesIds.length) continue;
     const formName = String(rule.formName || rule.id || '').trim();
     if (!formName) continue;
-    const result = distributeLeads({ leads: list, salesIds, formName, formOf, onlyUnassigned: true });
+    const result = distributeLeads({ leads: list, salesIds, formName, formOf, onlyUnassigned: true, excludePhones });
     if (!result.assignments.length) continue;
     const ownerOf = new Map(result.assignments.map((item) => [item.id, item.salesId]));
     for (const lead of list) {

@@ -42,6 +42,7 @@ import {
   type AutoAssignRule,
   type LeadAssignment,
 } from '../shared/autoAssign.js';
+import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount } from '../shared/roles.js';
 import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
 import {
   FEEDBACK_STATUS_TO_STAGE,
@@ -232,10 +233,8 @@ const RANK_AR: Record<string, string> = { admin: 'المدير التنفيذي'
 const rankLabel = (role?: string): string => RANK_LABEL[role || 'sales'] || 'Sales Agent';
 // لقب يظهر تحت الاسم في المحادثة: حساب المطوّر يُكتب تحته «System Developer»
 // حتى لو كانت رتبته إدارية (مثل حساب mohamed).
-// نعتمد على علامة developer إن وُجدت، وأيضاً على اسم المستخدم 'mohamed' حتى
-// تظهر اللقب على البيانات الحالية دون الحاجة لتعديل سجل الحساب في قاعدة البيانات.
-const isDeveloperAccount = (user?: { role?: string; developer?: boolean; username?: string } | null): boolean =>
-  !!user && (!!user.developer || String(user.username || '').trim().toLowerCase() === 'mohamed');
+// القاعدة نفسها في shared/roles.js — يستعملها السيرفر كمان في غرفة المدراء
+// فيبقى حكم «مين مدير» واحداً في المتصفح والسيرفر.
 const chatRank = (user?: { role?: string; developer?: boolean; username?: string } | null): string =>
   isDeveloperAccount(user) ? 'System Developer' : rankLabel(user?.role);
 const rankAr = (role?: string): string => RANK_AR[role || 'sales'] || 'سيلز';
@@ -260,35 +259,30 @@ const isCeoRole = (role?: string): boolean => role === 'admin';
 const isManagerRole = (role?: string): boolean => role === 'admin' || role === 'supervisor';
 
 // ===== نطاق بيانات الحساب — مصدر واحد للحقيقة =====
-// null = يرى كل بيانات الشركة. غير ذلك = معرّفات الحسابات المسموح له بها.
-// الترتيب: إعداد صريح على الحساب (dataScope) ثم قاعدة الرتبة.
-// الحساب الإداري (بما فيه حساب المطوّر) يرى كل بيانات الشركة افتراضياً — هذا هو الأصل،
-// و«بياناته فقط» لا تُطبَّق إلا لو اختارها بنفسه من «تعديل الحساب» (dataScope = own).
-// تقييد الإدارة تلقائياً كان يخفي عنها أرقام الكامبين الموزّعة على مندوبين آخرين،
-// والأسوأ: أي حفظ بعدها كان يرفع قائمة ناقصة فتتحوّل الأرقام المختفية إلى شواهد حذف.
-const dataScopeOf = (
-  user?: { id?: string; role?: string; team?: string; developer?: boolean; username?: string; dataScope?: string } | null,
-  allUsers: User[] = []
-): Set<string> | null => {
-  if (!user || !user.id) return new Set<string>();
-  if (user.dataScope === 'all') return null;
-  if (user.role === 'admin' && user.dataScope !== 'own') return null;
-  if (user.role === 'supervisor' && user.dataScope !== 'own' && String(user.team || '').trim()) {
-    return new Set<string>([
-      user.id,
-      ...allUsers.filter((u: User) => u.team === user.team).map((u: User) => u.id),
-    ]);
-  }
-  return new Set<string>([user.id]);
-};
+// القاعدة نفسها في shared/roles.js (dataScopeOf) عشان تتختبر لوحدها وتبقى واحدة
+// في المتصفح: null = يرى كل بيانات الشركة، والمجموعة = الحسابات المسموح له بها.
+//   • المدير التنفيذي (admin): كل بيانات الشركة — هو صاحب النظام ومَن يدير التوزيع.
+//   • حساب «المطوّر» (إداري في القاعدة، سيلز في الشغل): بياناته هو فقط، مثل أي
+//     سيلز. كان دوره الإداري في القاعدة يمنحه نطاقاً كاملاً، فيرى أرقام كل
+//     المندوبين وفيدباكهم مختلطة في حسابه (وهو الخلط المُبلَّغ عنه: حساب محمد
+//     وحساب SHEROQ). شغله الإداري (إدارة الحسابات والإعدادات والدخول إلى حساب
+//     غيره) ما زال شغّالاً — فقط نطاق بياناته رجع لبياناته.
+//   • قائد الفريق: فريقه (لو عنده فريق فعلي — فريق فارغ ما يبقاش «كل الحسابات»).
+//   • السيلز: نفسه فقط.
+// «بياناته فقط» ما تُطبَّق على الإدارة إلا لو اختارها بنفسه من «تعديل الحساب».
+// تقييد الإدارة تلقائياً كان يخفي عنها أرقام الكامبين الموزّعة على مندوبين آخرين —
+// ولهذا تبقى شاشات أرقام الكامبين (توزيع الأرقام/عملاء كامبين/شيت الفورمات)
+// على المخزون الكامل، لا على نطاق الحساب.
 
 // ===== غرفة المدراء الجماعية =====
-// كل حساب إدارة (CEO أو Team Leader) — الحالي أو الذي يُضاف لاحقاً — يدخل الغرفة تلقائياً.
+// كل حساب إدارة حقيقي (CEO أو Team Leader) — الحالي أو الذي يُضاف لاحقاً — يدخل
+// الغرفة تلقائياً. حساب «المطوّر» ليس منها: إدارته في القاعدة لا تعني أنه في غرفة
+// الإدارة، وإلا وصلت إليه إشعارات الإدارة ورسائلها وهي مش ليه.
 const MANAGERS_GROUP_ID = 'managers';
 const MANAGERS_GROUP_NAME = 'غرفة المدراء';
 // رسالة وصلت لهذا المستخدم؟ (غرفة المدراء تُقرأ لكل عضو على حدة)
 const messageTargetsUser = (m: ChatMessage, user: User): boolean =>
-  isManagerRole(user.role)
+  isManagerAccount(user)
     ? m.toId === user.id || (m.toId === MANAGERS_GROUP_ID && m.fromId !== user.id)
     : m.toId === user.id;
 const isMessageReadBy = (m: ChatMessage, userId: string): boolean =>
@@ -342,6 +336,15 @@ const normalizeDigits = (value: string): string =>
   String(value ?? '')
     .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
     .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
+
+// أرقام كل العملاء المسجّلين (أرقامهم الأساسية وأي أرقام إضافية).
+// تُستخدم كـ«استثناء» في التوزيع: رقم عند حدّ سلفاً ما يتوزّعش على حدّ تاني،
+// عشان الرقم الواحد ما يبقاش عند أكتر من شخص.
+const phonesOfClients = (list: Client[] = []): string[] =>
+  (list || [])
+    .flatMap((c: Client) => [c?.phone, ...(c?.phones || [])])
+    .map((p: unknown) => normalizeDigits(String(p || '')).replace(/\D/g, ''))
+    .filter(Boolean);
 
 // توحيد الحروف العربية: (ألف) = (الف) و (أسعار) بإشكال مختلفة
 const normalizeArabicText = (value: string): string =>
@@ -1152,6 +1155,13 @@ function App() {
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [assignedLeads, setAssignedLeads] = useState<AssignedLead[]>([]);
+  // ===== المخزون الكامل لأرقام الكامبين والعملاء (لحسابات الإدارة فقط) =====
+  // شاشات أرقام الكامبين (توزيع الأرقام / عملاء كامبين / شيت الفورمات) تعرض مخزون
+  // الشركة كله — وهي لوحة إدارة، فرؤيتها ما تتأثر بنطاق الحساب.
+// أما لوحة السيلز (عملائي/المراحل/الفيدباك) فتبقى بنطاق الحساب وحده.
+  // الحساب السيلز ما بيحمّلش المخزون الكامل أصلاً (مفيش داعي — وهو الممنوع أصلاً).
+  const [fullLeads, setFullLeads] = useState<AssignedLead[]>([]);
+  const [fullClients, setFullClients] = useState<Client[]>([]);
   // قواعد «التوزيع التلقائي»: فورم ← مندوبون بعينهم (تسافر بين الأجهزة)
   const [autoAssignRules, setAutoAssignRules] = useState<AutoAssignRule[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1772,6 +1782,11 @@ function App() {
     setUsers(allUsers);
     setTeams(allTeams);
     setAssignedLeads(allAssignedLeads.filter((l: AssignedLead) => inMyScope(l.salesId)));
+    // المخزون الكامل — لحسابات الإدارة فقط (لوحات أرقام الكامبين).
+    // حساب السيلز ما بيحمّلوش (مفيش داعي، وهو الممنوع أصلاً: خلط شغل الزملاء).
+    const isAdminAccount = currentUser.role !== 'sales';
+    setFullLeads(isAdminAccount ? allAssignedLeads : []);
+    setFullClients(isAdminAccount ? allClients : []);
     setAutoAssignRules(parseRules(localStorage.getItem(AUTO_ASSIGN_KEY)));
     // الرسائل: السيلز لا يحمل في ذاكرته إلا محادثاته هو — لا محادثات غيره
     // (غرفة المدراء للحسابات الإدارية وحدها).
@@ -1975,7 +1990,7 @@ function App() {
     // لو أي رقم من الموزَّعين تحوَّل لعميل بالفعل، ينتقل العميل نفسه لمندوبه الجديد (مع حدث في خطه الزمني)
     const digits = (v: string) => normalizeDigits(String(v || '')).replace(/\D/g, '');
     const ownerByPhone = new Map<string, string>();
-    for (const lead of assignedLeads) {
+    for (const lead of fullLeads) {
       const owner = ownerOf.get(lead.id);
       if (!owner || owner === (lead.salesId || '') || !lead.phone) continue;
       const key = digits(lead.phone);
@@ -2022,18 +2037,24 @@ function App() {
   const handleSaveAutoRule = (formName: string, salesIds: string[], active: boolean) => {
     const name = String(formName || '').trim();
     if (!name) return 0;
-    const next = upsertRule(autoAssignRules, { formName: name, salesIds, active });
+    // الحساب غير المؤهّل (مثل حساب المطوّر: إداري في القاعدة، سيلز في الشغل)
+    // ما يستقبلش أرقاماً تلقائياً — نشيله من قائمة المختارين قبل الحفظ.
+    const assignableIds = new Set(users.filter(isAssignableSales).map((u: User) => String(u.id)));
+    const targets = (salesIds || []).map((id) => String(id)).filter((id) => assignableIds.has(id));
+    const next = upsertRule(autoAssignRules, { formName: name, salesIds: targets, active });
     setAutoAssignRules(next);
     localStorage.setItem(AUTO_ASSIGN_KEY, JSON.stringify(next));
     void pushKey(AUTO_ASSIGN_KEY);
     if (!active) return 0;
 
     const { assignments } = distributeLeads({
-      leads: assignedLeads,
-      salesIds,
+      leads: fullLeads,
+      salesIds: targets,
       formName: name,
       formOf: formKeyOf,
       onlyUnassigned: true,
+      // رقم عند حدّ سلفاً (عميل مسجّل) ما يتوزّعش على حدّ تاني
+      excludePhones: phonesOfClients(fullClients),
     });
     if (!assignments.length) return 0;
     applyLeadOwners(new Map(assignments.map((item) => [item.id, item.salesId])));
@@ -2047,19 +2068,21 @@ function App() {
     if (!currentUser || currentUser.role === 'sales') return;
     if (!autoAssignRules.some((rule) => rule.active !== false && rule.salesIds.length)) return;
     // لا رقم غير مخصّص = لا عمل (المزامنة تنادي هذا الفحص كل ثانية تقريباً)
-    if (!assignedLeads.some((lead: AssignedLead) => !lead.salesId)) return;
+    if (!fullLeads.some((lead: AssignedLead) => !lead.salesId)) return;
     const activeSalesIds = users
       .filter((u: User) => isAssignableSales(u))
       .map((u: User) => String(u.id));
     const { assignments } = applyAutoRules({
-      leads: assignedLeads,
+      leads: fullLeads,
       rules: autoAssignRules,
       activeSalesIds,
       formOf: formKeyOf,
+      // رقم عند حدّ سلفاً (عميل مسجّل) ما يتوزّعش على حدّ تاني
+      excludePhones: phonesOfClients(fullClients),
     });
     if (!assignments.length) return;
     applyLeadOwners(new Map(assignments.map((item: LeadAssignment) => [item.id, item.salesId])));
-  }, [assignedLeads, autoAssignRules, users.length, currentUser?.id]);
+  }, [fullLeads, fullClients, autoAssignRules, users.length, currentUser?.id]);
 
   // ===== تحويل رقم موزّع إلى عميل كامل =====
   // يقفل الدورة: الرقم ييجي من فيسبوك/الإدارة ← ضغطة واحدة ← عميل في المراحل والخط الزمني.
@@ -2108,11 +2131,13 @@ function App() {
       localStorage.setItem('crm_clients', JSON.stringify([client, ...allClients]));
     }
 
-    // تحديث حالة الرقم الموزّع إلى «تم التواصل»
-    let nextLeads: AssignedLead[] = [];
+    // الرقم صار عميلاً مسجّلاً ⇒ يخرج من قائمة «الشغل المعلّق»:
+    // status = 'closed' فمش بيبان تاني في «الأرقام الجديدة» ولا في شيت الفورمات
+    // ولا كرقم شغل جديد على المندوب. السجل نفسه بيفضل (لأن العميل لو غيّر صاحبه
+    // لازم ينتقل معه) — وبكده ما الرقم يبقاش عند أكتر من شخص.
     try {
       writeAssignedLeads((all) =>
-        all.map((l: AssignedLead) => (l.id === lead.id ? { ...l, status: 'contacted' as const } : l))
+        all.map((l: AssignedLead) => (l.id === lead.id ? { ...l, status: 'closed' as const } : l))
       );
     } catch {
       /* لا شيء */
@@ -2469,10 +2494,12 @@ function App() {
   const notifCalls = callLogs.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 60);
 
   // العدّاد الأحمر: ما لم يره المستخدم بعد
+  // «اتصالات الفريق» إشعار إدارة: حساب المطوّر (سلوكه سيلز) ما يحسبش اتصالات زملائه
+  // في العدّاد، وإلا ظهرت له إشعارات مش ليه.
   const unseenNotifIds = [
     ...notifReminders.filter((r) => isReminderDue(r)).map((r) => `rem-${r.id}`),
     ...notifMessages.filter((m) => !isMessageReadBy(m, currentUser.id)).map((m) => `msg-${m.id}`),
-    ...(currentUser.role !== 'sales' ? notifCalls.slice(0, 30).map((c) => `call-${c.id}`) : []),
+    ...(effectiveRoleOf(currentUser) !== 'sales' ? notifCalls.slice(0, 30).map((c) => `call-${c.id}`) : []),
   ];
   const unseenNotifCount = unseenNotifIds.filter((id) => !seenNotifIds.includes(id)).length;
 
@@ -3004,16 +3031,19 @@ function App() {
           {activeTab === 'admin-users' && currentUser.role !== 'sales' && <AdminUsersView users={scopedUsers} currentUser={currentUser} onSelect={setSelectedUserFeedback} onAdd={() => setShowAddUser(true)} onEdit={setEditingUser} onDelete={setDeletingUser} onImpersonate={handleImpersonate} />}
           {activeTab === 'admin-feedback' && currentUser.role !== 'sales' && <AdminFeedbackView users={scopedUsers.filter((u: User) => u.role === 'sales' || u.role === 'supervisor')} dailyFeedbacks={scopedFeedbacks} clients={scopedClients} callLogs={scopedCallLogs} onSelect={setSelectedUserFeedback} />}
           {/* كل عملاء الشركة: العدد + كارت لكل عميل يفتح التفاصيل كاملة */}
+          {/* لوحات أرقام الكامبين على المخزون الكامل (fullClients/fullLeads): هي لوحة
+              إدارة تدير أرقام الكامبين لكل المندوبين — ما تتأثر بنطاق الحساب.
+              أما لوحة السيلز (عملائي/المراحل/الفيدباك) فتبقى بنطاق الحساب وحده. */}
           {activeTab === 'admin-clients' && currentUser.role !== 'sales' && <AdminClientsView
-            clients={scopedClients}
-            leads={scopedLeads}
+            clients={fullClients}
+            leads={fullLeads}
             users={scopedUsers}
             activeForms={activeCampaignForms}
             onSelect={(c: Client) => setSelectedClient(c)}
             onCall={(c: Client) => setCallClient(c)}
           />}
           {/* شيت الفورمات: كل فورم لوحده مع تصدير أرقامه وفيدباكه العام */}
-          {activeTab === 'admin-forms' && currentUser.role !== 'sales' && <AdminFormsSheetView clients={scopedClients} leads={scopedLeads} />}
+          {activeTab === 'admin-forms' && currentUser.role !== 'sales' && <AdminFormsSheetView clients={fullClients} leads={fullLeads} />}
           {/* الأرقام الجديدة التي وصلت للمندوب من الكامبينات — الكارت يفتح التفاصيل */}
           {activeTab === 'new-leads' && isSalesView && <NewLeadsViewForSales
             assignedLeads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id && l.status !== 'closed')}
@@ -3027,7 +3057,7 @@ function App() {
               ));
             }}
           />}
-          {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={scopedLeads} users={scopedUsers} currentUser={currentUser} activeForms={activeCampaignForms} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
+          {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={fullLeads} users={scopedUsers} currentUser={currentUser} activeForms={activeCampaignForms} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
             // الحذف يقع على القائمة الكاملة المحفوظة لا على المعروض في الذاكرة:
             // الحساب محدود النطاق يحمل أرقامه وحده، والكتابة من نسخته المعروضة
             // كانت تمسح أرقام بقية الفريق من قاعدة البيانات.
@@ -3094,7 +3124,7 @@ function App() {
             reminders={notifReminders}
             leads={notifLeads}
             messages={notifMessages}
-            callLogs={currentUser.role === 'sales' ? [] : notifCalls}
+            callLogs={effectiveRoleOf(currentUser) === 'sales' ? [] : notifCalls}
             unseenIds={unseenNotifIds}
             onSeen={markNotifsSeen}
             onClose={() => setShowNotifyCenter(false)}
@@ -3288,7 +3318,7 @@ function SalesChatView({ currentUser, users, messages, onSend, onRead, readOnly 
   const [threadOpen, setThreadOpen] = useState(false);
 
   // كل حسابات الإدارة المفعّلة — كل واحد محادثة مستقلة
-  const managers = (users || []).filter((u: User) => isManagerRole(u.role) && u.isActive);
+  const managers = (users || []).filter((u: User) => isManagerAccount(u) && u.isActive);
   const selected = managers.find((u: User) => u.id === openId) || managers[0] || null;
 
   const threadWith = (otherId: string) =>
@@ -3452,7 +3482,7 @@ function AdminChatView({ currentUser, users, messages, onSend, onRead, onGroupRe
   const filtered = people.filter((u: User) => !searchQuery || normalizeArabicText(u.name).includes(searchQuery));
 
   // غرفة المدراء: كل حسابات الإدارة المفعّلة (أي حساب جديد يدخلها تلقائياً)
-  const managers = (users || []).filter((u: User) => isManagerRole(u.role) && u.isActive);
+  const managers = (users || []).filter((u: User) => isManagerAccount(u) && u.isActive);
   const groupMessages = messages.filter((m: ChatMessage) => m.toId === MANAGERS_GROUP_ID);
   const groupUnread = groupMessages.filter(
     (m: ChatMessage) => m.fromId !== currentUser.id && !(m.readBy || []).includes(currentUser.id)

@@ -20,6 +20,7 @@ export type AutoRulesResult = {
 export declare const AUTO_ASSIGN_KEY: string;
 export declare function isAssignableSales(user: any): boolean;
 export declare function formNameOfLead(lead: any): string;
+export declare function phoneKeyOf(value: unknown): string;
 export declare function normalizeRule(raw: any): AutoAssignRule | null;
 export declare function parseRules(raw: any): AutoAssignRule[];
 export declare function activeRuleFor(rules: AutoAssignRule[], formName: string): AutoAssignRule | null;
@@ -30,10 +31,12 @@ export declare function distributeLeads(params: {
   formName?: string;
   formOf?: (lead: any) => string;
   onlyUnassigned?: boolean;
+  excludePhones?: string[];
 }): DistributionResult;
 export declare function applyAutoRules(params: {
   leads?: any[];
   rules?: AutoAssignRule[];
   activeSalesIds?: string[];
   formOf?: (lead: any) => string;
+  excludePhones?: string[];
 }): AutoRulesResult;

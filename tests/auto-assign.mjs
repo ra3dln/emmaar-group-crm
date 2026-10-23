@@ -15,7 +15,9 @@ import {
   activeRuleFor,
   applyAutoRules,
   distributeLeads,
+  isAssignableSales,
   parseRules,
+  phoneKeyOf,
   upsertRule,
 } from '../shared/autoAssign.js';
 import { buildAssignments } from '../server/leadSource.js';
@@ -116,12 +118,63 @@ check(
   applyAutoRules({ leads: [lead('1')], rules, activeSalesIds: [saif, abdo] }).assignments.length === 0
 );
 
-// ===== ٣) عزل الفورمات =====
+// ===== ٣) من يستقبل الأرقام تلقائياً (حساب المطوّر ليس منهم) =====
+check('السيلز يستقبل أرقاماً', isAssignableSales({ role: 'sales', isActive: true }));
+check('قائد الفريق يستقبل أرقاماً', isAssignableSales({ role: 'supervisor', isActive: true }));
+check('الإداري الذي اختار «يعمل سيلزاً» يستقبل', isAssignableSales({ role: 'admin', receivesLeads: true, isActive: true }));
+check('الإداري العادي ما يستقبلش', isAssignableSales({ role: 'admin', isActive: true }) === false);
+check(
+  'حساب المطوّر ما يستقبلش أرقاماً تلقائية (رقمه بتكليف صريح فقط)',
+  isAssignableSales({ role: 'admin', developer: true, isActive: true }) === false &&
+    isAssignableSales({ role: 'sales', developer: true, isActive: true }) === false
+);
+check('الحساب الموقوف ما يستقبلش', isAssignableSales({ role: 'sales', isActive: false }) === false);
+check(
+  'قاعدة تشير لحساب المطوّر تُهمَل عند التوزيع (الواجهة والسيرفر يستبعدانه)',
+  (() => {
+    // المتصلون (الواجهة والسيرفر) يحسبون «النشطين» بنفس دالة isAssignableSales
+    const team = [
+      { id: 'u-dev', role: 'admin', developer: true, isActive: true },
+      { id: ahmed, role: 'sales', isActive: true },
+    ];
+    const activeIds = team.filter(isAssignableSales).map((u) => u.id);
+    const res = applyAutoRules({
+      leads: [lead('1')],
+      rules: upsertRule([], { formName: FORM, salesIds: ['u-dev'] }),
+      activeSalesIds: activeIds,
+    });
+    return res.assignments.length === 0 && res.leads[0].salesId === '';
+  })()
+);
+
+// ===== ٤) رقم واحد ما يبقاش عند أكتر من شخص =====
+// رقم مسجّل كعميل عند مندوب ⇒ ما يتوزّعش على حدّ تاني (وإلا بقى الرقم عند اتنين)
+const held = applyAutoRules({
+  leads: [lead('1'), lead('2'), lead('3')],
+  rules,
+  activeSalesIds: allSales,
+  excludePhones: ['01000000001'],
+});
+check(
+  'الرقم المسجّل كعميل لا يتوزّع',
+  held.assignments.length === 2 && held.assignments.every((item) => item.id !== '1'),
+  `توزّع ${held.assignments.length}`
+);
+check('الرقم المحجوز ما بقى في عهدة حد', held.leads.find((l) => l.id === '1').salesId === '');
+const direct = distributeLeads({
+  leads: [lead('1'), lead('2')],
+  salesIds: [mohamed, ahmed],
+  formName: FORM,
+  excludePhones: ['01000000001'],
+});
+check('التوزيع المباشر كمان بيحترم الرقم المحجوز', direct.assignments.length === 1 && direct.assignments[0].id === '2');
+check('مفتاح الرقم موحّد (أرقام عربية أو إنجليزية)', phoneKeyOf('٠١٠٠٠٠٠٠٠٠١') === '01000000001');
+
+// ===== ٥) عزل الفورمات =====
 const twoRules = upsertRule(upsertRule([], { formName: FORM, salesIds: [mohamed] }), {
   formName: OTHER_FORM,
   salesIds: [saif],
-});
-const mixed = applyAutoRules({
+});const mixed = applyAutoRules({
   leads: [lead('1'), lead('2', { formName: OTHER_FORM }), lead('3', { formName: 'فورم تالت' })],
   rules: twoRules,
   activeSalesIds: allSales,
@@ -131,7 +184,7 @@ check('قاعدة كل فورم تعمل على أرقامها', mixedOwner.get(
 check('فورم بلا قاعدة يبقى غير مخصص', mixedOwner.get('3') === '');
 check('تقرير التوزيع لكل فورم', mixed.byRule[FORM] === 1 && mixed.byRule[OTHER_FORM] === 1);
 
-// ===== ٤) التكامل مع السيرفر: أرقام السحب الجديدة =====
+// ===== ٦) التكامل مع السيرفر: أرقام السحب الجديدة =====
 const fetched = [
   { phone: '01011112222', name: 'أحمد من فيسبوك', formName: FORM, source: 'فيسبوك' },
   { phone: '01011113333', name: 'منى من فيسبوك', formName: FORM, source: 'فيسبوك' },
@@ -156,7 +209,7 @@ check(
   serverApplied.leads.find((l) => l.formName === OTHER_FORM)?.salesId === ''
 );
 
-// ===== ٥) الربط بين الواجهة والسيرفر والمزامنة =====
+// ===== ٧) الربط بين الواجهة والسيرفر والمزامنة =====
 const app = fs.readFileSync('src/App.tsx', 'utf8');
 const sync = fs.readFileSync('src/sync.ts', 'utf8');
 const server = fs.readFileSync('server/leadSource.js', 'utf8');
@@ -170,5 +223,25 @@ check('اختيار السيلز بأزرار قابلة للتحديد والم
 check('القاعدة تُطبَّق على أي رقم جديد يصل', app.includes('applyAutoRules({') && app.includes('!lead.salesId'));
 check('السيرفر يوزّع لحظة السحب (بلا متصفح مفتوح)', server.includes('applyAutoRules') && server.includes('AUTO_ASSIGN_KEY'));
 check('ملخص السحب يبيّن عدد الموزَّع تلقائياً', server.includes('autoAssigned') && server.includes('autoByForm'));
+// ===== ٨) الشاشات: التوزيع ما يعيدش رقم حدّ ماسكه، والمخزون الكامل للإدارة =====
+check(
+  'الواجهة تستثني أرقام العملاء المسجّلين من التوزيع',
+  app.includes('excludePhones: phonesOfClients(fullClients)')
+);
+check(
+  'لوحات أرقام الكامبين على المخزون الكامل (الإدارة) واللوحة الشخصية بنطاق الحساب',
+  app.includes('const [fullLeads, setFullLeads]') &&
+    app.includes('const [fullClients, setFullClients]') &&
+    app.includes('assignedLeads={fullLeads}') &&
+    app.includes('clients={fullClients}')
+);
+check(
+  'الحساب غير المؤهّل ما يبقىش في قائمة مختاري التوزيع',
+  app.includes('users.filter(isAssignableSales)') && app.includes('assignableIds.has(id)')
+);
+check(
+  'الرقم المحوَّل لعميل يخرج من الشغل المعلّق',
+  app.includes("status: 'closed' as const")
+);
 
 console.log(`\n✅ نجحت ${passed} فحوصات للتوزيع التلقائي`);

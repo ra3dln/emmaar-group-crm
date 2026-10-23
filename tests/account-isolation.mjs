@@ -46,6 +46,8 @@ const users = [
   { id: 'admin-1', username: 'boss', name: 'الإدارة', role: 'admin', isActive: true, password: hashPassword('BossPass1234') },
   { id: 'sales-1', username: 'ahmed', name: 'أحمد', role: 'sales', isActive: true, password: hashPassword('AhmedPass123') },
   { id: 'sales-2', username: 'sara', name: 'سارة', role: 'sales', isActive: true, password: hashPassword('SaraPass1234') },
+  // حساب «المطوّر»: إداري في القاعدة، سيلز في الشغل — مش من غرفة المدراء
+  { id: 'dev-1', username: 'mohamed', name: 'مطور', role: 'admin', developer: true, isActive: true, password: hashPassword('DevPass1234') },
 ];
 db = { version: 1, data: { crm_users: users } };
 
@@ -118,11 +120,13 @@ const cookies = {
   admin: await loginCookie('boss', 'BossPass1234', 'admin'),
   one: await loginCookie('ahmed', 'AhmedPass123', 'sales'),
   two: await loginCookie('sara', 'SaraPass1234', 'sales'),
+  dev: await loginCookie('mohamed', 'DevPass1234', 'admin'),
 };
 await call('/api/push/subscribe', { method: 'POST', cookie: cookies.admin, body: { subscription: deviceKeys('boss') } });
 await call('/api/push/subscribe', { method: 'POST', cookie: cookies.one, body: { subscription: deviceKeys('ahmed') } });
 await call('/api/push/subscribe', { method: 'POST', cookie: cookies.two, body: { subscription: deviceKeys('sara') } });
-check('ثلاثة أجهزة مشتركة لثلاثة حسابات', (db.data.crm_push_subs || []).length === 3);
+await call('/api/push/subscribe', { method: 'POST', cookie: cookies.dev, body: { subscription: deviceKeys('mohamed') } });
+check('أربعة أجهزة مشتركة لأربعة حسابات', (db.data.crm_push_subs || []).length === 4);
 
 const nowIso = () => new Date().toISOString();
 const paths = () => received.map((r) => r.path);
@@ -159,9 +163,16 @@ try {
     JSON.stringify(paths())
   );
   check('رسالة الغرفة لم تصل للمندوبين', !paths().slice(0, 2).includes('/push/boss'));
+  check(
+    'رسالة الغرفة لم تصل لحساب المطوّر (إداري في القاعدة، سيلز سلوكاً)',
+    !paths().includes('/push/mohamed'),
+    JSON.stringify(paths())
+  );
 
   // ===== ٤) فصل البيانات في الواجهة =====
   const app = fs.readFileSync('src/App.tsx', 'utf8');
+  const server = fs.readFileSync('server/push.js', 'utf8');
+  const roles = fs.readFileSync('shared/roles.js', 'utf8');
   check('بيانات الحساب تُحدَّد بنطاق واحد (inMyScope)', app.includes('const inMyScope =') && app.includes('myScopeIds'));
   check(
     'العملاء والتذكيرات والفيدباك تُرشَّح بنطاق الحساب',
@@ -182,9 +193,9 @@ try {
   );
   check(
     'نطاق البيانات مصدره واحد (dataScopeOf) ويحترم إعداد الحساب الصريح',
-    app.includes('const dataScopeOf =') &&
-      app.includes("if (user.dataScope === 'all') return null;") &&
-      /if \(user\.role === 'admin' && user\.dataScope !== 'own'\) return null;/.test(app) &&
+    roles.includes('export const dataScopeOf =') &&
+      roles.includes("if (user.dataScope === 'all') return null;") &&
+      /const ownOnly = user\.dataScope === 'own' \|\| isDeveloperAccount\(user\);/.test(roles) &&
       /const myScopeIds: Set<string> \| null = dataScopeOf\(currentUser, allUsers\);/.test(app)
   );
   check(
@@ -196,13 +207,31 @@ try {
     'يمكن ضبط نطاق الحساب من شاشة تعديل المستخدم',
     app.includes('نطاق البيانات') && /form\.dataScope/.test(app)
   );
-  // الحساب الإداري (ومنهم حساب المطوّر) يرى كل أرقام الشركة افتراضياً — «بياناته فقط»
-  // لا تُطبَّق إلا لو اختارها صريحاً. التقييد التلقائي كان يخفي عنه أرقام الكامبين
-  // الموزّعة على مندوبين آخرين، فيبدو كأن الأرقام اختفت من النظام.
+  // حساب المطوّر (إداري في القاعدة، سيلز في الشغل): نطاقه بياناته هو فقط.
+  // كان دوره الإداري في القاعدة يمنحه نطاقاً كاملاً، فيرى أرقام كل المندوبين
+  // وفيدباكهم مختلطة في حسابه (وهو الخلط المُبلَّغ عنه: حساب محمد وحساب SHEROQ).
+  // ولوحات أرقام الكامبين (توزيع الأرقام/عملاء كامبين/شيت الفورمات) تبقى على
+  // المخزون الكامل، عشان الإدارة ما تفقدش أرقام الكامبين ولا تشوفها اختفت.
   check(
-    'الإدارة (وحساب المطوّر) ترى أرقام الكامبين كلها ما لم تُقيَّد صريحاً',
+    'حساب المطوّر محدود النطاق (بياناته هو) والإدارة (CEO) ترى كل الأرقام',
     /isDeveloperAccount\(user\) \? 'System Developer'/.test(app) &&
-      /if \(user\.role === 'admin' && user\.dataScope !== 'own'\) return null;/.test(app)
+      /const ownOnly = user\.dataScope === 'own' \|\| isDeveloperAccount\(user\);/.test(roles) &&
+      /if \(!ownOnly && user\.role === 'admin'\) return null;/.test(roles)
+  );
+  check(
+    'لوحات أرقام الكامبين على المخزون الكامل (الإدارة)',
+    app.includes('const [fullLeads, setFullLeads]') &&
+      app.includes('const [fullClients, setFullClients]') &&
+      app.includes('assignedLeads={fullLeads}') &&
+      app.includes('clients={fullClients}')
+  );
+  // غرفة المدراء: حساب المطوّر إداري في القاعدة لكنه سيلز سلوكاً — فمش من الغرفة،
+  // وإلا وصلت إليه إشعارات الإدارة ورسائلها (المُبلَّغ عنها) وهي مش ليه.
+  check(
+    'غرفة المدراء وحكم «المدير» من مصدر واحد (المطوّر ليس منها)',
+    app.includes('isManagerAccount(user)') &&
+      /isManagerAccount\(u\)/.test(app) &&
+      server.includes('isManagerAccount(u)')
   );
   // أخطر ما في الحادثة: الكتابة من القائمة المرشَّحة تُسجّل شواهد حذف لبقية الأرقام.
   check(

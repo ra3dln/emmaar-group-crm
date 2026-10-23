@@ -162,7 +162,11 @@ const config = () =>
     'الإداري العادي لا يستقبل (يبقى إدارياً فقط)',
     isAssignableSales({ role: 'admin' }) === false
   );
-  check('حساب المطوّر يستقبل', isAssignableSales({ role: 'admin', developer: true }));
+  check(
+    'حساب المطوّر لا يستقبل أرقاماً تلقائياً (رقمه يوصله بتكليف صريح فقط)',
+    isAssignableSales({ role: 'admin', developer: true }) === false &&
+      isAssignableSales({ role: 'sales', developer: true }) === false
+  );
 
   // السيرفر يوزّع على الإداري الذي يعمل سيلزاً
   const storage = makeStorage({

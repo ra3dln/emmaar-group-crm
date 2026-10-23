@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { authConfigured, sessionFromRequest } from './auth.js';
+import { isManagerAccount } from '../shared/roles.js';
 
 const b64u = (buf) => Buffer.from(buf).toString('base64url');
 const unb64u = (str) => Buffer.from(String(str).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
@@ -386,8 +387,10 @@ async function processPushTick({
   state.leads = state.leads || {};
   const now = Date.now();
   // من يُبلَّغ بالنظام (الإدارة): تنبيهات التوكن والأرقام غير الموزّعة
+  // «مدير» بالمعنى السلوكي: حساب المطوّر (إداري في القاعدة، سيلز في الشغل) ليس
+  // من غرفة الإدارة، فإشعارات الإدارة ورسائلها ما توصله — نفس حكم الواجهة بالضبط.
   const managers = (data.crm_users || []).filter(
-    (u) => u && u.isActive !== false && (u.role === 'admin' || u.role === 'supervisor')
+    (u) => u && u.isActive !== false && isManagerAccount(u)
   );
 
   // نداء يدوي متكرر (كل جهاز مفتوح): لا نضرب القاعدة أكثر من مرة كل ٢٠ ثانية
