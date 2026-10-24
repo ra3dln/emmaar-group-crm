@@ -13,6 +13,8 @@ import { authConfigured, isManagerRole, sessionFromRequest } from './auth.js';
 // قواعد «التوزيع التلقائي» التي تختارها الإدارة (فورم ← مندوبون بعينهم).
 // نفس ملف المنطق يعمل في المتصفح، فالنتيجة هنا وهناك متطابقة تماماً.
 import { applyAutoRules, AUTO_ASSIGN_KEY, isAssignableSales, parseRules } from '../shared/autoAssign.js';
+// تحويل الرقم الموزَّع إلى عميل صاحبه — نفس دالة الواجهة (معرّف مشتق من الرقم)
+import { buildLeadClients } from '../shared/leadClients.js';
 
 const GRAPH_VERSION = 'v25.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -903,8 +905,32 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       : { leads: built.added, assignments: [], byRule: {} };
 
     if (auto.leads.length) {
-      data.crm_assigned_leads = [...auto.leads, ...assigned];
-      await storage.save({ version: (Number(db.version) || 0) + 1, data });
+      // ===== الحفظ: نعيد القراءة قبل الكتابة =====
+      // السحب بياخد وقت، وأي رقم أو عميل أُضيف من جهاز مندوب أثناء السحب ما ينفعش
+      // يضيع لما نكتب القوائم كاملة. فنعيد تحميل القاعدة وندمج الجديد فيها
+      // (دمج بالمعرّف — نفس قاعدة كل مفتاح يُرفع كقائمة كاملة).
+      const freshDb = await storage.load();
+      const freshData = freshDb.data || {};
+      const freshLeads = Array.isArray(freshData.crm_assigned_leads) ? freshData.crm_assigned_leads : [];
+      const freshClients = Array.isArray(freshData.crm_clients) ? freshData.crm_clients : [];
+      const newIds = new Set(auto.leads.map((l) => String(l.id)));
+      freshData.crm_assigned_leads = [
+        ...auto.leads,
+        ...freshLeads.filter((l) => !newIds.has(String(l?.id))),
+      ];
+
+      // ===== الرقم الموزَّع يصير عميلاً لصاحبه =====
+      // نفس دالة الواجهة (shared/leadClients.js): المعرّف مشتق من الرقم نفسه
+      // فيتدمج السجل مع أي جهاز عمل نفس التحويل — ولا يتكرر ولا يتنازع.
+      const newClients = buildLeadClients({
+        leads: auto.leads,
+        clients: freshClients,
+        at,
+        by: 'التوزيع التلقائي',
+      });
+      if (newClients.length) freshData.crm_clients = [...newClients, ...freshClients];
+
+      await storage.save({ version: (Number(freshDb.version) || 0) + 1, data: freshData });
     }
 
     const labels = active.map((channel) => CHANNEL_LABELS[channel]).join(' + ');

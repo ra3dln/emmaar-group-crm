@@ -241,7 +241,10 @@ check(
 );
 check(
   'الرقم المحوَّل لعميل يخرج من الشغل المعلّق',
-  app.includes("status: 'closed' as const")
+  // التحويل بقى تلقائي: الرقم في عهدة المندوب يصير عميله، فيخرج من قوائم
+  // «الأرقام الجديدة» و«العملاء» كرقم موزَّع (يظهر مرة واحدة: كارت العميل).
+  app.includes('!clientPhones.has(digitsOf(l.phone))') &&
+    app.includes('!myClientPhones.has(phoneKeyOf(l.phone))')
 );
 // ===== ٩) رقم واحد = مالك واحد =====
 check(

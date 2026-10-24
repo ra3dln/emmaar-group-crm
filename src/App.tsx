@@ -44,6 +44,7 @@ import {
   type LeadAssignment,
 } from '../shared/autoAssign.js';
 import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount } from '../shared/roles.js';
+import { buildLeadClients } from '../shared/leadClients.js';
 import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
 import {
   FEEDBACK_STATUS_TO_STAGE,
@@ -1997,28 +1998,55 @@ function App() {
       const key = digits(lead.phone);
       if (key) ownerByPhone.set(key, owner);
     }
-    if (!ownerByPhone.size) return;
 
-    const all: Client[] = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+    let all: Client[] = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+      all = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      all = [];
+    }
     const movedAt = new Date().toISOString();
+    let next = all;
     let touched = false;
-    const next = all.map((c) => {
-      const own = [c.phone, ...(c.phones || [])].map((p) => digits(p));
-      const owner = own.map((p) => (p ? ownerByPhone.get(p) : undefined)).find(Boolean);
-      if (!owner) return c;
-      touched = true;
-      const ownerName = users.find((u: User) => u.id === owner)?.name || 'سيلز آخر';
-      return {
-        ...c,
-        userId: owner,
-        assignedTo: owner,
-        updatedAt: movedAt,
-        activities: [
-          { id: crypto.randomUUID(), type: 'assign', text: `تم تخصيص العميل إلى ${ownerName}`, at: movedAt, by: currentUser.name },
-          ...(c.activities || []),
-        ],
-      };
+
+    if (ownerByPhone.size) {
+      next = all.map((c) => {
+        const own = [c.phone, ...(c.phones || [])].map((p) => digits(p));
+        const owner = own.map((p) => (p ? ownerByPhone.get(p) : undefined)).find(Boolean);
+        if (!owner) return c;
+        touched = true;
+        const ownerName = users.find((u: User) => u.id === owner)?.name || 'سيلز آخر';
+        return {
+          ...c,
+          userId: owner,
+          assignedTo: owner,
+          updatedAt: movedAt,
+          activities: [
+            { id: crypto.randomUUID(), type: 'assign', text: `تم تخصيص العميل إلى ${ownerName}`, at: movedAt, by: currentUser.name },
+            ...(c.activities || []),
+          ],
+        };
+      });
+    }
+
+    // ===== الرقم الموزَّع يصير عميل مندوبه من أول لحظة =====
+    // ما فيش زر «أضف إلى عملائي» بعد اليوم: أي رقم ينزل على مندوب يتحوّل لعميله
+    // تلقائياً (بمعرّف مشتق من الرقم نفسه فيتدمج على كل الأجهزة ولا يتكرر).
+    const assigned = fullLeads
+      .filter((l: AssignedLead) => ownerOf.get(l.id))
+      .map((l: AssignedLead) => ({ ...l, salesId: ownerOf.get(l.id) as string }));
+    const fresh = buildLeadClients({
+      leads: assigned,
+      clients: next,
+      at: movedAt,
+      by: currentUser.name,
     });
+    if (fresh.length) {
+      next = [...fresh, ...next];
+      touched = true;
+    }
+
     if (touched) {
       setClients(next);
       localStorage.setItem('crm_clients', JSON.stringify(next));
@@ -2085,66 +2113,37 @@ function App() {
     applyLeadOwners(new Map(assignments.map((item: LeadAssignment) => [item.id, item.salesId])));
   }, [fullLeads, fullClients, autoAssignRules, users.length, currentUser?.id]);
 
-  // ===== تحويل رقم موزّع إلى عميل كامل =====
-  // يقفل الدورة: الرقم ييجي من فيسبوك/الإدارة ← ضغطة واحدة ← عميل في المراحل والخط الزمني.
-  const handleConvertLeadToClient = (lead: AssignedLead) => {
-    const nowIso = new Date().toISOString();
-    const digitsOf = (value: string) => normalizeDigits(String(value || '')).replace(/\D/g, '');
-    let allClients: Client[] = [];
-    try {
-      allClients = JSON.parse(localStorage.getItem('crm_clients') || '[]');
-    } catch {
-      allClients = [];
-    }
-
-    const target = digitsOf(lead.phone);
-    const existing = allClients.find(
-      (c) => digitsOf(c.phone) === target || (c.phones || []).some((p) => digitsOf(p) === target)
+  // ===== الرقم الموزَّع يصير عميل مندوبه تلقائياً (على كل الأجهزة) =====
+  // السيرفر يوزّع الأرقام ٢٤/٧ من غير متصفح مفتوح، والمندوب يشوفها بعد المزامنة.
+  // هنا يتحوّل كل رقم في عهدة المندوب إلى عميله لو ماكانش عميلاً لسه — المعرّف
+  // مشتق من الرقم نفسه، فكل الأجهزة تعمل نفس المعرّف ولا يتكرر السجل أبداً.
+  // (رقم واحد = مالك واحد: هو في عهدة المندوب فهو عميله، وما فيش زر «أضف إلى عملائي»)
+  useEffect(() => {
+    if (!currentUser) return;
+    // صاحب الرقم لازم يكون حساب موجود فعلاً — رقم حساب محذوف ما يتعملوش عميل يتيم
+    const ownerIds = new Set(users.map((u: User) => String(u.id)));
+    const mine = assignedLeads.filter(
+      (l: AssignedLead) => ownerIds.has(String(l.salesId || '').trim()) && l.phone
     );
-
-    if (existing) {
-      // الرقم موجود بالفعل كعميل — نسجّل الحدث فقط ولا نكرر السجل
-      addClientActivity(existing.id, 'note', 'وصل رقم موزّع مطابق لنفس العميل', currentUser?.name);
-    } else {
-      const formName = formNameOf(lead);
-      const client: Client = {
-        id: crypto.randomUUID(),
-        userId: currentUser?.id as string,
-        name: lead.name || 'عميل بدون اسم',
-        phone: lead.phone,
-        phones: [],
-        property: '',
-        budget: '',
-        monthlyInstallment: '',
-        deliveryPeriod: '',
-        status: 'campaign',
-        stage: 'contacted',
-        feedback: '',
-        priority: 'high',
-        source: lead.description ? `رقم موزّع — ${lead.description}` : 'رقم موزّع',
-        ...(formName ? { formName } : {}),
-        createdAt: nowIso,
-        updatedAt: nowIso,
-        activities: [
-          { id: crypto.randomUUID(), type: 'created', text: 'تحويل الرقم الموزّع إلى عميل (تم التواصل)', at: nowIso, by: currentUser?.name || '' },
-        ],
-      };
-      localStorage.setItem('crm_clients', JSON.stringify([client, ...allClients]));
-    }
-
-    // الرقم صار عميلاً مسجّلاً ⇒ يخرج من قائمة «الشغل المعلّق»:
-    // status = 'closed' فمش بيبان تاني في «الأرقام الجديدة» ولا في شيت الفورمات
-    // ولا كرقم شغل جديد على المندوب. السجل نفسه بيفضل (لأن العميل لو غيّر صاحبه
-    // لازم ينتقل معه) — وبكده ما الرقم يبقاش عند أكتر من شخص.
+    if (!mine.length) return;
+    let all: Client[] = [];
     try {
-      writeAssignedLeads((all) =>
-        all.map((l: AssignedLead) => (l.id === lead.id ? { ...l, status: 'closed' as const } : l))
-      );
+      const parsed = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+      all = Array.isArray(parsed) ? parsed : [];
     } catch {
-      /* لا شيء */
+      all = [];
     }
+    const fresh = buildLeadClients({
+      leads: mine,
+      clients: all,
+      at: new Date().toISOString(),
+      by: 'التوزيع التلقائي',
+    });
+    if (!fresh.length) return;
+    localStorage.setItem('crm_clients', JSON.stringify([...fresh, ...all]));
+    void pushKey('crm_clients');
     loadData();
-  };
+  }, [assignedLeads.length, users.length, currentUser?.id]);
 
   // ===== تغيير مرحلة عميل: تسجيلها في الخط الزمني + إنشاء تذكير متابعة تلقائي =====
   const handleUpdateClientStage = (id: string, stage: Client['stage']) => {
@@ -2451,6 +2450,10 @@ function App() {
     for (const p of clientPhonesOnServer()) if (!mine.has(p)) out.add(p);
     return out;
   })();
+
+  // أرقام عملائي المسجّلين (كل رقم نزل عليّ من التوزيع صار عميلاً تلقائياً).
+  // الرقم اللي بقى عميلاً ما يظهرش تاني كـ«رقم جديد» — الرقم واحد في مكان واحد.
+  const myClientPhones = new Set(phonesOfClients(clients));
 
   // ===== كل رقم في نطاق المستخدم: عملاء مسجّلون + أرقام التوزيع =====
   // لوحة «حالات عملائي» و«المراحل» كانتا تعدّان العملاء المسجّلين فقط، فأرقام
@@ -2980,7 +2983,6 @@ function App() {
             onAdd={() => setShowAddClient(true)}
             onAddNumber={currentUser.role === 'sales' ? () => setShowAddAssignedLead(true) : undefined}
             onCall={(c: Client) => setCallClient(c)}
-            onConvert={handleConvertLeadToClient}
             // شريط الفيدباك في الكارت: كل حالة تنقل العميل إلى مرحلتها تلقائياً
             onSetStage={(c: Client, stage: Client['stage']) => {
               if (!c || !stage || c.stage === stage) return; // نفس المرحلة → لا نعيد كتابتها
@@ -2998,7 +3000,7 @@ function App() {
             setFeedbackPreset({ clientId: client.id, clientName: client.name, clientPhone: client.phone });
             setShowAddFeedback(true);
           }} />}
-          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} onConvert={handleConvertLeadToClient} onLeadViewed={(id: string) => {
+          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} onLeadViewed={(id: string) => {
             const target = assignedLeads.find((l: AssignedLead) => l.id === id);
             if (!target || target.status !== 'new') return;
             writeAssignedLeads((all) => all.map((l: AssignedLead) =>
@@ -3075,10 +3077,11 @@ function App() {
             assignedLeads={assignedLeads.filter((l: AssignedLead) =>
               l.salesId === currentUser.id &&
               l.status !== 'closed' &&
-              !otherClientPhones.has(phoneKeyOf(l.phone))
+              !otherClientPhones.has(phoneKeyOf(l.phone)) &&
+              // الرقم بقى عميلاً (تحوّل تلقائياً عند الإسناد) ⇒ يظهر في «عملائي» لا هنا
+              !myClientPhones.has(phoneKeyOf(l.phone))
             )}
             onAdd={() => setShowAddAssignedLead(true)}
-            onConvert={handleConvertLeadToClient}
             onMarkViewed={(id: string) => {
               const target = assignedLeads.find((l: AssignedLead) => l.id === id);
               if (!target || target.status !== 'new') return;
@@ -3192,7 +3195,6 @@ function App() {
             currentUser={currentUser}
             onSetStage={handleUpdateClientStage}
             onRefresh={loadData}
-            onConvert={handleConvertLeadToClient}
             onLeadViewed={(id: string) => {
               const target = assignedLeads.find((l: AssignedLead) => l.id === id);
               if (!target || target.status !== 'new') return;
@@ -3731,7 +3733,7 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
       label: 'لوحة العمل',
       items: [
         { id: 'dashboard', icon: Home, label: 'الرئيسية' },
-        // أرقام الكامبين بقت جوه «عملاء كامبين» مع زر «أضف إلى عملائي»
+        // أرقام الكامبين بقت جوه «العملاء» — وكل رقم موزَّع بيتحوّل عميلاً تلقائياً
         { id: 'clients', icon: Users, label: 'العملاء' },
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
       ],
@@ -5310,7 +5312,7 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
 // قائمة العملاء للمندوب: الأرقام الواردة من الإدارة + عملاؤه في **قائمة واحدة** بلا أي تقسيم،
 // وكل كارت يحمل شريطاً لونياً وشارة توضح مصدر العميل (Facebook / Campaign / External…)
 // مع صندوق اختيارات سريع جمب الاسم: new / follow up / closed deal.
-function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedbacks = [], searchTerm, onSearch, onSelect, onAdd, onAddNumber, onCall, onConvert, onLeadViewed, onSetStage, onRefresh }: any) {
+function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedbacks = [], searchTerm, onSearch, onSelect, onAdd, onAddNumber, onCall, onLeadViewed, onSetStage, onRefresh }: any) {
   const [view, setView] = useState<'cards' | 'table'>(() => (localStorage.getItem('crm_clients_view') === 'table' ? 'table' : 'cards'));
   const [showComments, setShowComments] = useState(false);
   const [commentsClient, setCommentsClient] = useState<Client | null>(null);
@@ -5699,12 +5701,6 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                       {isLead ? (
                         <>
                           <a href={`tel:${lead!.phone}`} className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل"><PhoneCall className="w-3.5 h-3.5" /></a>
-                          {onConvert && lead!.status !== 'closed' && (
-                            <button onClick={() => onConvert(lead)} title="ينشئ عميلاً بهذا الرقم في قائمتك"
-                              className="text-[10.5px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-2.5 py-1.5 rounded-[var(--r-sm)] font-bold hover:bg-emerald-500/30 whitespace-nowrap">
-                               أضف إلى عملائي
-                            </button>
-                          )}
                         </>
                       ) : (
                         <>
@@ -5815,12 +5811,6 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                     {isLead ? (
                       <>
                         <a href={`tel:${lead!.phone}`} className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل"><PhoneCall className="w-3.5 h-3.5" /></a>
-                        {onConvert && lead!.status !== 'closed' && (
-                          <button onClick={() => onConvert(lead)} title="ينشئ عميلاً بهذا الرقم في قائمتك"
-                            className="text-[10.5px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-2.5 py-1.5 rounded-[var(--r-sm)] font-bold hover:bg-emerald-500/30 whitespace-nowrap">
-                             أضف إلى عملائي
-                          </button>
-                        )}
                       </>
                     ) : (
                       <>
@@ -5952,9 +5942,9 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
 }
 
 // ===== كارت رقم التوزيع في المراحل: نفس شكل كارت العميل، بلا فيدباك =====
-// الرقم لسه مش عميل مسجّل (زي تبويب العملاء بالحرف): الأيقونات تحته — اتصال +
-// «أضف إلى عملائي». أول ما يتحوّل عميل ينزل بكارت العميل الكامل بشريط الفيدباك.
-function LeadStageCard({ lead, record, onLeadViewed, onConvert }: any) {
+// الرقم لسه مش عميل مسجّل: الأيقونة تحتّه اتصال فقط — والرقم بيصير عميل
+// صاحبَه تلقائياً أول ما يتوزّع عليه، فمفيش زر تحويل يدوي.
+function LeadStageCard({ lead, record, onLeadViewed }: any) {
   const src = SOURCE_KINDS[sourceKindOf(String(lead?.description || record?.note || ''))];
   const SrcIcon = src.Icon;
   const sourceText = formatLeadDescription(lead?.description || '') || 'رقم وارد';
@@ -5989,18 +5979,12 @@ function LeadStageCard({ lead, record, onLeadViewed, onConvert }: any) {
           <b>0</b>
         </button>
         <a href={`tel:${phone}`} className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل"><PhoneCall className="w-3.5 h-3.5" /></a>
-        {onConvert && lead && lead.status !== 'closed' && (
-          <button type="button" onClick={() => onConvert(lead)} title="ينشئ عميلاً بهذا الرقم في قائمتك"
-            className="text-[10.5px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-2.5 py-1.5 rounded-[var(--r-sm)] font-bold hover:bg-emerald-500/30 whitespace-nowrap">
-             أضف إلى عملائي
-          </button>
-        )}
       </div>
     </motion.article>
   );
 }
 
-function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, currentUser, onSelectClient, onRefresh, onConvert, onLeadViewed }: any) {
+function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, currentUser, onSelectClient, onRefresh, onLeadViewed }: any) {
   // كل رقم في نطاقي: العميل بحالته، والرقم الموزّع بحالة آخر فيدباك عليه.
   // بدون كده أعمدة المراحل كانت تعرض صفراً رغم وجود أرقام في التوزيع.
   // كل بطاقة عميل تحمل نفس كارت تبويب «العملاء» (بشريط الفيدباك بتسع حالات وصندوق
@@ -6054,7 +6038,6 @@ function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, curren
                       record={record}
                       lead={leadById.get(String(record.leadId))}
                       onLeadViewed={onLeadViewed}
-                      onConvert={onConvert}
                     />
                   )
                 ))}
@@ -6069,7 +6052,7 @@ function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, curren
 
 // ===== شريط التذكير الرنّان: نفس شكل الإشعار الأصلي + أزرار الإسكات والإتمام والتأجيل =====
 // ===== بند ٤: صفحة حالة واحدة — كل الأرقام اللي عليها الحالة دي =====
-function StatusBoardView({ statusId, numbers = [], leads = [], currentUser, onClose, onSelect, onSetStage, onRefresh, onConvert, onLeadViewed }: any) {
+function StatusBoardView({ statusId, numbers = [], leads = [], currentUser, onClose, onSelect, onSetStage, onRefresh, onLeadViewed }: any) {
   const meta = FEEDBACK_STATUS_BY_ID[statusId];
   // نفس قاعدة لوحة الحالات: كل رقم بحالته (عميل مسجّل أو رقم في التوزيع)
   const items: any[] = (numbers || []).filter(
@@ -6116,7 +6099,6 @@ function StatusBoardView({ statusId, numbers = [], leads = [], currentUser, onCl
                   record={record}
                   lead={leadById.get(String(record.leadId))}
                   onLeadViewed={onLeadViewed}
-                  onConvert={onConvert}
                 />
               )
             )}
@@ -8179,7 +8161,8 @@ function formatLeadDescription(description?: string): string {
 }
 
 // New Leads View - For Sales (shows leads assigned to this sales person)
-function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert, onAdd }: any) {
+// ملاحظة: أي رقم في عهدة المندوب بيصير عميله تلقائياً، فما فيش هنا زر تحويل.
+function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onAdd }: any) {
   const [selectedLead, setSelectedLead] = useState<AssignedLead | null>(null);
 
   const handleLeadClick = (lead: AssignedLead) => {
@@ -8241,17 +8224,6 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert, onAdd }:
                   <span className="text-sm px-4 py-2 rounded-full bg-emerald-500/20 text-emerald-400 font-bold">
                     مغلق
                   </span>
-                )}
-
-                {/* ضغطة واحدة: يحوّل الرقم إلى عميل كامل في المراحل مباشرة */}
-                {onConvert && lead.status !== 'closed' && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onConvert(lead); }}
-                    title="ينشئ عميلاً بهذا الاسم والرقم في «العملاء» ويسجّل الحدث في خطه الزمني"
-                    className="text-xs bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-3 py-2 rounded-[var(--r-sm)] font-bold hover:bg-emerald-500/30 transition-colors whitespace-nowrap"
-                  >
-                     أضف إلى عملائي
-                  </button>
                 )}
               </div>
             </div>
@@ -8338,15 +8310,7 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onConvert, onAdd }:
                     <PhoneCall className="w-4 h-4 inline mr-2" />
                     اتصال
                   </a>
-                  {onConvert && selectedLead.status !== 'closed' && (
-                    <button
-                      onClick={() => { onConvert(selectedLead); setSelectedLead(null); }}
-                      className="flex-1 gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold"
-                    >
-                       أضف إلى عملائي
-                    </button>
-                  )}
-                  <button 
+                  <button
                     onClick={() => setSelectedLead(null)}
                     className="sm:w-24 bg-[var(--tint-2)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold hover:bg-[var(--tint-3)] transition-colors"
                   >

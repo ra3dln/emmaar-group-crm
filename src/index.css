@@ -185,6 +185,24 @@ html[data-mode="light"] {
    ================================================================ */
 * { box-sizing: border-box; }
 
+/* ===== مناطق الشاشة الآمنة =====
+   في تطبيق آيفون المثبت على الشاشة الرئيسية (Share ثم Add to Home Screen)
+   الصفحة بتمتد تحت الشريط العلوي والنوتش ومؤشرHOME، فلولا الحساب ده كان
+   الشريط العلوي وأزراره تحت النوتش، فالضغط مش بيشتغل والواجهة بتظهر متداخلة.
+   المتغيرات دي بتتحسب في كل مكان محتاجها.
+
+   --imp-h : المساحة اللي بيحجزها شريط «أنت داخل حساب سيلز» بالكامل
+             (ارتفاعه زائد الشاشة الآمنة اللي فوقه).
+   --safe-gap : قد ايه الشاشة الآمنة لسه فاضية فوق الشريط العلوي الثابت. */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* باق الشاشة الآمنة فوق الشريط العلوي: صفر في المتصفح العادي */
+  --safe-gap: var(--safe-top);
+}
+
 html {
   /* كل المقاسات في Tailwind نسبية لهذا الحجم — فيتحدّد حجم الخط مع الشاشة
      تلقائياً: 14px على هاتف صغير و15px على شاشة كبيرة، فكل الواجهة بتتناسب
@@ -428,10 +446,13 @@ html[data-mode="light"] {
 }
 
 /* داخل حساب سيلز: شريط التنبيه معروض أعلى الشاشة، فينزل كل شيء بمقداره.
-   يُضبط على .app-root أيضاً لأن صفحات كاملة (لوحة الحالات) تُرسم خارجه. */
+   يُضبط على .app-root أيضاً لأن صفحات كاملة (لوحة الحالات) تُرسم خارجه.
+   الارتفاع المحجوز = ارتفاع الشريط + الشاشة الآمنة اللي فوقه (آيفون مثبت)،
+   و--safe-gap = 0 لأن الشريط بيغطّي الشاشة الآمنة بنفسه. */
 .app-shell.has-impersonator,
 .app-root.has-impersonator {
-  --imp-h: var(--imp-bar-h);
+  --imp-h: calc(var(--imp-bar-h) + var(--safe-top));
+  --safe-gap: 0px;
 }
 
 /* القائمة مطويّة إلى أيقونات فقط (كمبيوتر) */
@@ -453,7 +474,10 @@ html[data-mode="light"] {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 16px 14px calc(12px + env(safe-area-inset-bottom, 0px));
+  padding: 16px 14px calc(12px + var(--safe-bottom));
+  padding-top: calc(16px + var(--safe-gap));
+  padding-right: calc(14px + var(--safe-right));
+  padding-left: calc(14px + var(--safe-left));
   background: var(--surface);
   border-inline-end: 1px solid var(--border);
   z-index: 60;
@@ -473,12 +497,14 @@ html[data-mode="light"] {
   inset-block-start: 0;
   inset-inline: 0;
   z-index: 90;
-  height: var(--imp-bar-h);
+  height: calc(var(--imp-bar-h) + var(--safe-top));
   display: flex;
   align-items: center;
   gap: 10px;
   /* نفس هامش الشريط العلوي بالحرف، فتتراصف عناصر الشريطين على خط واحد */
-  padding: 0 16px;
+  padding: var(--safe-top) 16px 0;
+  padding-right: calc(16px + var(--safe-right));
+  padding-left: calc(16px + var(--safe-left));
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   box-shadow: inset 0 2px 0 0 var(--warn);
@@ -760,7 +786,9 @@ html[data-mode="dark"] .imp-bar-back { color: var(--warn); }
   flex-direction: column;
   min-height: calc(100vh - var(--imp-h));
   min-height: calc(100dvh - var(--imp-h));
-  /* حجز الشريطين الثابتين: المحتوى يبدأ تحت الشريط العلوي بالضبط */
+  /* حجز الشريطين الثابتين: المحتوى يبدأ تحت الشريط العلوي بالضبط.
+     الشريط العلوي نفسه بيغطّي الشاشة الآمنة (آيفون مثبت) في Box بتاعه،
+     وارتفاعه بيتقاس بالجافاسكريبت (--topbar-h) فالمحجوز يظبط لوحده. */
   padding-block-start: calc(var(--imp-h) + var(--topbar-h));
 }
 
@@ -775,7 +803,7 @@ html[data-mode="dark"] .imp-bar-back { color: var(--warn); }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: calc(10px + var(--safe-gap)) calc(16px + var(--safe-right)) 10px calc(16px + var(--safe-left));
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   transition: inset-block-start 0.2s ease, inset-inline-start 0.2s ease;
@@ -804,6 +832,10 @@ html[data-mode="dark"] .imp-bar-back { color: var(--warn); }
   max-width: 1320px;
   margin: 0 auto;
   padding: 16px 16px 36px;
+  /* الشاشة الآمنة (آيفون مثبّت): المحتوى ما يدخلش تحت النوتش ولا الـhome indicator */
+  padding-right: calc(16px + var(--safe-right));
+  padding-left: calc(16px + var(--safe-left));
+  padding-bottom: calc(36px + var(--safe-bottom));
 }
 
 .icon-btn {
@@ -952,6 +984,11 @@ html[data-mode="dark"] .imp-bar-back { color: var(--warn); }
   justify-content: center;
   gap: 22px;
   padding: 34px 28px 40px;
+  /* آيفون مثبّت: اللوجو والاسم ما يقعوش تحت النوتش */
+  padding-top: calc(34px + var(--safe-top));
+  padding-right: calc(28px + var(--safe-right));
+  padding-left: calc(28px + var(--safe-left));
+  padding-bottom: calc(40px + var(--safe-bottom));
   max-width: 460px;
   width: 100%;
   margin: 0 auto;
@@ -2620,7 +2657,7 @@ html[data-mode="light"] .sb-cell.is-empty .sb-count { color: var(--text-dim); }
   z-index: 70;
   background: var(--bg);
   overflow-y: auto;
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-bottom: var(--safe-bottom);
 }
 .status-board-head {
   position: sticky;
@@ -2630,6 +2667,10 @@ html[data-mode="light"] .sb-cell.is-empty .sb-count { color: var(--text-dim); }
   align-items: center;
   gap: 11px;
   padding: 12px 16px;
+  /* الشاشة الآمنة فوق اللوحة (آيفون مثبت) — العنوان ما يستخبّش تحت النوتش */
+  padding-top: calc(12px + var(--safe-gap));
+  padding-right: calc(16px + var(--safe-right));
+  padding-left: calc(16px + var(--safe-left));
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
@@ -2766,11 +2807,13 @@ html[data-mode="light"] .status-lost { color: #8f1b15; }
        القائمة فتبدو القائمة «فاضية» والضغط لا يعمل. */
     z-index: 110;
     transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+    /* الدرج بيبدأ من أول الشاشة، فالهامش العلوي = الشاشة الآمنة + الهامش العادي */
+    padding-top: calc(16px + var(--safe-top));
   }
   .app-sidebar.open { transform: translateX(0); }
   .sidebar-backdrop { z-index: 105; }
-  .app-content { padding: 12px 10px 32px; }
-  .app-topbar { padding: 8px 10px; }
+  .app-content { padding: 12px 10px 32px; padding-right: calc(10px + var(--safe-right)); padding-left: calc(10px + var(--safe-left)); padding-bottom: calc(32px + var(--safe-bottom)); }
+  .app-topbar { padding: 8px 10px; padding-top: calc(8px + var(--safe-gap)); padding-right: calc(10px + var(--safe-right)); padding-left: calc(10px + var(--safe-left)); }
   .side-link { font-size: 12.5px; }
   .sidebar-brand h1 { font-size: 13px; }
   .sidebar-brand p { font-size: 9.5px; }
@@ -2784,7 +2827,7 @@ html[data-mode="light"] .status-lost { color: #8f1b15; }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   .rank-chip { font-size: 10px; }
   /* الهاتف: مساحة الشريط قليلة — العنوان والاسم بس، والباقي في الدرج */
-  .app-topbar { gap: 4px; padding: 7px 8px; }
+  .app-topbar { gap: 4px; padding: 7px 8px; padding-top: calc(7px + var(--safe-gap)); padding-right: calc(8px + var(--safe-right)); padding-left: calc(8px + var(--safe-left)); }
   .app-topbar .icon-btn { width: 32px; height: 32px; }
   .app-topbar .btn-primary { width: 32px; height: 32px; padding: 0; }
   .page-heading { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3211,7 +3254,7 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
    فتغطي زر القائمة والاسم وتقطع نصف الشاشة. تنزل تحت الشريط بدل ذلك. */
 .alarm-float { top: 16px; }
 @media (max-width: 900px) {
-  .alarm-float { top: calc(var(--topbar-h) + 8px); }
+  .alarm-float { top: calc(var(--imp-h) + var(--topbar-h) + 8px); }
 }
 
 /* أزرار صف حالة المرحلة (الرئيسية): تلتف على الهاتف بدل ما تخرج من الشاشة */
