@@ -160,7 +160,8 @@ check(
   'الفيدباك اليومي للإدارة يقرأ بطاقات الفيدباك أيضاً (مش سجلات العملاء بس)',
   app.includes('function mergeDailyFeedbackCards') &&
     (app.match(/mergeDailyFeedbackCards\(/g) || []).length >= 3 &&
-    app.includes('dailyFeedbacks={dailyFeedbacks}')
+    app.includes('setFullFeedbacks(') &&
+    app.includes('AdminFeedbackView')
 );
 check(
   'الكومنت المباشر يظهر تحت العميل في الكارت فوراً (سطر آخر كومنت)',

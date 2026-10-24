@@ -162,6 +162,24 @@ check(
   )
 );
 
+// ===== ٤) شاشة الإدارة تُبنى على مخزون الشركة، وفيدباك المندوب يُنسب لكاتبه =====
+check(
+  'لوحة فيدباك الإدارة بتقرأ مخزون الشركة الكامل (مش نطاق الحساب)',
+  /dailyFeedbacks=\{currentUser\.role === 'admin' \? fullFeedbacks : scopedFeedbacks\}/.test(app) &&
+    /clients=\{currentUser\.role === 'admin' \? fullClients : scopedClients\}/.test(app) &&
+    /callLogs=\{currentUser\.role === 'admin' \? fullCallLogs : scopedCallLogs\}/.test(app)
+);
+check(
+  'صفحة تفاصيل فيدباك السيلز تُفتح بنفس المخزون الكامل للحساب الإداري',
+  /dailyFeedbacks=\{currentUser\.role === 'admin' \? fullFeedbacks : dailyFeedbacks\}/.test(app) &&
+    app.includes('setFullFeedbacks')
+);
+check(
+  'فيدباك مندوب مكتوب على عميل باسم حساب تاني يُنسب لكاتبه وتظهر رقمه',
+  /String\(a\.by \|\| ''\)\.trim\(\) === userName/.test(app) &&
+    /salesFeedbackByNumber\(user\.id, clients, \[\], callLogs, user\.name\)/.test(app)
+);
+
 // كل setItem على مفتاح الفيدباك لازم يتبعه رفع في نفس الدالة (نافذة 1200 حرف)
 const writes = [...app.matchAll(/localStorage\.setItem\(\s*'crm_daily_feedback'/g)].map((m) => m.index || 0);
 check('كل كتابة للفيدباك اليومي في الكود قابلة للتتبّع', writes.length >= 4, String(writes.length));

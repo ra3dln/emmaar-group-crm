@@ -1166,6 +1166,12 @@ function App() {
   // الحساب السيلز ما بيحمّلش المخزون الكامل أصلاً (مفيش داعي — وهو الممنوع أصلاً).
   const [fullLeads, setFullLeads] = useState<AssignedLead[]>([]);
   const [fullClients, setFullClients] = useState<Client[]>([]);
+  // ===== مخزون الفيدباك الكامل (حسابات الإدارة فقط) =====
+  // «الفيدباك اليومي لكل سيلز» لوحة إدارة: لازم تشوف فيدباك كل المندوبين مهما ضُبط
+  // نطاق الحساب الشخصي (حساب المطوّر مثلاً محدود النطاق في شاشاته هو، لكن لوحة
+  // الإدارة لازم تعرض شغل الفريق كله وإلا كانت فاضية دائماً).
+  const [fullFeedbacks, setFullFeedbacks] = useState<DailyFeedback[]>([]);
+  const [fullCallLogs, setFullCallLogs] = useState<CallLog[]>([]);
   // قواعد «التوزيع التلقائي»: فورم ← مندوبون بعينهم (تسافر بين الأجهزة)
   const [autoAssignRules, setAutoAssignRules] = useState<AutoAssignRule[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1831,6 +1837,8 @@ function App() {
     const isAdminAccount = currentUser.role !== 'sales';
     setFullLeads(isAdminAccount ? allAssignedLeads : []);
     setFullClients(isAdminAccount ? allClients : []);
+    setFullFeedbacks(isAdminAccount ? allFeedbacks : []);
+    setFullCallLogs(isAdminAccount ? getCallLogs() : []);
     setAutoAssignRules(parseRules(localStorage.getItem(AUTO_ASSIGN_KEY)));
     // الرسائل: السيلز لا يحمل في ذاكرته إلا محادثاته هو — لا محادثات غيره
     // (غرفة المدراء للحسابات الإدارية وحدها).
@@ -3141,7 +3149,15 @@ function App() {
           }} onAdd={() => setShowAddFeedback(true)} />}
           {activeTab === 'reports' && isSalesView && <ReportsView clients={clients} feedbacks={dailyFeedbacks} reminders={reminders} />}
           {activeTab === 'admin-users' && currentUser.role !== 'sales' && <AdminUsersView users={scopedUsers} currentUser={currentUser} onSelect={setSelectedUserFeedback} onAdd={() => setShowAddUser(true)} onEdit={setEditingUser} onDelete={setDeletingUser} onImpersonate={handleImpersonate} />}
-          {activeTab === 'admin-feedback' && currentUser.role !== 'sales' && <AdminFeedbackView users={scopedUsers.filter((u: User) => u.role === 'sales' || u.role === 'supervisor')} dailyFeedbacks={scopedFeedbacks} clients={scopedClients} callLogs={scopedCallLogs} onSelect={setSelectedUserFeedback} />}
+          {/* «الفيدباك اليومي لكل سيلز» = لوحة إدارة: تُبنى على مخزون الشركة الكامل،
+              لا على نطاق الحساب (وإلا تظهر فاضية لحساب إداري محدود النطاق مثل المطوّر). */}
+          {activeTab === 'admin-feedback' && currentUser.role !== 'sales' && <AdminFeedbackView
+            users={(currentUser.role === 'admin' ? users : scopedUsers).filter((u: User) => u.role === 'sales' || u.role === 'supervisor')}
+            dailyFeedbacks={currentUser.role === 'admin' ? fullFeedbacks : scopedFeedbacks}
+            clients={currentUser.role === 'admin' ? fullClients : scopedClients}
+            callLogs={currentUser.role === 'admin' ? fullCallLogs : scopedCallLogs}
+            onSelect={setSelectedUserFeedback}
+          />}
           {/* كل عملاء الشركة: العدد + كارت لكل عميل يفتح التفاصيل كاملة */}
           {/* لوحات أرقام الكامبين على المخزون الكامل (fullClients/fullLeads): هي لوحة
               إدارة تدير أرقام الكامبين لكل المندوبين — ما تتأثر بنطاق الحساب.
@@ -3201,7 +3217,14 @@ function App() {
         {showAddUser && <AddUserModal currentUser={currentUser} onClose={() => setShowAddUser(false)} onSuccess={loadData} />}
         {showAddTeam && <AddTeamModal users={users} currentUser={currentUser} onClose={() => setShowAddTeam(false)} onSuccess={loadData} />}
         {showAddAssignedLead && <AddAssignedLeadModal users={users} currentUser={currentUser} onClose={() => setShowAddAssignedLead(false)} onSuccess={loadData} />}
-        {showImportLeads && <ImportLeadsModal users={users} clients={clients} assignedLeads={assignedLeads} currentUser={currentUser} onClose={() => setShowImportLeads(false)} onSuccess={loadData} />}          {selectedUserFeedback && <UserFeedbackModal user={selectedUserFeedback} clients={clients} leads={assignedLeads} callLogs={callLogs} dailyFeedbacks={dailyFeedbacks} onClose={() => setSelectedUserFeedback(null)} />}
+        {showImportLeads && <ImportLeadsModal users={users} clients={clients} assignedLeads={assignedLeads} currentUser={currentUser} onClose={() => setShowImportLeads(false)} onSuccess={loadData} />}          {selectedUserFeedback && <UserFeedbackModal
+            user={selectedUserFeedback}
+            clients={currentUser.role === 'admin' ? fullClients : clients}
+            leads={currentUser.role === 'admin' ? fullLeads : assignedLeads}
+            callLogs={currentUser.role === 'admin' ? fullCallLogs : callLogs}
+            dailyFeedbacks={currentUser.role === 'admin' ? fullFeedbacks : dailyFeedbacks}
+            onClose={() => setSelectedUserFeedback(null)}
+          />}
         {selectedClient && <ClientDetailModal client={selectedClient} onClose={() => setSelectedClient(null)} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
         {callClient && <CallFlowModal client={callClient} user={currentUser} onClose={() => setCallClient(null)} onSave={handleSaveCall} />}
         {selectedProperty && <PropertyDetailModal property={selectedProperty} users={users} onClose={() => setSelectedProperty(null)} onSuccess={loadData} />}
@@ -8051,7 +8074,7 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, callLogs = [], onSe
           // نفس مصدر صفحة التفاصيل بالأسفل (بما فيها بطاقات «الفيدباك اليومي»)
           // حتى تتطابق الأرقام مع ما يفتح بالضغط
           const nums = mergeDailyFeedbackCards(
-            salesFeedbackByNumber(user.id, clients, [], callLogs),
+            salesFeedbackByNumber(user.id, clients, [], callLogs, user.name),
             user.id,
             dailyFeedbacks
           );
@@ -12493,7 +12516,7 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
 // يجمع من: خط العملاء الزمني + سجل المكالمات + الأرقام الواردة، ويشيل التكرار.
 const normPhone = (value: any) => normalizeDigits(String(value || '')).replace(/\D/g, '');
 
-function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = [], callLogs: any[] = []) {
+function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = [], callLogs: any[] = [], userName = '') {
   type Item = { id: string; text: string; at: string; kind: string; status: string };
   const map = new Map<string, { key: string; name: string; phone: string; source: string; stage: string; incoming: boolean; items: Item[] }>();
   const norm = normPhone;
@@ -12513,11 +12536,17 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
     return map.get(key)!;
   };
 
-  // عملاؤه
+  // عملاؤه — وفيدباكه المكتوب على عميل مسجَّل باسم حساب تاني.
+  // الفيدباك يُنسب لكاتبه (activity.by) لا لصاحب العميل: كان كومنت المندوب على
+  // عميل مسجَّل باسم الإدارة يظهر كأن الإدارة كتبته ولا يظهر في كارت المندوب إطلاقاً.
   for (const c of clients || []) {
-    if (c.userId !== userId && c.assignedTo !== userId) continue;
+    const isOwner = c.userId === userId || c.assignedTo === userId;
+    const acts = (c.activities || []).filter(
+      (a: any) => isOwner || (!!userName && String(a.by || '').trim() === userName)
+    );
+    if (!isOwner && !acts.some((a: any) => a && a.text)) continue;
     const entry = ensure(norm(c.phone) || `id:${c.id}`, { ...c, incoming: false });
-    for (const a of c.activities || []) {
+    for (const a of acts) {
       if (/feedback|call|comment|note/i.test(`${a.type}`) && a.text) {
         entry.items.push({ id: a.id, text: a.text, at: a.at, kind: 'كومنت', status: '' });
       }
@@ -12627,8 +12656,8 @@ function UserFeedbackModal({ user, clients, leads = [], callLogs = [], dailyFeed
 
   // كل رقم يمتلكه هذا السيلز، ومعاه كومنتاته مرتبة من الأحدث للأقدم
   const numbers = useMemo(
-    () => mergeDailyFeedbackCards(salesFeedbackByNumber(user.id, clients, leads, callLogs), user.id, dailyFeedbacks),
-    [user.id, clients, leads, callLogs, dailyFeedbacks]
+    () => mergeDailyFeedbackCards(salesFeedbackByNumber(user.id, clients, leads, callLogs, user.name), user.id, dailyFeedbacks),
+    [user.id, user.name, clients, leads, callLogs, dailyFeedbacks]
   );
 
   const totalComments = numbers.reduce((acc, n) => acc + n.items.length, 0);
