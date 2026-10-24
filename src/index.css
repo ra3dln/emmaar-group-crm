@@ -1681,6 +1681,8 @@ html[data-mode="light"] .fs-item-en { color: color-mix(in srgb, var(--fs) 85%, #
   font-weight: 600;
 }
 .feedback-composer .fc-hint { font-size: 10.5px; color: var(--text-dim); }
+/* فشل الرفع: الفيدباك محفوظ على الجهاز بس — لازم يبان بوضوح تحت الصندوق */
+.feedback-composer .fc-hint.fc-sync-error { color: #fbbf24; font-weight: 700; }
 
 /* ===== سبب الإلغاء (cancel reason) ===== */
 .cancel-reason { display: flex; flex-direction: column; gap: 5px; }

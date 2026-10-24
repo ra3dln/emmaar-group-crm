@@ -4999,6 +4999,8 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
   const [status, setStatus] = useState('');
   const [commentText, setCommentText] = useState('');
   const [cancelReason, setCancelReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [syncError, setSyncError] = useState('');
   const src = SOURCE_KINDS[sourceKindOf(`${client?.source} ${client?.status}`)];
   const SrcIcon = src.Icon;
   const sourceText = sourceLabelOf(client);
@@ -5019,6 +5021,7 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
     setOpen(true);
     setStatus(picked);
     setCancelReason(keptReason);
+    setSyncError('');
     setCommentText(
       picked === 'no-answer' ? NO_ANSWER_COMMENT : picked === 'cancellation' ? cancelReasonLabelOf(keptReason) : ''
     );
@@ -5028,14 +5031,17 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
     setStatus('');
     setCommentText('');
     setCancelReason('');
+    setSyncError('');
   };
 
-  const submit = () => {
+  const submit = async () => {
     const text = commentText.trim();
     // الحالة مش إلزامية: لو ما اختارش، بيتحفظ على حالة آخر فيدباك على العميل
     const statusId = status || latestFeedbackStatusOf(client) || '';
-    if (!text || (statusId === 'cancellation' && !cancelReason)) return;
+    if (!text || (statusId === 'cancellation' && !cancelReason) || saving) return;
     const picked = statusId ? FEEDBACK_STATUS_BY_ID[statusId] : null;
+    setSaving(true);
+    setSyncError('');
     // نفس مسار تبويب العملاء: كومنت + حالة في الخط الزمني، والمصدر واحد
     addClientActivity(client.id, 'feedback', text, currentUser?.name || '', {
       authorId: currentUser?.id,
@@ -5044,9 +5050,19 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
       callStatus: statusId === 'no-answer' ? 'no-answer' : 'called',
     });
     if (picked?.stage && client.stage !== picked.stage) onSetStage?.(client.id, picked.stage);
+    // انتظار الرفع: الفيدباك لازم يوصل قاعدة البيانات حتى يظهر في «الفيدباك اليومي»
+    // عند الإدارة — الحفظ المحلي وحده يخلّيه على جهاز السيلز.
+    const [clientsOk, feedbackOk] = await Promise.all([
+      pushKey('crm_clients'),
+      pushKey('crm_daily_feedback'),
+    ]);
+    setSaving(false);
+    if (!(clientsOk && feedbackOk)) {
+      setSyncError('اتسجل على الشاشة دي لكن ماوصلش لقاعدة البيانات — تأكد من الاتصال واضغط «حفظ» تاني.');
+      return;
+    }
     closeComposer();
     onRefresh?.();
-    void pushKey('crm_clients');
   };
 
   return (
@@ -5147,14 +5163,16 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
               placeholder={meta ? `اكتب كومنت «${meta.label}» — إلزامي ليُحفظ الفيدباك` : 'اختر حالة الفيدباك ثم اكتب الكومنت'}
               className="quick-comment-input"
             />
-            <button type="submit" disabled={!commentText.trim() || (status === 'cancellation' && !cancelReason)}
+            <button type="submit" disabled={saving || !commentText.trim() || (status === 'cancellation' && !cancelReason)}
               title={status === 'cancellation' && !cancelReason ? 'اختر سبب الإلغاء' : 'حفظ الفيدباك (الكومنت والحالة)'}>
-              حفظ
+              {saving ? '…' : 'حفظ'}
             </button>
             <button type="button" title="إلغاء" onClick={closeComposer}>✕</button>
           </div>
-          <p className="fc-hint">
-            {status === 'cancellation' && !cancelReason
+          <p className={syncError ? 'fc-hint fc-sync-error' : 'fc-hint'}>
+            {syncError
+              ? syncError
+              : status === 'cancellation' && !cancelReason
               ? 'اختر سبب الإلغاء — والكومنت هيتكتب تلقائياً'
               : meta
               ? `الحالة: ${meta.label} — ${meta.ar} (هتتحفظ زي ما هي لو ما غيّرتهاش)`
@@ -5512,6 +5530,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
   const [commentText, setCommentText] = useState('');
   // سبب الإلغاء — يُطلب مع حالة «cancellation» فقط
   const [cancelReason, setCancelReason] = useState('');
+  const [savingFeedback, setSavingFeedback] = useState(false);
+  const [syncError, setSyncError] = useState('');
   // فلتر الإلغاء في القائمة (أيقونة الفلتر بجوار البحث)
   const [cancelFilter, setCancelFilter] = useState('');
   const [showCancelFilter, setShowCancelFilter] = useState(false);
@@ -5526,6 +5546,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
     // سبب الإلغاء المحفوظ سابقاً يرجع كما هو، والكومنت يُكتب منه تلقائياً
     const keptReason = picked === 'cancellation' ? latestCancelReasonOf(client) : '';
     setCancelReason(keptReason);
+    setSyncError('');
     // «no answer» تعني حرفياً لا يوجد رد — تُكتب في الكومنتات تلقائياً (ويمكن للشخص تعديلها)
     setCommentText(
       picked === 'no-answer' ? NO_ANSWER_COMMENT : picked === 'cancellation' ? cancelReasonLabelOf(keptReason) : ''
@@ -5536,11 +5557,12 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
     setComposer(null);
     setCommentText('');
     setCancelReason('');
+    setSyncError('');
   };
 
-  const submitFeedback = () => {
+  const submitFeedback = async () => {
     const text = commentText.trim();
-    if (!composer || !text) return;
+    if (!composer || !text || savingFeedback) return;
     const target = (clients || []).find((c: Client) => c.id === composer.clientId);
     // الحالة مش إلزامي تتغير في كل فيدباك: لو المستخدم ما اختارش، الفيدباك
     // بيتحفظ على **حالة آخر فيدباك** زي ما هي — فيبقى الشريط محفوظ زي ما هو.
@@ -5559,9 +5581,19 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
     });
     // المرحلة تتحرك تلقائياً مع الحالة (مثل الشريط القديم) فلا يحتاج أحد لضغطة ثانية
     if (target && status?.stage && target.stage !== status.stage) onSetStage?.(target.id, status.stage);
+    // انتظار الرفع: بدون ذلك يبقى الفيدباك على جهاز السيلز ولا يظهر للإدارة
+    setSavingFeedback(true);
+    const [clientsOk, feedbackOk] = await Promise.all([
+      pushKey('crm_clients'),
+      pushKey('crm_daily_feedback'),
+    ]);
+    setSavingFeedback(false);
+    if (!(clientsOk && feedbackOk)) {
+      setSyncError('اتسجل على الشاشة دي لكن ماوصلش لقاعدة البيانات — تأكد من الاتصال واضغط «حفظ» تاني.');
+      return;
+    }
     closeComposer();
     onRefresh?.();
-    void pushKey('crm_clients');
   };
 
   // صندوق الفيدباك: حالة + كومنت، والحفظ يتوقّف حتى يكتمل الاثنان
@@ -5609,14 +5641,16 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
             placeholder={status ? `اكتب كومنت «${status.label}» — إلزامي ليُحفظ الفيدباك` : 'اختر حالة الفيدباك ثم اكتب الكومنت'}
             className="quick-comment-input"
           />
-          <button type="submit" disabled={!commentText.trim() || (composer.status === 'cancellation' && !cancelReason)}
+          <button type="submit" disabled={savingFeedback || !commentText.trim() || (composer.status === 'cancellation' && !cancelReason)}
             title={composer.status === 'cancellation' && !cancelReason ? 'اختر سبب الإلغاء' : 'حفظ الفيدباك (الكومنت والحالة)'}>
-            حفظ
+            {savingFeedback ? '…' : 'حفظ'}
           </button>
           <button type="button" title="إلغاء" onClick={closeComposer}>✕</button>
         </div>
-        <p className="fc-hint">
-          {composer.status === 'cancellation' && !cancelReason
+        <p className={syncError ? 'fc-hint fc-sync-error' : 'fc-hint'}>
+          {syncError
+            ? syncError
+            : composer.status === 'cancellation' && !cancelReason
             ? 'اختر سبب الإلغاء — والكومنت هيتكتب تلقائياً'
             : status
             ? `الحالة: ${status.label} — ${status.ar} (هتتحفظ زي ما هي لو ما غيّرتهاش)`
@@ -11290,27 +11324,64 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess, preset }: 
     feedback: '', status: '', callStatus: 'called', duration: '', nextAction: '', cancelReason: '',
   });
   
-  const handleSubmit = (e: React.FormEvent) => {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  // معرّف البطاقة المسجّلة محلياً: إعادة المحاولة بعد فشل الرفع تحدّثها بدل ما تكرّرها
+  const [savedId, setSavedId] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
     // الفيدباك لا يُحفظ بلا حالة وبلا كومنت — نفس شرط الشريط في تبويب العملاء
     if (!form.status || !form.feedback.trim()) return;
     // «cancellation» بلا سبب لا تُحفظ — السبب هو الكومنت
     if (form.status === 'cancellation' && !form.cancelReason) return;
-    const feedbacks = JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]');
-    const newFeedback = { ...form, id: crypto.randomUUID(), userId: currentUser.id, createdAt: new Date().toISOString() };
-    localStorage.setItem('crm_daily_feedback', JSON.stringify([newFeedback, ...feedbacks]));
-    if (form.clientId) {
-      // البطاقة سُجّلت أعلاه بنفس المعرّف، فلا ننشئ بطاقة ثانية مكرّرة
-      addClientActivity(form.clientId, 'feedback', `فيدباك: ${form.feedback || 'بدون تفاصيل'}${form.nextAction ? ` — الخطوة القادمة: ${form.nextAction}` : ''}`, currentUser?.name, {
-        authorId: currentUser?.id,
-        skipCard: true,
-        status: form.status,
-        ...(form.status === 'cancellation' && form.cancelReason ? { cancelReason: form.cancelReason } : {}),
-        callStatus: form.status === 'no-answer' ? 'no-answer' : 'called',
-      });
+    setSaving(true);
+    try {
+      const feedbacks: DailyFeedback[] = JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]');
+      const id = savedId || crypto.randomUUID();
+      const now = new Date().toISOString();
+      const card: DailyFeedback = {
+        ...(form as any),
+        id,
+        // كاتب الفيدباك — بهذا تظهر البطاقة في تبويب الفيدباك اليومي عنده وعند الإدارة
+        userId: currentUser.id,
+        // التاريخ المختار يُحفظ ISO (بدل نص حقل datetime-local) حتى يُحسب «فيدباك اليوم» بدقة
+        date: form.date ? new Date(form.date).toISOString() : now,
+        createdAt: now,
+      };
+      localStorage.setItem(
+        'crm_daily_feedback',
+        JSON.stringify([card, ...feedbacks.filter((f: DailyFeedback) => f.id !== id)])
+      );
+      setSavedId(id);
+      if (!savedId && form.clientId) {
+        // البطاقة سُجّلت أعلاه بنفس المعرّف، فلا ننشئ بطاقة ثانية مكرّرة
+        addClientActivity(form.clientId, 'feedback', `فيدباك: ${form.feedback || 'بدون تفاصيل'}${form.nextAction ? ` — الخطوة القادمة: ${form.nextAction}` : ''}`, currentUser?.name, {
+          authorId: currentUser?.id,
+          skipCard: true,
+          status: form.status,
+          ...(form.status === 'cancellation' && form.cancelReason ? { cancelReason: form.cancelReason } : {}),
+          callStatus: form.status === 'no-answer' ? 'no-answer' : 'called',
+        });
+      }
+      // **الرفع الفعلي**: بدون انتظاره كان الفيدباك يُحفظ على جهاز السيلز فقط
+      // ولا تظهره الإدارة في «الفيدباك اليومي» أبداً.
+      const [feedbackOk, clientsOk] = await Promise.all([
+        pushKey('crm_daily_feedback'),
+        !savedId && form.clientId ? pushKey('crm_clients') : Promise.resolve(true),
+      ]);
+      if (!(feedbackOk && clientsOk)) {
+        setError('الفيدباك اتسجل على الشاشة دي لكن ماوصلش لقاعدة البيانات — تأكد من الاتصال واضغط «إضافة» مرة تانية لإعادة الرفع.');
+        return;
+      }
+      onSuccess();
+      onClose();
+    } catch {
+      setError('تعذّر حفظ الفيدباك — حاول مرة أخرى');
+    } finally {
+      setSaving(false);
     }
-    onSuccess();
-    onClose();
   };
   
   return (
@@ -11384,7 +11455,8 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess, preset }: 
             )}
           </div>
           <textarea placeholder="الفيدباك * (لا يُحفظ بلا كومنت)" value={form.feedback} onChange={(e) => setForm({ ...form, feedback: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-24" required />
-          <button type="submit" disabled={!form.status || !form.feedback.trim() || (form.status === 'cancellation' && !form.cancelReason)} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-50">إضافة</button>
+          {error && <p className="text-xs font-bold text-amber-300 leading-relaxed">{error}</p>}
+          <button type="submit" disabled={saving || !form.status || !form.feedback.trim() || (form.status === 'cancellation' && !form.cancelReason)} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-50">{saving ? 'جارٍ الحفظ…' : 'إضافة'}</button>
         </form>
       </motion.div>
     </motion.div>
