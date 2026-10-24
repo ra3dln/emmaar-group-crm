@@ -1928,6 +1928,21 @@ html[data-mode="light"] .cc-src { color: color-mix(in srgb, var(--src) 88%, #000
 }
 .cc-form > span { overflow: hidden; text-overflow: ellipsis; }
 html[data-mode="light"] .cc-form { color: color-mix(in srgb, var(--brand) 88%, #000); }
+/* وقت تسجيل الرقم في الكامبين — جمب اسم الفورم */
+.cc-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border-soft);
+  background: var(--tint-1);
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .cc-facts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 1px; }
 .cc-fact {
   display: inline-flex;

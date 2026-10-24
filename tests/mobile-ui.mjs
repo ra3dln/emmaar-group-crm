@@ -116,4 +116,30 @@ check(
 // ===== ٨) التطبيق مثبّت: في وضع portrait كان محجوب =====
 check('التطبيق يعمل في الوضعين طولي وعرضي', /"orientation":\s*"any"/.test(manifest));
 
+// ===== ٩) كارت العميل: واتساب مباشر + وقت وفورم كل رقم + شريط الفيدباك بعد التواصل =====
+check(
+  'زر واتساب يفتح المحادثة مباشرة (بلا نافذة وسيطة)',
+  !app.includes('WhatsAppComposer') && !app.includes('onClick={openWhatsApp}')
+);
+check(
+  'زر واتساب رابط https (wa.me) حتى يختار النظام تطبيق واتساب المناسب',
+  /const href = first \? waLink\(first\) : ''/.test(app) && app.includes('href={href || undefined}')
+);
+check('الخط الزمني اتشال من نافذة تفاصيل العميل', !/الخط الزمني الكامل للعميل/.test(app));
+check(
+  'شريط الفيدباك لا يظهر قبل أول تواصل مع العميل',
+  app.includes('const hasContactedClient =') &&
+    (app.match(/hasContactedClient\(client\)/g) || []).length >= 3
+);
+check(
+  'وقت تسجيل الرقم في الكامبين مكتوب جمب الرقم زي اسم الفورم',
+  app.includes('function CampaignTimeChip') &&
+    (app.match(/<CampaignTimeChip at=/g) || []).length >= 5 &&
+    css.includes('.cc-time')
+);
+check(
+  'عدّاد التبويب ينزل صفر بمجرد الدخول على التبويب',
+  /activeTab !== 'clients'[\s\S]{0,700}status: 'viewed' as const/.test(app)
+);
+
 console.log(`\n✅ نجحت ${passed} فحوصات لواجهة الهاتف`);

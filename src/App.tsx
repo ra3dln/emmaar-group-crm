@@ -1860,6 +1860,25 @@ function App() {
     return pushKey('crm_assigned_leads');
   };
 
+  // فتح تبويب العملاء = شوفت الأرقام النازلة: العدّاد الأحمر جمب التبويب ينزل صفر.
+  // قبل كده كان العدّاد يفضل مكتوب بعد الدخول، لأن الأرقام ما كانتش تُعلَّم «تم العرض».
+  useEffect(() => {
+    if (!currentUser || activeTab !== 'clients') return;
+    if (!(currentUser.role === 'sales' || isDeveloperAccount(currentUser))) return;
+    const pending = assignedLeads.filter(
+      (l: AssignedLead) => l.salesId === currentUser.id && l.status === 'new'
+    );
+    if (!pending.length) return;
+    const viewedAt = new Date().toISOString();
+    writeAssignedLeads((all) =>
+      all.map((l: AssignedLead) =>
+        l.salesId === currentUser.id && l.status === 'new'
+          ? { ...l, status: 'viewed' as const, viewedAt }
+          : l
+      )
+    );
+  }, [activeTab, assignedLeads.length, currentUser?.id]);
+
   const handleLogout = () => {
     // إنهاء الجلسة على السيرفر أيضاً: الكوكي يُبطَل فلا تُقرأ بيانات بلا دخول جديد
     try {
@@ -2514,13 +2533,13 @@ function App() {
   // السيلز كان ما يوصلهوش أي إشعار برقم اتوزّع عليه (لا في الجرس ولا عدّاد) — الأرقام
   // كانت بتتسجّل في «عملاء كامبين» بس. فبقى له تبويب «أرقام جديدة» في مركز الإشعارات
   // بعدّاد أحمر، ويعرض الأرقام اللي لسه ما اتفتحتش.
-  const notifLeads: AssignedLead[] = isSalesView
+  const myLeads: AssignedLead[] = isSalesView
     ? assignedLeads
-        .filter((l: AssignedLead) => l.salesId === currentUser.id && l.status === 'new')
+        .filter((l: AssignedLead) => l.salesId === currentUser.id && l.status !== 'closed')
         .slice()
         .sort((a, b) => String(b.assignedAt || b.createdAt || '').localeCompare(String(a.assignedAt || a.createdAt || '')))
-        .slice(0, 40)
     : [];
+  const notifLeads = myLeads.slice(0, 40);
 
   const notifMessages = messages
     .filter((m) => messageTargetsUser(m, currentUser))
@@ -2534,7 +2553,7 @@ function App() {
   // «اتصالات الفريق» إشعار إدارة: حساب المطوّر (سلوكه سيلز) ما يحسبش اتصالات زملائه
   // في العدّاد، وإلا ظهرت له إشعارات مش ليه.
   const unseenNotifIds = [
-    ...notifLeads.map((l) => `lead-${l.id}`),
+    ...notifLeads.filter((l) => l.status === 'new').map((l) => `lead-${l.id}`),
     ...notifReminders.filter((r) => isReminderDue(r)).map((r) => `rem-${r.id}`),
     ...notifMessages.filter((m) => !isMessageReadBy(m, currentUser.id)).map((m) => `msg-${m.id}`),
     ...(effectiveRoleOf(currentUser) !== 'sales' ? notifCalls.slice(0, 30).map((c) => `call-${c.id}`) : []),
@@ -4851,6 +4870,14 @@ function StatusMenu({ value, onPick, label = 'تسجيل فيدباك', classNam
   );
 }
 
+// ===== هل السيلز تواصل مع العميل فعلاً؟ =====
+// شريط الفيدباك لا يظهر إلا بعد أول تواصل (مكالمة أو واتساب أو ملاحظة مسجّلة)،
+// لأن تسجيل حالة لعميل لم يُكلَّم بعد لا معنى له.
+const CLIENT_CONTACT_TYPES = /feedback|call|whatsapp|note|اتصال/i;
+const hasContactedClient = (client: any): boolean =>
+  !!client &&
+  (client.activities || []).some((a: any) => CLIENT_CONTACT_TYPES.test(String(a?.type || '')));
+
 // شريط الفيدباك بجوار اسم العميل: قائمة منسدلة تعرض الحالة المختارة بلونها المضيء
 function FeedbackBar({ client, onPick }: { client: any; onPick?: (statusId: string) => void }) {
   const active = latestFeedbackStatusOf(client);
@@ -4867,6 +4894,30 @@ function FormNameChip({ record, className = '' }: { record: any; className?: str
     <span className={`cc-form ${className}`.trim()} title={`الفورم: ${name}`} dir="auto">
       <ClipboardList className="w-3 h-3 shrink-0" />
       <span translate="no">{name}</span>
+    </span>
+  );
+}
+
+// ===== توقيت تسجيل الرقم في الكامبين: اليوم/الشهر + الساعة =====
+// يُكتب جمب الرقم زي اسم الفورم بالظبط (٢٤/١٠ • ١١:٢٦ ص)
+const campaignTimeLabel = (value?: string): string => {
+  const at = Date.parse(String(value || ''));
+  if (!value || Number.isNaN(at)) return '';
+  const d = new Date(at);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const hours = d.getHours();
+  const period = hours < 12 ? 'ص' : 'م';
+  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} • ${pad(hour12)}:${pad(d.getMinutes())} ${period}`;
+};
+
+function CampaignTimeChip({ at, className = '' }: { at?: string; className?: string }) {
+  const label = campaignTimeLabel(at);
+  if (!label) return null;
+  return (
+    <span className={`cc-time ${className}`.trim()} title={`سُجّل في الكامبين: ${label}`}>
+      <Clock className="w-3 h-3 shrink-0" />
+      <span dir="ltr">{label}</span>
     </span>
   );
 }
@@ -4949,7 +5000,9 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
               {sourceText}
             </span>
             {client?.stage === 'lost' && <span className="st-chip st-lost">ضائع</span>}
-            <FeedbackBar client={client} onPick={(statusId: string) => openComposer(statusId)} />
+            {hasContactedClient(client) && (
+              <FeedbackBar client={client} onPick={(statusId: string) => openComposer(statusId)} />
+            )}
           </div>
 
           {last?.text && (
@@ -4959,6 +5012,7 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
           <div className="cc-phone-row">
             <a className="cc-phone" dir="ltr" href={`tel:${client?.phone}`} onClick={(e) => e.stopPropagation()}>{client?.phone}</a>
             <FormNameChip record={client} />
+            <CampaignTimeChip at={client?.createdAt} />
           </div>
 
           {facts.length > 0 && (
@@ -5715,6 +5769,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                     <span role="cell" className="ct-phone">
                       <a href={`tel:${phone}`} dir="ltr" onClick={(e) => e.stopPropagation()}>{phone}</a>
                       <FormNameChip record={isLead ? lead : client} />
+                      <CampaignTimeChip at={isLead ? lead!.createdAt : client!.createdAt} />
                     </span>
                     <span role="cell">
                       <span className={`cc-src ${src.cls}`} title={sourceText}><SrcIcon className="w-3 h-3" />{sourceText}</span>
@@ -5722,7 +5777,11 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                     <span role="cell" className="ct-budget">{(!isLead && client!.budget) ? displayPrice(client!.budget) : '—'}</span>
                     <span role="cell">
                       {!isLead ? (
-                        <FeedbackBar client={client} onPick={(statusId: string) => openComposer(client!, statusId)} />
+                        hasContactedClient(client) ? (
+                          <FeedbackBar client={client} onPick={(statusId: string) => openComposer(client!, statusId)} />
+                        ) : (
+                          <span className="ct-dim">لسه ما اتواصَلش</span>
+                        )
                       ) : (
                         <span className="ct-dim">{lead!.status === 'new' ? 'رقم وارد' : 'تم فتحه'}</span>
                       )}
@@ -5814,8 +5873,9 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                           إلغاء{leadCancelReasonOf(lead!) ? ` · ${CANCEL_REASON_BY_ID[leadCancelReasonOf(lead!)]?.label || ''}` : ''}
                         </span>
                       )}
-                      {/* حالة العميل المختارة من القائمة المنسدلة: حبة صغيرة جنب الاسم */}
-                      {!isLead && (
+                      {/* حالة العميل المختارة من القائمة المنسدلة: حبة صغيرة جنب الاسم
+                          — تظهر بعد أول تواصل فقط (مكالمة/واتساب) */}
+                      {!isLead && hasContactedClient(client) && (
                         <FeedbackBar client={client} onPick={(statusId: string) => openComposer(client!, statusId)} />
                       )}
                     </div>
@@ -5828,6 +5888,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                     <div className="cc-phone-row">
                       <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
                       <FormNameChip record={isLead ? lead : client} />
+                      <CampaignTimeChip at={isLead ? lead!.createdAt : client!.createdAt} />
                     </div>
 
                     {facts.length > 0 && (
@@ -6013,6 +6074,7 @@ function LeadStageCard({ lead, record, onLeadViewed }: any) {
         <div className="cc-phone-row">
           <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
           <FormNameChip record={lead || record} />
+          <CampaignTimeChip at={lead?.createdAt || record?.createdAt} />
         </div>
         <p className="cc-note">
           وصل من {sourceText}{lead?.createdAt ? ` — ${formatDateTime(lead.createdAt)}` : ''}
@@ -6615,9 +6677,9 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
               <div className="flex items-center justify-between gap-2 flex-wrap mt-1">
                 <a className="text-xs text-[var(--brand)] font-bold" dir="ltr" href={`tel:${l.phone}`}>{l.phone}</a>
                 <FormNameChip record={l} />
+                <CampaignTimeChip at={l.createdAt} />
               </div>
               {l.description && <p className="text-xs text-[var(--text-dim)] mt-1">{formatLeadDescription(l.description)}</p>}
-              <p className="text-[10px] text-[var(--text-dim)] mt-1">وصل: {formatDateTime(l.assignedAt || l.createdAt)}</p>
             </div>
           )))}
 
@@ -6799,103 +6861,33 @@ function NotificationsPanel({ user, notifState, setNotifState, settings, onSaveS
   );
 }
 
-// ===== نافذة إرسال واتساب: الرقم + رسالة جاهزة قابلة للتعديل =====
-function WhatsAppComposer({ name, phones, onClose, onOpened }: { name?: string; phones: string[]; onClose: () => void; onOpened?: () => void }) {
-  const list = Array.from(new Set((phones || []).map((p) => String(p || '').trim()).filter(Boolean)));
-  const [phone, setPhone] = useState(list[0] || '');
-  const target = waPhone(phone);
-  const ready = target.length >= 10;
-
-  // نفتح واتساب على الرقم مباشرة — بلا أي رسالة مكتوبة مسبقاً
-  const openWhatsApp = () => {
-    if (!ready) return;
-    window.open(waLink(phone), '_blank', 'noopener,noreferrer');
-    onOpened?.();
-  };
-
+// زر واتساب: يفتح المحادثة على الرقم مباشرة بلا نافذة وسيطة.
+// الرابط https (wa.me) مقصود: لو على الجهاز واتساب عادي وواتساب بيزنس، النظام نفسه
+// هو اللي يسأل أي تطبيق يفتح — أما whatsapp:// فكان يفتح البيزنس على طول.
+function WhatsAppButton({ phones, label = 'واتساب', className = '', onOpened }: any) {
+  const first = (Array.isArray(phones) ? phones : [])
+    .map((p: any) => String(p || '').trim())
+    .filter(Boolean)[0] || '';
+  const href = first ? waLink(first) : '';
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
-      <motion.div initial={{ scale: 0.95, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95 }}
-        className="panel p-5 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between gap-3 mb-4">
-          <h2 className="text-lg font-bold gradient-text flex items-center gap-2">
-            <MessageCircle className="w-5 h-5 text-emerald-400" /> إرسال واتساب
-          </h2>
-          <button type="button" onClick={onClose} title="إغلاق"
-            className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
-            <X className="w-4 h-4 text-[var(--text)]" />
-          </button>
-        </div>
-
-        <p className="text-sm text-[var(--text)] mb-3">
-          العميل: <span className="text-[var(--text-strong)] font-bold">{name || 'بدون اسم'}</span>
-        </p>
-
-        {/* اختيار الرقم */}
-        {list.length > 1 ? (
-          <div className="flex flex-wrap gap-2 mb-4">
-            {list.map((item) => (
-              <button key={item} type="button" onClick={() => setPhone(item)}
-                dir="ltr"
-                className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${
-                  item === phone
-                    ? 'bg-emerald-500/25 border-emerald-500/50 text-emerald-200'
-                    : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text)] hover:bg-[var(--tint-2)]'
-                }`}>
-                {item}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-[var(--text-muted)] mb-4" dir="ltr">{phone || 'لا يوجد رقم مسجّل'}</p>
-        )}
-
-        <p className="text-xs text-[var(--text-muted)] mb-4 leading-relaxed">
-          يُفتح واتساب على الرقم مباشرة، بلا أي رسالة مكتوبة مسبقاً — تكتب أنت ما يناسب العميل داخل المحادثة.
-        </p>
-
-        {!ready && list.length > 0 && (
-          <p className="text-xs text-amber-400 mt-3"> الرقم غير مكتمل — اكتبه بصيغة 01xxxxxxxxx أو 201xxxxxxxxx</p>
-        )}
-
-        <div className="flex flex-col sm:flex-row gap-2 mt-5">
-          <button type="button" onClick={openWhatsApp} disabled={!ready}
-            className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-[var(--tint-1)] disabled:text-[var(--text-dim)] text-white py-3 rounded-[var(--r-md)] font-bold flex items-center justify-center gap-2">
-            <MessageCircle className="w-5 h-5" /> فتح واتساب على الرقم
-          </button>
-          <button type="button" onClick={onClose}
-            className="sm:w-32 bg-[var(--tint-2)] hover:bg-[var(--tint-3)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إغلاق</button>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// زر واتساب جاهز للاستخدام في أي مكان
-function WhatsAppButton({ name, phones, label = 'واتساب', className = '', onOpened }: any) {
-  const [open, setOpen] = useState(false);
-  const available = (phones || []).filter(Boolean);
-  return (
-    <>
-      <button
-        type="button"
-        disabled={available.length === 0}
-        title={available.length ? 'فتح واتساب على رقم العميل' : 'لا يوجد رقم مسجّل'}
-        onClick={(e) => { e.stopPropagation(); if (available.length) setOpen(true); }}
-        className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-[var(--r-sm)] border transition-colors ${
-          available.length
-            ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30'
-            : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-dim)] cursor-not-allowed'
-        } ${className}`}
-      >
-        <MessageCircle className="w-3.5 h-3.5" /> {label}
-      </button>
-      <AnimatePresence>
-        {open && <WhatsAppComposer name={name} phones={available} onClose={() => setOpen(false)} onOpened={onOpened} />}
-      </AnimatePresence>
-    </>
+    <a
+      href={href || undefined}
+      target={href ? '_blank' : undefined}
+      rel="noopener noreferrer"
+      title={href ? 'فتح واتساب على رقم العميل' : 'لا يوجد رقم مسجّل'}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!href) { e.preventDefault(); return; }
+        onOpened?.();
+      }}
+      className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-[var(--r-sm)] border transition-colors ${
+        href
+          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30'
+          : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-dim)] cursor-not-allowed'
+      } ${className}`}
+    >
+      <MessageCircle className="w-3.5 h-3.5" /> {label}
+    </a>
   );
 }
 
@@ -8264,6 +8256,7 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onAdd }: any) {
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="text-[var(--text-muted)] text-lg" dir="ltr">{lead.phone}</p>
                   <FormNameChip record={lead} />
+                  <CampaignTimeChip at={lead.createdAt} />
                 </div>
                 {lead.description && <p className="text-sm text-[var(--text-muted)] mt-2">{formatLeadDescription(lead.description)}</p>}
                 <p className="text-xs text-[var(--text-dim)] mt-2">
@@ -9398,6 +9391,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                   <div className="flex items-center gap-2 flex-wrap mt-1">
                     <p className="text-[var(--brand)]" dir="ltr">{lead.phone}</p>
                     <FormNameChip record={lead} />
+                    <CampaignTimeChip at={lead.createdAt} />
                   </div>
                   {lead.description && <p className="text-[11.5px] text-[var(--text-muted)] mt-1.5">{formatLeadDescription(lead.description)}</p>}
                 </div>
@@ -12623,29 +12617,6 @@ function ClientDetailModal({ client, onClose, onSuccess, onCall }: any) {
             onOpened={() => logActivity('whatsapp', 'تم فتح واتساب وإرسال رسالة للعميل')} />
         </div>
 
-        {/* الخط الزمني الكامل للعميل */}
-        <div className="mt-6">
-          <p className="text-sm font-bold text-[var(--text-strong)] mb-3 flex items-center gap-2">
-            <Activity className="w-4 h-4 text-[var(--text-muted)]" /> الخط الزمني <span className="text-[var(--text-dim)] font-normal">({activities.length})</span>
-          </p>
-          {activities.length === 0 ? (
-            <p className="text-xs text-[var(--text-dim)]">لا توجد أحداث مسجلة بعد — كل تغيير مرحلة أو فيدباك أو واتساب سيُسجَّل هنا تلقائياً.</p>
-          ) : (
-            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-              {activities.map((a) => (
-                <div key={a.id} className="flex gap-3 bg-[var(--tint-1)] rounded-[var(--r-md)] px-3 py-2">
-                  <span className="text-base shrink-0">{ACTIVITY_ICONS[a.type] || '•'}</span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm text-[var(--text)]"><FeedbackChip status={a.status} /> {a.text}</p>
-                    <p className="text-[11px] text-[var(--text-dim)] mt-0.5">
-                      {formatDateTime(a.at)}{a.by ? ` • ${a.by}` : ''}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
         <button onClick={onClose} className="w-full mt-4 bg-[var(--tint-2)] text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">إغلاق</button>
       </motion.div>
     </motion.div>
