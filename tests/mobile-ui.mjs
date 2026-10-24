@@ -142,4 +142,27 @@ check(
   /activeTab !== 'clients'[\s\S]{0,700}status: 'viewed' as const/.test(app)
 );
 
+// ===== ١٠) كومنت مباشر من علامة + جنب اسم الفورم =====
+check(
+  'علامة + جنب اسم الفورم تُفتح صندوق كومنت مباشر (بدون مكالمة)',
+  app.includes('cc-note-add') &&
+    app.includes("addClientActivity(client.id, 'comment'") &&
+    app.includes('quick-note-input') &&
+    css.includes('.cc-note-add') &&
+    css.includes('.quick-note')
+);
+check(
+  'الكومنت المباشر يظهر تحت العميل في الكارت فوراً (سطر آخر كومنت)',
+  app.includes('saveQuickNote') && app.includes('cc-lastfb')
+);
+check(
+  'الكومنت المباشر ينزل «الفيدباك اليومي» بحالة «لم يتم الاتصال»',
+  /if \(\(type === 'feedback' \|\| type === 'comment'\) && !opts\?\.skipCard\)/.test(app) &&
+    app.includes("callStatus: 'not-called'")
+);
+check(
+  'الضغط على العميل يفتح فيدباكه وكومنتاته',
+  app.includes('فيدباك العميل وكومنتاته') && app.includes('feedbackEntries')
+);
+
 console.log(`\n✅ نجحت ${passed} فحوصات لواجهة الهاتف`);

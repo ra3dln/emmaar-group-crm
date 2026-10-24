@@ -1928,6 +1928,67 @@ html[data-mode="light"] .cc-src { color: color-mix(in srgb, var(--src) 88%, #000
 }
 .cc-form > span { overflow: hidden; text-overflow: ellipsis; }
 html[data-mode="light"] .cc-form { color: color-mix(in srgb, var(--brand) 88%, #000); }
+/* ===== علامة + جنب اسم الفورم: كومنت مباشر على العميل بدون مكالمة ===== */
+.cc-note-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--brand) 55%, transparent);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  color: color-mix(in srgb, var(--brand) 95%, #ffffff);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.cc-note-add:hover { background: color-mix(in srgb, var(--brand) 26%, transparent); }
+.cc-note-add:active { transform: scale(0.94); }
+.cc-note-add.on { background: var(--brand-fill); color: var(--on-brand); border-color: transparent; }
+html[data-mode="light"] .cc-note-add { color: color-mix(in srgb, var(--brand) 88%, #000); }
+
+/* صندوق الكومنت المباشر — سطر واحد تحت الكارت */
+.quick-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface-2);
+}
+.quick-note-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--text-strong);
+}
+.quick-note input::placeholder { color: var(--text-dim); }
+.quick-note button[type="submit"] {
+  border: none;
+  cursor: pointer;
+  background: var(--brand-fill);
+  color: var(--on-brand);
+  border-radius: var(--r-sm);
+  padding: 8px 14px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.quick-note button[type="submit"]:disabled { opacity: 0.5; cursor: default; }
+.quick-note button[type="button"] {
+  border: 1px solid var(--border);
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  font-weight: 600;
+}
+
 /* وقت تسجيل الرقم في الكامبين — جمب اسم الفورم */
 .cc-time {
   display: inline-flex;

@@ -586,7 +586,9 @@ const addClientActivity = (
 
     // الكومنت ينزل تلقائياً في «الفيدباك اليومي» كبطاقة باسم كاتبه —
     // حتى يظهر عنده وفي تبويب الفيدباك عند الإدارة بدون أي خطوة إضافية
-    if (type === 'feedback' && !opts?.skipCard) {
+    // الكومنت المباشر (بدون مكالمة) ينزل برضه كبطاقة في «الفيدباك اليومي»
+    // بحالة «لم يتم الاتصال» — فيظهر عند كاتبه وفي تبويب الفيدباك.
+    if ((type === 'feedback' || type === 'comment') && !opts?.skipCard) {
       const target = all.find((c) => c.id === clientId);
       if (target) {
         const feedbacks: DailyFeedback[] = JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]');
@@ -4951,6 +4953,9 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
   const [status, setStatus] = useState('');
   const [commentText, setCommentText] = useState('');
   const [cancelReason, setCancelReason] = useState('');
+  // كومنت مباشر من علامة + اللي جنب اسم الفورم (بدون مكالمة)
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [quickNote, setQuickNote] = useState('');
   const src = SOURCE_KINDS[sourceKindOf(`${client?.source} ${client?.status}`)];
   const SrcIcon = src.Icon;
   const sourceText = sourceLabelOf(client);
@@ -5000,6 +5005,22 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
     void pushKey('crm_clients');
   };
 
+  // كومنت مباشر على العميل: يُحفظ على العميل نفسه بلا مكالمة وبلا حالة،
+  // فيظهر تحت الكارت فوراً وفي كومنتات العميل، وينزل في «الفيدباك اليومي».
+  const saveQuickNote = () => {
+    const text = quickNote.trim();
+    if (!text) return;
+    addClientActivity(client.id, 'comment', text, currentUser?.name || '', {
+      authorId: currentUser?.id,
+      callStatus: 'not-called',
+    });
+    setQuickNote('');
+    setQuickOpen(false);
+    onRefresh?.();
+    void pushKey('crm_clients');
+    void pushKey('crm_daily_feedback');
+  };
+
   return (
     <>
       <motion.article
@@ -5032,6 +5053,17 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
             <a className="cc-phone" dir="ltr" href={`tel:${client?.phone}`} onClick={(e) => e.stopPropagation()}>{client?.phone}</a>
             <FormNameChip record={client} />
             <CampaignTimeChip at={client?.createdAt} />
+            {/* كومنت مباشر بدل تسجيل مكالمة — يتكتب ويظهر تحت العميل وفي كومنتاته */}
+            <button
+              type="button"
+              className={`cc-note-add ${quickOpen ? 'on' : ''}`.trim()}
+              title="إضافة كومنت مباشر على العميل (بدون مكالمة)"
+              aria-label="إضافة كومنت مباشر"
+              aria-expanded={quickOpen}
+              onClick={(e) => { e.stopPropagation(); setQuickOpen((v) => !v); }}
+            >
+              <Plus className="w-3 h-3" />
+            </button>
           </div>
 
           {facts.length > 0 && (
@@ -5055,6 +5087,24 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
           <WhatsAppButton name={client?.name} phones={[client?.phone, ...(client?.phones || [])]} />
         </div>
       </motion.article>
+
+      {quickOpen && (
+        <form
+          className="quick-note"
+          onClick={(e) => e.stopPropagation()}
+          onSubmit={(e) => { e.preventDefault(); saveQuickNote(); }}
+        >
+          <input
+            autoFocus
+            value={quickNote}
+            onChange={(e) => setQuickNote(e.target.value)}
+            placeholder="كومنت مباشر على العميل (بدون اتصال) — هيظهر تحت العميل وفي كومنتاته"
+            className="quick-note-input"
+          />
+          <button type="submit" disabled={!quickNote.trim()}>حفظ</button>
+          <button type="button" title="إلغاء" onClick={() => { setQuickOpen(false); setQuickNote(''); }}>✕</button>
+        </form>
+      )}
 
       {open && (
         <form
@@ -12603,6 +12653,10 @@ const ACTIVITY_ICONS: Record<string, string> = {
 
 function ClientDetailModal({ client, onClose, onSuccess, onCall }: any) {
   const activities: ClientActivity[] = client.activities || [];
+  // فيدباك العميل وكومنتاته — تظهر هنا لحظة الضغط على الكارت (بدل ما تفضل مخفية)
+  const feedbackEntries = activities
+    .filter((a) => String(a?.text || '').trim() && /feedback|call|comment|note|whatsapp|فيدباك|اتصال|ملاحظة/i.test(String(a?.type || '')))
+    .slice(0, 12);
   const logActivity = (type: string, text: string) => {
     addClientActivity(client.id, type, text);
     onSuccess?.();
@@ -12623,6 +12677,32 @@ function ClientDetailModal({ client, onClose, onSuccess, onCall }: any) {
             </p>
           )}
           {client.source && <p className="text-xs text-[var(--text-muted)]">المصدر: {client.source}</p>}
+        </div>
+
+        <div className="mt-4">
+          <h3 className="text-sm font-bold text-[var(--text-strong)] mb-2 flex items-center gap-2">
+            <MessageSquare className="w-4 h-4" /> فيدباك العميل وكومنتاته
+            <span className="text-[11px] text-[var(--text-dim)]">({feedbackEntries.length})</span>
+          </h3>
+          {feedbackEntries.length === 0 ? (
+            <p className="text-xs text-[var(--text-dim)] bg-[var(--tint-1)] rounded-[var(--r-md)] px-3 py-2.5">
+              لسه مفيش فيدباك أو كومنت مسجّل — اكتب كومنت من علامة + جنب اسم الفورم.
+            </p>
+          ) : (
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {feedbackEntries.map((a) => (
+                <div key={a.id} className="bg-[var(--tint-1)] rounded-[var(--r-md)] px-3 py-2">
+                  <p className="text-xs text-[var(--text)] whitespace-pre-line">{a.text}</p>
+                  <p className="text-[10.5px] text-[var(--text-dim)] mt-1 flex items-center gap-2 flex-wrap">
+                    <FeedbackChip status={a.status} />
+                    {a.type === 'comment' && <span className="text-[var(--brand)] font-bold">كومنت</span>}
+                    {a.by && <span>{a.by}</span>}
+                    <span dir="ltr">{formatDateTime(a.at)}</span>
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex flex-col sm:flex-row gap-2 mt-5">
           <button type="button"
