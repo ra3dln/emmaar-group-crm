@@ -278,8 +278,8 @@ export async function localNotification(title: string, body: string, tag?: strin
     const notification = new Notification(title, {
       body,
       tag: finalTag,
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
+      icon: '/app-icon-192.png',
+      badge: '/app-icon-192.png',
       data: { url },
       requireInteraction: true,
     });

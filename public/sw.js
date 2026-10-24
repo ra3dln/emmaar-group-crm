@@ -1,7 +1,28 @@
 // Service Worker: إشعارات حقيقية صامتة — تظهر مرة واحدة في وقتها بلا رنة ولا تكرار
+// بصمة النسخة: تغييرها يجعل المتصفح يعتبر الملف جديداً فيثبّت عاملاً جديداً
+// ويقرأ المانيفست المحدَّث — وبهذا يتحدّث اسم التطبيق وأيقونته على الاختصار المثبّت
+// على الهاتف بدون حذف التطبيق وإعادة تثبيته.
+const SW_VERSION = '2026-10-24-2';
+
 self.addEventListener('install', () => self.skipWaiting());
 
-self.addEventListener('activate', (event) => event.waitUntil(clients.claim()));
+self.addEventListener('activate', (event) =>
+  event.waitUntil(
+    (async () => {
+      // ننظّف أي كاش قديم (لا نستخدم كاشاً للأصول، لكن أجهزة قديمة قد تحتفظ به)
+      try {
+        const keys = await caches.keys();
+        await Promise.all(keys.filter((key) => key.startsWith('crm-')).map((key) => caches.delete(key)));
+      } catch {
+        /* لا شيء */
+      }
+      await clients.claim();
+      // نطلب من الصفحات المفتوحة تعيد قراءة المانيفست بعد التحديث
+      const list = await clients.matchAll({ type: 'window' });
+      for (const client of list) client.postMessage({ type: 'sw-updated', version: SW_VERSION });
+    })()
+  )
+);
 
 // التطبيق المثبّت: network-first لصفحة التطبيق حتى تظهر أي تعديلات فورًا
 // (الأصول نفسها مُبصومة بالـhash، فلا تحتاج كاش هنا)
@@ -12,7 +33,7 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
-const ICON = '/icon-192.png';
+const ICON = '/app-icon-192.png';
 
 // عرض الإشعار بأمان: بعض المتصفحات (وآيفون) ترفض خصائص مثل actions/renotify
 // فترفض الإشعار كله. لو حدث ذلك نعرضه بدون الخصائص الاختيارية بدل ما يضيع.

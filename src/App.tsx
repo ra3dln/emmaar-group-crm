@@ -1384,6 +1384,25 @@ function App() {
     }
   }, []);
 
+  // تحديث الهوية على الأجهزة المثبّتة: المتصفح يقرأ المانيفست من السيرفر لما نطلب
+  // منه يعيد تحميل عامل الخدمة، فيتغيّر الاسم والأيقونة على الاختصار المثبّت
+  // بدون حذف التطبيق ولا إعادة تثبيته. نطلب التحديث عند الفتح وعند العودة للتطبيق.
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const refresh = () => {
+      navigator.serviceWorker
+        .getRegistration()
+        .then((reg) => reg && reg.update())
+        .catch(() => {});
+    };
+    refresh();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
+
   // رسائل من خدمة الإشعارات: إسكات / تأجيل / فتح المنبه
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
@@ -2753,7 +2772,7 @@ function App() {
         {/* القائمة الجانبية — على يمين الشاشة */}
         <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''} ${desktopNavHidden ? 'rail' : ''}`}>
           <div className="sidebar-brand">
-            <img src="/msa-logo.png" alt="MSA CRM" className="brand-mark object-cover" />
+            <img src="/msa-app-icon.png" alt="MSA CRM" className="brand-mark object-cover" />
             <div className="min-w-0">
               <h1 className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight truncate">MSA CRM</h1>
               <p className="text-[10.5px] text-[var(--text-dim)] truncate">
@@ -4099,7 +4118,7 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
       <div className="login-wrap">
         <div className="login-brand">
           <div className="flex items-center gap-3">
-            <img src="/msa-logo.png" alt="MSA CRM" className="login-mark" />
+            <img src="/msa-app-icon.png" alt="MSA CRM" className="login-mark" />
             <div className="min-w-0">
               <p className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight">MSA CRM</p>
               <p className="text-[11px] text-[var(--text-dim)] leading-tight">إدارة العملاء العقارية</p>
@@ -4140,7 +4159,7 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
     <div className="login-wrap">
       <div className="login-brand">
         <div className="flex items-center gap-3">
-          <img src="/msa-logo.png" alt="MSA CRM" className="login-mark" />
+          <img src="/msa-app-icon.png" alt="MSA CRM" className="login-mark" />
           <div className="min-w-0">
             <p className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight">MSA CRM</p>
             <p className="text-[11px] text-[var(--text-dim)] leading-tight">إدارة العملاء العقارية</p>
