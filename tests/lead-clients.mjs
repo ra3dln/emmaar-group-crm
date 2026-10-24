@@ -186,19 +186,19 @@ check(
   /campaignAt: String\(row\.dateIso\)/.test(server) && /dateIso: created/.test(server)
 );
 
-// ===== ١٠) زر + (كومنت مباشر) في تبويب العملاء زي ما هو في المراحل =====
+// ===== ١٠) زر + (فيدباك مباشر) في تبويب العملاء زي ما هو في المراحل =====
 check('في زر + مشترك بين كارت المراحل وكارت العملاء', /function QuickNoteButton/.test(app));
 check(
-  'كارت تبويب العملاء فيه زر +',
-  /<QuickNoteButton[\s\S]{0,160}toggleQuickNote\(client!\)/.test(app)
+  'كارت العميل (المستخدم في العملاء والمراحل) فيه زر +',
+  /<QuickNoteButton active=\{open\}[\s\S]{0,120}openComposer\(\)/.test(app)
 );
 check(
-  'صندوق الكومنت المباشر بيشتغل في تبويب العملاء',
-  /className="quick-note"[\s\S]{0,400}saveQuickNote\(client!\)/.test(app)
+  'الزر بيفتح صندوق فيدباك (حالة + كومنت) بدون خيار «تم الرد / لم يرد»',
+  /className="feedback-composer"/.test(app) && /اختر حالة الفيدباك/.test(app)
 );
 check(
-  'الكومنت المباشر يتحفظ على العميل نفسه',
-  /addClientActivity\(client\.id, 'comment', text/.test(app)
+  'الفيدباك المباشر يتحفظ على العميل نفسه',
+  /addClientActivity\(client\.id, 'feedback', text/.test(app)
 );
 
 // ===== ١١) آيفون مثبّت على الشاشة الرئيسية: الشاشة الآمنة =====

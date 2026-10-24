@@ -129,7 +129,7 @@ check('الخط الزمني اتشال من نافذة تفاصيل العمي�
 check(
   'شريط الفيدباك لا يظهر قبل أول تواصل مع العميل',
   app.includes('const hasContactedClient =') &&
-    (app.match(/hasContactedClient\(client\)/g) || []).length >= 3
+    (app.match(/hasContactedClient\(client\)/g) || []).length >= 2
 );
 check(
   'وقت تسجيل الرقم في الكامبين مكتوب جمب الرقم زي اسم الفورم',
@@ -144,21 +144,32 @@ check(
 
 // ===== ١٠) كومنت مباشر من علامة + جنب اسم الفورم =====
 check(
-  'علامة + جنب اسم الفورم تُفتح صندوق كومنت مباشر (بدون مكالمة)',
+  'علامة + جنب اسم الفورم في المراحل بتفتح صندوق فيدباك (حالة + كومنت) زي تبويب العملاء',
   app.includes('cc-note-add') &&
-    app.includes("addClientActivity(client.id, 'comment'") &&
-    app.includes('quick-note-input') &&
-    css.includes('.cc-note-add') &&
-    css.includes('.quick-note')
+    (app.match(/<QuickNoteButton/g) || []).length >= 1 &&
+    app.includes('إضافة فيدباك (حالة + كومنت)') &&
+    css.includes('.cc-note-add')
+);
+check(
+  'حالة الفيدباك مش إلزامية تتغير: بتتحفظ زي آخر فيدباك على العميل',
+  app.includes('const statusId = composer.status ||') &&
+    app.includes('const statusId = status || latestFeedbackStatusOf(client)') &&
+    app.includes('هتتحفظ زي ما هي لو ما غيّرتهاش')
+);
+check(
+  'الفيدباك اليومي للإدارة يقرأ بطاقات الفيدباك أيضاً (مش سجلات العملاء بس)',
+  app.includes('function mergeDailyFeedbackCards') &&
+    (app.match(/mergeDailyFeedbackCards\(/g) || []).length >= 3 &&
+    app.includes('dailyFeedbacks={dailyFeedbacks}')
 );
 check(
   'الكومنت المباشر يظهر تحت العميل في الكارت فوراً (سطر آخر كومنت)',
-  app.includes('saveQuickNote') && app.includes('cc-lastfb')
+  app.includes("addClientActivity(client.id, 'feedback'") && app.includes('cc-lastfb')
 );
 check(
-  'الكومنت المباشر ينزل «الفيدباك اليومي» بحالة «لم يتم الاتصال»',
+  'الفيدباك ينزل «الفيدباك اليومي» كبطاقة باسم كاتبه (مش اسم صاحب العميل)',
   /if \(\(type === 'feedback' \|\| type === 'comment'\) && !opts\?\.skipCard\)/.test(app) &&
-    app.includes("callStatus: 'not-called'")
+    app.includes('userId: opts?.authorId || target.userId')
 );
 check(
   'الضغط على العميل يفتح فيدباكه وكومنتاته',

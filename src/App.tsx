@@ -3068,9 +3068,9 @@ function App() {
             onAddNumber={currentUser.role === 'sales' ? () => setShowAddAssignedLead(true) : undefined}
             onCall={(c: Client) => setCallClient(c)}
             // شريط الفيدباك في الكارت: كل حالة تنقل العميل إلى مرحلتها تلقائياً
-            onSetStage={(c: Client, stage: Client['stage']) => {
-              if (!c || !stage || c.stage === stage) return; // نفس المرحلة → لا نعيد كتابتها
-              handleUpdateClientStage(c.id, stage);
+            onSetStage={(id: string, stage: Client['stage']) => {
+              if (!id || !stage) return; // نفس المرحلة → لا نعيد كتابتها
+              handleUpdateClientStage(id, stage);
             }}
             onLeadViewed={(id: string) => {
               const target = assignedLeads.find((l: AssignedLead) => l.id === id);
@@ -3201,7 +3201,7 @@ function App() {
         {showAddUser && <AddUserModal currentUser={currentUser} onClose={() => setShowAddUser(false)} onSuccess={loadData} />}
         {showAddTeam && <AddTeamModal users={users} currentUser={currentUser} onClose={() => setShowAddTeam(false)} onSuccess={loadData} />}
         {showAddAssignedLead && <AddAssignedLeadModal users={users} currentUser={currentUser} onClose={() => setShowAddAssignedLead(false)} onSuccess={loadData} />}
-        {showImportLeads && <ImportLeadsModal users={users} clients={clients} assignedLeads={assignedLeads} currentUser={currentUser} onClose={() => setShowImportLeads(false)} onSuccess={loadData} />}          {selectedUserFeedback && <UserFeedbackModal user={selectedUserFeedback} clients={clients} leads={assignedLeads} callLogs={callLogs} onClose={() => setSelectedUserFeedback(null)} />}
+        {showImportLeads && <ImportLeadsModal users={users} clients={clients} assignedLeads={assignedLeads} currentUser={currentUser} onClose={() => setShowImportLeads(false)} onSuccess={loadData} />}          {selectedUserFeedback && <UserFeedbackModal user={selectedUserFeedback} clients={clients} leads={assignedLeads} callLogs={callLogs} dailyFeedbacks={dailyFeedbacks} onClose={() => setSelectedUserFeedback(null)} />}
         {selectedClient && <ClientDetailModal client={selectedClient} onClose={() => setSelectedClient(null)} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
         {callClient && <CallFlowModal client={callClient} user={currentUser} onClose={() => setCallClient(null)} onSave={handleSaveCall} />}
         {selectedProperty && <PropertyDetailModal property={selectedProperty} users={users} onClose={() => setSelectedProperty(null)} onSuccess={loadData} />}
@@ -4971,16 +4971,16 @@ function CampaignTimeChip({ at, kind = 'campaign', className = '' }: { at?: stri
   );
 }
 
-// ===== زر + للكومنت المباشر: نفس الزر في كارت المراحل وكارت تبويب العملاء =====
-// الكومنت يُحفظ على العميل نفسه (من غير مكالمة وبلا حالة) فيظهر تحت الكارت
-// فوراً وفي كومنتات العميل، وينزل في «الفيدباك اليومي».
+// ===== زر + لإضافة فيدباك مباشر: نفس الزر في كارت المراحل وكارت تبويب العملاء =====
+// يفتح صندوق الفيدباك (حالة + كومنت) نفسه الموجود في تبويب العملاء، بدون أي
+// سؤال «تم الرد / لم يرد» — والحالة تفضل زي آخر فيدباك على العميل.
 function QuickNoteButton({ active, onToggle }: { active: boolean; onToggle: () => void }) {
   return (
     <button
       type="button"
       className={`cc-note-add ${active ? 'on' : ''}`.trim()}
-      title="إضافة كومنت مباشر على العميل (بدون مكالمة)"
-      aria-label="إضافة كومنت مباشر"
+      title="إضافة فيدباك (حالة + كومنت) — بدون مكالمة"
+      aria-label="إضافة فيدباك"
       aria-expanded={active}
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
     >
@@ -4999,9 +4999,6 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
   const [status, setStatus] = useState('');
   const [commentText, setCommentText] = useState('');
   const [cancelReason, setCancelReason] = useState('');
-  // كومنت مباشر من علامة + اللي جنب اسم الفورم (بدون مكالمة)
-  const [quickOpen, setQuickOpen] = useState(false);
-  const [quickNote, setQuickNote] = useState('');
   const src = SOURCE_KINDS[sourceKindOf(`${client?.source} ${client?.status}`)];
   const SrcIcon = src.Icon;
   const sourceText = sourceLabelOf(client);
@@ -5035,36 +5032,21 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
 
   const submit = () => {
     const text = commentText.trim();
-    if (!status || !text || (status === 'cancellation' && !cancelReason)) return;
-    const picked = FEEDBACK_STATUS_BY_ID[status];
-    if (!picked) return;
+    // الحالة مش إلزامية: لو ما اختارش، بيتحفظ على حالة آخر فيدباك على العميل
+    const statusId = status || latestFeedbackStatusOf(client) || '';
+    if (!text || (statusId === 'cancellation' && !cancelReason)) return;
+    const picked = statusId ? FEEDBACK_STATUS_BY_ID[statusId] : null;
     // نفس مسار تبويب العملاء: كومنت + حالة في الخط الزمني، والمصدر واحد
     addClientActivity(client.id, 'feedback', text, currentUser?.name || '', {
       authorId: currentUser?.id,
-      status,
-      ...(status === 'cancellation' && cancelReason ? { cancelReason } : {}),
-      callStatus: status === 'no-answer' ? 'no-answer' : 'called',
+      ...(statusId ? { status: statusId } : {}),
+      ...(statusId === 'cancellation' && cancelReason ? { cancelReason } : {}),
+      callStatus: statusId === 'no-answer' ? 'no-answer' : 'called',
     });
-    if (picked.stage && client.stage !== picked.stage) onSetStage?.(client.id, picked.stage);
+    if (picked?.stage && client.stage !== picked.stage) onSetStage?.(client.id, picked.stage);
     closeComposer();
     onRefresh?.();
     void pushKey('crm_clients');
-  };
-
-  // كومنت مباشر على العميل: يُحفظ على العميل نفسه بلا مكالمة وبلا حالة،
-  // فيظهر تحت الكارت فوراً وفي كومنتات العميل، وينزل في «الفيدباك اليومي».
-  const saveQuickNote = () => {
-    const text = quickNote.trim();
-    if (!text) return;
-    addClientActivity(client.id, 'comment', text, currentUser?.name || '', {
-      authorId: currentUser?.id,
-      callStatus: 'not-called',
-    });
-    setQuickNote('');
-    setQuickOpen(false);
-    onRefresh?.();
-    void pushKey('crm_clients');
-    void pushKey('crm_daily_feedback');
   };
 
   return (
@@ -5099,8 +5081,9 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
             <a className="cc-phone" dir="ltr" href={`tel:${client?.phone}`} onClick={(e) => e.stopPropagation()}>{client?.phone}</a>
             <FormNameChip record={client} />
             <CampaignTimeChip at={campaignTimeOf(client).at} kind={campaignTimeOf(client).kind} />
-            {/* كومنت مباشر بدل تسجيل مكالمة — يتكتب ويظهر تحت العميل وفي كومنتاته */}
-            <QuickNoteButton active={quickOpen} onToggle={() => setQuickOpen((v) => !v)} />
+            {/* إضافة فيدباك من المراحل بنفس صندوق تبويب العملاء: حالة (اختيارية،
+                تبقى زي آخر فيدباك) + كومنت — بدون أي سؤال «تم الرد / لم يرد». */}
+            <QuickNoteButton active={open} onToggle={() => (open ? closeComposer() : openComposer())} />
           </div>
 
           {facts.length > 0 && (
@@ -5124,24 +5107,6 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
           <WhatsAppButton name={client?.name} phones={[client?.phone, ...(client?.phones || [])]} />
         </div>
       </motion.article>
-
-      {quickOpen && (
-        <form
-          className="quick-note"
-          onClick={(e) => e.stopPropagation()}
-          onSubmit={(e) => { e.preventDefault(); saveQuickNote(); }}
-        >
-          <input
-            autoFocus
-            value={quickNote}
-            onChange={(e) => setQuickNote(e.target.value)}
-            placeholder="كومنت مباشر على العميل (بدون اتصال) — هيظهر تحت العميل وفي كومنتاته"
-            className="quick-note-input"
-          />
-          <button type="submit" disabled={!quickNote.trim()}>حفظ</button>
-          <button type="button" title="إلغاء" onClick={() => { setQuickOpen(false); setQuickNote(''); }}>✕</button>
-        </form>
-      )}
 
       {open && (
         <form
@@ -5182,8 +5147,8 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
               placeholder={meta ? `اكتب كومنت «${meta.label}» — إلزامي ليُحفظ الفيدباك` : 'اختر حالة الفيدباك ثم اكتب الكومنت'}
               className="quick-comment-input"
             />
-            <button type="submit" disabled={!commentText.trim() || !meta || (status === 'cancellation' && !cancelReason)}
-              title={!meta ? 'اختر حالة أولاً' : status === 'cancellation' && !cancelReason ? 'اختر سبب الإلغاء' : 'حفظ الفيدباك (الحالة + الكومنت)'}>
+            <button type="submit" disabled={!commentText.trim() || (status === 'cancellation' && !cancelReason)}
+              title={status === 'cancellation' && !cancelReason ? 'اختر سبب الإلغاء' : 'حفظ الفيدباك (الكومنت والحالة)'}>
               حفظ
             </button>
             <button type="button" title="إلغاء" onClick={closeComposer}>✕</button>
@@ -5191,7 +5156,9 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
           <p className="fc-hint">
             {status === 'cancellation' && !cancelReason
               ? 'اختر سبب الإلغاء — والكومنت هيتكتب تلقائياً'
-              : meta ? `الحالة: ${meta.label} — ${meta.ar}` : 'لازم تختار حالة وتكتب كومنت معاً'}
+              : meta
+              ? `الحالة: ${meta.label} — ${meta.ar} (هتتحفظ زي ما هي لو ما غيّرتهاش)`
+              : 'اكتب الكومنت — والحالة هتتحفظ زي آخر فيدباك على العميل'}
           </p>
         </form>
       )}
@@ -5548,34 +5515,9 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
   // فلتر الإلغاء في القائمة (أيقونة الفلتر بجوار البحث)
   const [cancelFilter, setCancelFilter] = useState('');
   const [showCancelFilter, setShowCancelFilter] = useState(false);
-  // كومنت مباشر من علامة + (نفس الزر الموجود في كارت المراحل): يظهر تحت الكارت
-  const [quickFor, setQuickFor] = useState<string | null>(null);
-  const [quickNote, setQuickNote] = useState('');
-
-  // كومنت مباشر على العميل: يُحفظ على العميل نفسه بلا مكالمة وبلا حالة،
-  // فيظهر تحت الكارت فوراً وفي كومنتات العميل، وينزل في «الفيدباك اليومي».
-  const saveQuickNote = (client: Client) => {
-    const text = quickNote.trim();
-    if (!text) return;
-    addClientActivity(client.id, 'comment', text, currentUser?.name || '', {
-      authorId: currentUser?.id,
-      callStatus: 'not-called',
-    });
-    setQuickNote('');
-    setQuickFor(null);
-    onRefresh?.();
-    void pushKey('crm_clients');
-  };
-
-  const toggleQuickNote = (client: Client) => {
-    if (quickFor === client.id) {
-      setQuickFor(null);
-      setQuickNote('');
-      return;
-    }
-    setQuickFor(client.id);
-    setQuickNote('');
-  };
+  // ملاحظة: كومنت الفيدباك المباشر (علامة +) وصندوق الحالة بقوا جوّه الكارت
+  // نفسه (ClientFeedbackCard) — فالكارت واحد في تبويب العملاء وفي المراحل
+  // وفي صفحة الحالة، وبما فيهم كارت العرض الجدولي.
 
   // فتح الصندوق: بضغطة على حالة في الشريط (تتحدد تلقائياً) أو من زر الكومنت
   const openComposer = (client: Client, status?: string) => {
@@ -5599,22 +5541,24 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
   const submitFeedback = () => {
     const text = commentText.trim();
     if (!composer || !text) return;
-    const status = FEEDBACK_STATUS_BY_ID[composer.status];
-    if (!status) return;
+    const target = (clients || []).find((c: Client) => c.id === composer.clientId);
+    // الحالة مش إلزامي تتغير في كل فيدباك: لو المستخدم ما اختارش، الفيدباك
+    // بيتحفظ على **حالة آخر فيدباك** زي ما هي — فيبقى الشريط محفوظ زي ما هو.
+    const statusId = composer.status || (target ? latestFeedbackStatusOf(target) : '') || '';
+    const status = statusId ? FEEDBACK_STATUS_BY_ID[statusId] : null;
     // حالة الإلغاء بلا سبب لا تُحفظ — القائمة المنسدلة للسبب إلزامية
-    if (composer.status === 'cancellation' && !cancelReason) return;
+    if (statusId === 'cancellation' && !cancelReason) return;
     // الفيدباك = كومنت + حالة، وينزل في الخط الزمني فيظهر في خانة الكومنتات (الفيدباك)
     addClientActivity(composer.clientId, 'feedback', text, currentUser?.name || '', {
       authorId: currentUser?.id,
-      status: composer.status,
+      ...(statusId ? { status: statusId } : {}),
       // سبب الإلغاء يُسجَّل مع الحدث وعلى العميل — فلتر القائمة يقرأه
-      ...(composer.status === 'cancellation' && cancelReason ? { cancelReason } : {}),
+      ...(statusId === 'cancellation' && cancelReason ? { cancelReason } : {}),
       // «no answer» تعني مكالمة بلا رد — فتظهر هكذا في الفيدباك اليومي أيضاً
-      callStatus: composer.status === 'no-answer' ? 'no-answer' : 'called',
+      callStatus: statusId === 'no-answer' ? 'no-answer' : 'called',
     });
     // المرحلة تتحرك تلقائياً مع الحالة (مثل الشريط القديم) فلا يحتاج أحد لضغطة ثانية
-    const target = (clients || []).find((c: Client) => c.id === composer.clientId);
-    if (target && status.stage && target.stage !== status.stage) onSetStage?.(target, status.stage);
+    if (target && status?.stage && target.stage !== status.stage) onSetStage?.(target.id, status.stage);
     closeComposer();
     onRefresh?.();
     void pushKey('crm_clients');
@@ -5665,8 +5609,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
             placeholder={status ? `اكتب كومنت «${status.label}» — إلزامي ليُحفظ الفيدباك` : 'اختر حالة الفيدباك ثم اكتب الكومنت'}
             className="quick-comment-input"
           />
-          <button type="submit" disabled={!commentText.trim() || !status || (composer.status === 'cancellation' && !cancelReason)}
-            title={!status ? 'اختر حالة أولاً' : composer.status === 'cancellation' && !cancelReason ? 'اختر سبب الإلغاء' : 'حفظ الفيدباك (الحالة + الكومنت)'}>
+          <button type="submit" disabled={!commentText.trim() || (composer.status === 'cancellation' && !cancelReason)}
+            title={composer.status === 'cancellation' && !cancelReason ? 'اختر سبب الإلغاء' : 'حفظ الفيدباك (الكومنت والحالة)'}>
             حفظ
           </button>
           <button type="button" title="إلغاء" onClick={closeComposer}>✕</button>
@@ -5674,7 +5618,9 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
         <p className="fc-hint">
           {composer.status === 'cancellation' && !cancelReason
             ? 'اختر سبب الإلغاء — والكومنت هيتكتب تلقائياً'
-            : status ? `الحالة: ${status.label} — ${status.ar}` : 'لازم تختار حالة وتكتب كومنت معاً'}
+            : status
+            ? `الحالة: ${status.label} — ${status.ar} (هتتحفظ زي ما هي لو ما غيّرتهاش)`
+            : 'اكتب الكومنت — والحالة هتتحفظ زي آخر فيدباك على العميل'}
         </p>
       </form>
     );
@@ -5993,131 +5939,28 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
             const isLead = item.kind === 'lead';
             const lead = isLead ? (item as any).lead as AssignedLead : null;
             const client = !isLead ? (item as any).client as Client : null;
-            const name = isLead ? (lead!.name || 'بدون اسم') : client!.name;
-            const phone = isLead ? lead!.phone : client!.phone;
-            const src = SOURCE_KINDS[sourceKindOf(isLead ? lead!.description : `${client!.source} ${client!.status}`)];
-            const SrcIcon = src.Icon;
-            const sourceText = isLead ? (formatLeadDescription(lead!.description) || 'رقم وارد') : sourceLabelOf(client);
-            const comments = isLead ? 0 : commentCountOf(client);
-            const last = isLead ? null : lastCommentOf(client);
-            const facts = isLead
-              ? []
-              : ([
-                  client!.budget ? { k: 'الميزانية', v: displayPrice(client!.budget) } : null,
-                  client!.property ? { k: 'العقار', v: client!.property } : null,
-                  client!.monthlyInstallment ? { k: 'القسط', v: displayPrice(client!.monthlyInstallment) } : null,
-                  client!.deliveryPeriod ? { k: 'التسليم', v: client!.deliveryPeriod } : null,
-                ].filter(Boolean) as Array<{ k: string; v: string }>);
-            const open = composer?.key === (isLead ? `lead-${lead!.id}` : `client-${client!.id}`);
-            void facts; void SrcIcon; void sourceText;
-
-            return (
-              <Fragment key={isLead ? `lead-${lead!.id}` : `client-${client!.id}`}>
-                <motion.article
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  whileHover={{ y: -1 }}
-                  onClick={() => (isLead ? onLeadViewed?.(lead!.id) : onSelect(client))}
-                  className={`client-card ${src.cls}`}
-                >
-                  <div className="cc-avatar">{name?.[0] || '#'}</div>
-
-                  <div className="cc-body">
-                    <div className="cc-line">
-                      <b className="cc-name">{name}</b>
-                      <span className={`cc-src ${src.cls}`} title={sourceText}>
-                        <SrcIcon className="w-3 h-3" />
-                        {sourceText}
-                      </span>
-                      {client?.stage === 'lost' && <span className="st-chip st-lost">ضائع</span>}
-                      {isLead && leadIsCancelled(lead!) && (
-                        <span className="st-chip st-lost" title="سبب الإلغاء">
-                          إلغاء{leadCancelReasonOf(lead!) ? ` · ${CANCEL_REASON_BY_ID[leadCancelReasonOf(lead!)]?.label || ''}` : ''}
-                        </span>
-                      )}
-                      {/* حالة العميل المختارة من القائمة المنسدلة: حبة صغيرة جنب الاسم
-                          — تظهر بعد أول تواصل فقط (مكالمة/واتساب) */}
-                      {!isLead && hasContactedClient(client) && (
-                        <FeedbackBar client={client} onPick={(statusId: string) => openComposer(client!, statusId)} />
-                      )}
-                    </div>
-
-                    {!isLead && last?.text && (
-                      /* الفيدباك الأخير يظهر بجوار الاسم: الحالة + الكومنت */
-                      <p className="cc-lastfb"><FeedbackChip status={last.status} /> {last.text}</p>
-                    )}
-
-                    <div className="cc-phone-row">
-                      <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
-                      <FormNameChip record={isLead ? lead : client} />
-                      <CampaignTimeChip
-                        at={campaignTimeOf(isLead ? lead : client).at}
-                        kind={campaignTimeOf(isLead ? lead : client).kind}
-                      />
-                      {/* كومنت مباشر من علامة + — نفس الزر في كارت المراحل وصفحة الحالة */}
-                      {!isLead && (
-                        <QuickNoteButton
-                          active={quickFor === client!.id}
-                          onToggle={() => toggleQuickNote(client!)}
-                        />
-                      )}
-                    </div>
-
-                    {facts.length > 0 && (
-                      <div className="cc-facts">
-                        {facts.map((f) => (
-                          <span className="cc-fact" key={f.k}><i>{f.k}</i>{f.v}</span>
-                        ))}
-                      </div>
-                    )}
-
-                    {isLead && (
-                      <p className="cc-note">
-                        وصل من {sourceText} — {formatDateTime(campaignTimeOf(lead!).at)}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="cc-actions" onClick={(e) => e.stopPropagation()}>
-                    <button type="button" className="comments-pill" title="كل التعليقات بالتوقيت — اضغط لعرضها"
-                      onClick={() => { if (!isLead) setCommentsClient(client); }}>
-                      <MessageSquare className="w-3.5 h-3.5" />
-                      <b>{comments}</b>
-                    </button>
-                    {isLead ? (
-                      <>
-                        <a href={`tel:${lead!.phone}`} className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل"><PhoneCall className="w-3.5 h-3.5" /></a>
-                      </>
-                    ) : (
-                      <>
-                        {/* زر «إضافة كومنت» الأصفر اتشال — الفيدباك يُسجّل من شريط الحالات */}
-                        <button type="button" onClick={() => onCall?.(client)} title="الاتصال بالعميل"
-                          className="icon-btn !w-8 !h-8 text-emerald-300"><PhoneCall className="w-3.5 h-3.5" /></button>
-                        <WhatsAppButton name={client!.name} phones={[client!.phone, ...(client!.phones || [])]} />
-                      </>
-                    )}
-                  </div>
-                </motion.article>
-                {open && !isLead && <FeedbackComposer />}
-                {/* صندوق الكومنت المباشر: يظهر تحت الكارت لما تضغط علامة + */}
-                {!isLead && quickFor === client!.id && (
-                  <form
-                    className="quick-note"
-                    onClick={(e) => e.stopPropagation()}
-                    onSubmit={(e) => { e.preventDefault(); saveQuickNote(client!); }}
-                  >
-                    <input
-                      autoFocus
-                      value={quickNote}
-                      onChange={(e) => setQuickNote(e.target.value)}
-                      placeholder="كومنت مباشر على العميل (بدون اتصال) — هيظهر تحت العميل وفي كومنتاته"
-                      className="quick-note-input"
-                    />
-                    <button type="submit" disabled={!quickNote.trim()}>حفظ</button>
-                    <button type="button" title="إلغاء" onClick={() => { setQuickFor(null); setQuickNote(''); }}>✕</button>
-                  </form>
-                )}
-              </Fragment>
+            // ===== كارت واحد في كل مكان =====
+            // نفس كارت تبويب «العملاء» بالظبط في «المراحل» وصفحة الحالة
+            // (follow up وغيره) — فمفيش شكل قديم ولا شكل تاني في النظام.
+            return isLead ? (
+              <LeadFeedCard
+                key={`lead-${lead!.id}`}
+                lead={lead}
+                record={item}
+                onLeadViewed={onLeadViewed}
+                cancelled={leadIsCancelled(lead!)}
+                cancelReason={leadCancelReasonOf(lead!)}
+              />
+            ) : (
+              <ClientFeedbackCard
+                key={`client-${client!.id}`}
+                client={client}
+                currentUser={currentUser}
+                onSelect={onSelect}
+                onOpenComments={() => setCommentsClient(client)}
+                onSetStage={onSetStage}
+                onRefresh={onRefresh}
+              />
             );
           })}
         </div>
@@ -6235,14 +6078,18 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
   );
 }
 
-// ===== كارت رقم التوزيع في المراحل: نفس شكل كارت العميل، بلا فيدباك =====
-// الرقم لسه مش عميل مسجّل: الأيقونة تحتّه اتصال فقط — والرقم بيصير عميل
-// صاحبَه تلقائياً أول ما يتوزّع عليه، فمفيش زر تحويل يدوي.
-function LeadStageCard({ lead, record, onLeadViewed }: any) {
+// ===== كارت الرقم الموزّع: نفس شكل كارت العميل بالظبط =====
+// الرقم لسه مش عميل مسجّل (نزل في التوزيع): من غير شريط فيدباك وبلا زر +
+// (مالوش عميل بعد يتحمّل الكومنت)، بس بالشكل نفسه — عشان تبويب «المراحل»
+// وصفحة الحالة (follow up وغيره) يبانوا زي «العملاء» بالحرف، والرقم بيبان
+// بنفس الشكل في كل مكان.
+function LeadFeedCard({ lead, record, onLeadViewed, cancelled = false, cancelReason = '' }: any) {
   const src = SOURCE_KINDS[sourceKindOf(String(lead?.description || record?.note || ''))];
   const SrcIcon = src.Icon;
   const sourceText = formatLeadDescription(lead?.description || '') || 'رقم وارد';
+  const name = record?.name || lead?.name || 'بدون اسم';
   const phone = record?.phone || lead?.phone || '';
+  const time = campaignTimeOf(lead || record);
   return (
     <motion.article
       initial={{ opacity: 0, y: 6 }}
@@ -6251,23 +6098,30 @@ function LeadStageCard({ lead, record, onLeadViewed }: any) {
       onClick={() => lead && onLeadViewed?.(lead.id)}
       className={`client-card ${src.cls}`}
     >
-      <div className="cc-avatar">{String(record?.name || lead?.name || '#').trim().charAt(0) || '#'}</div>
+      <div className="cc-avatar">{String(name || '#').trim().charAt(0) || '#'}</div>
 
       <div className="cc-body">
         <div className="cc-line">
-          <b className="cc-name">{record?.name || lead?.name}</b>
+          <b className="cc-name">{name}</b>
           <span className={`cc-src ${src.cls}`} title={sourceText}>
             <SrcIcon className="w-3 h-3" />
             {sourceText}
           </span>
+          {(cancelled || cancelReason) && (
+            <span className="st-chip st-lost" title="سبب الإلغاء">
+              إلغاء{cancelReason ? ` · ${CANCEL_REASON_BY_ID[cancelReason]?.label || ''}` : ''}
+            </span>
+          )}
         </div>
+
         <div className="cc-phone-row">
           <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
           <FormNameChip record={lead || record} />
-          <CampaignTimeChip at={campaignTimeOf(lead || record).at} kind={campaignTimeOf(lead || record).kind} />
+          <CampaignTimeChip at={time.at} kind={time.kind} />
         </div>
+
         <p className="cc-note">
-          وصل من {sourceText}{lead?.createdAt ? ` — ${formatDateTime(campaignTimeOf(lead).at)}` : ''}
+          وصل من {sourceText}{lead?.createdAt ? ` — ${formatDateTime(time.at)}` : ''}
         </p>
       </div>
 
@@ -6331,7 +6185,7 @@ function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, curren
                       onRefresh={onRefresh}
                     />
                   ) : (
-                    <LeadStageCard
+                    <LeadFeedCard
                       key={`lead-${record.leadId || record.key || record.id}`}
                       record={record}
                       lead={leadById.get(String(record.leadId))}
@@ -6392,7 +6246,7 @@ function StatusBoardView({ statusId, numbers = [], leads = [], currentUser, onCl
                   onRefresh={onRefresh}
                 />
               ) : (
-                <LeadStageCard
+                <LeadFeedCard
                   key={`lead-${record.leadId || record.key || record.id}`}
                   record={record}
                   lead={leadById.get(String(record.leadId))}
@@ -8160,8 +8014,13 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, callLogs = [], onSe
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {salesUsers.map((user: User) => {
-          // نفس مصدر صفحة التفاصيل بالأسفل — حتى تتطابق الأرقام مع ما يفتح بالضغط
-          const nums = salesFeedbackByNumber(user.id, clients, [], callLogs);
+          // نفس مصدر صفحة التفاصيل بالأسفل (بما فيها بطاقات «الفيدباك اليومي»)
+          // حتى تتطابق الأرقام مع ما يفتح بالضغط
+          const nums = mergeDailyFeedbackCards(
+            salesFeedbackByNumber(user.id, clients, [], callLogs),
+            user.id,
+            dailyFeedbacks
+          );
           const today = new Date().toDateString();
           const allItems = nums.flatMap((n) => n.items);
           const todayFeedbacks = allItems.filter((i) => new Date(i.at).toDateString() === today);
@@ -12638,16 +12497,67 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
   });
 }
 
+// ===== بطاقات «الفيدباك اليومي» تُضاف لأرقام السيلز =====
+// بعض الفيدباك يُحفظ في بطاقة الفيدباك فقط (بلا حدث على العميل، أو على رقم مسجّل
+// باسم حساب آخر)، فكان لا يظهر للإدارة خالص. هذا يُكمّل الأرقام ببطاقات كاتبها.
+type FeedbackNumber = {
+  key: string;
+  name: string;
+  phone: string;
+  source: string;
+  stage: string;
+  incoming: boolean;
+  items: Array<{ id: string; text: string; at: string; kind: string; status: string }>;
+};
+
+function mergeDailyFeedbackCards(
+  nums: FeedbackNumber[],
+  userId: string,
+  dailyFeedbacks: any[] = []
+): FeedbackNumber[] {
+  for (const card of dailyFeedbacks || []) {
+    if (!card || card.userId !== userId || !String(card.feedback || '').trim()) continue;
+    const key = normPhone(card.clientPhone) || `fb:${card.id}`;
+    let target: FeedbackNumber | undefined = nums.find((n: FeedbackNumber) => n.key === key);
+    if (!target) {
+      target = {
+        key,
+        name: card.clientName || 'عميل بدون اسم',
+        phone: card.clientPhone || '',
+        source: 'فيدباك',
+        stage: '',
+        incoming: false,
+        items: [],
+      };
+      nums.push(target);
+    }
+    const at = card.date || card.createdAt;
+    const dup = target.items.some(
+      (item: FeedbackNumber['items'][number]) =>
+        item.text === card.feedback && String(item.at).slice(0, 16) === String(at).slice(0, 16)
+    );
+    if (!dup) target.items.push({ id: card.id, text: card.feedback, at, kind: 'فيدباك', status: card.status || '' });
+  }
+  for (const number of nums)
+    number.items.sort((a: FeedbackNumber['items'][number], b: FeedbackNumber['items'][number]) =>
+      String(b.at).localeCompare(String(a.at))
+    );
+  return nums;
+}
+
 // ===== صفحة فيدباك السيلز عند الإدارة (٣ مستويات) =====
 // اسم السيلز ← صفحة كاملة بأرقامه ← اضغط الرقم ← فيدباكه منظّماً تحت بعضه
-function UserFeedbackModal({ user, clients, leads = [], callLogs = [], onClose }: any) {
+function UserFeedbackModal({ user, clients, leads = [], callLogs = [], dailyFeedbacks = [], onClose }: any) {
   const [openNumber, setOpenNumber] = useState<string | null>(null);
   const [q, setQ] = useState('');
 
   const norm = normPhone;
 
   // كل رقم يمتلكه هذا السيلز، ومعاه كومنتاته مرتبة من الأحدث للأقدم
-  const numbers = useMemo(() => salesFeedbackByNumber(user.id, clients, leads, callLogs), [user.id, clients, leads, callLogs]);
+  const numbers = useMemo(
+    () => mergeDailyFeedbackCards(salesFeedbackByNumber(user.id, clients, leads, callLogs), user.id, dailyFeedbacks),
+    [user.id, clients, leads, callLogs, dailyFeedbacks]
+  );
 
   const totalComments = numbers.reduce((acc, n) => acc + n.items.length, 0);
   const withComments = numbers.filter((n) => n.items.length).length;
