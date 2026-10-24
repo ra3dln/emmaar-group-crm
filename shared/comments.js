@@ -11,6 +11,9 @@ export const LOG_TYPES = ['call', 'whatsapp', 'reminder'];
 // بادئات كانت بتتضاف على الكومنت («من المكالمة: …») — بتشيل عشان يبقى كلام صافي
 const PREFIX_RE = /^\s*(?:من\s+المكالمة|من\s+المكالمه|فيدباك|Feedback|اتصال)\s*[:\-]\s*/;
 
+// سطر النظام الآلي في أول الكومنت (زي «No answer» لوحده في سطر قبل كلام المندوب) — بيتشال
+const SYSTEM_LINE_RE = /^\s*(?:no\s*answer|not\s*called|busy|تم\s*الرد|لم\s*يرد|مشغول)\s*[\r\n]+/i;
+
 // نصوص النظام الآلية (مش كلام المندوب) — ما بتظهرش كومنت
 const SYSTEM_TEXT_RE =
   /^(?:no\s*answer|not\s*called|busy|تم\s*الرد|لم\s*يرد|مشغول|بusy|اتصال\s*[:\-].*|تم\s+إنشاء\s+تذكير.*|تم\s+فتح\s+واتساب.*)$/i;
@@ -21,7 +24,8 @@ const PURE_LOG_TEXT_RE =
   /^(?:اتصال|تم\s*الرد|لم\s*يرد|مشغول|تم\s+إنشاء\s+تذكير.*|تم\s+فتح\s+واتساب.*)[:\-]?\s*$/i;
 
 // نص الكومنت بعد شيل البادئات
-export const cleanCommentText = (value) => String(value || '').replace(PREFIX_RE, '').trim();
+export const cleanCommentText = (value) =>
+  String(value || '').replace(PREFIX_RE, '').replace(SYSTEM_LINE_RE, '').trim();
 
 // نص النظام الآلي؟ (ما بيتمثلش كلام مندوب)
 export const isSystemOnlyText = (value) => {

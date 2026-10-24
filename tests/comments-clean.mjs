@@ -68,6 +68,16 @@ check(
 // ===== ٣) بادئة «من المكالمة: » — الكومنت يبقى كلام صافي =====
 check('بادئة «من المكالمة» بتتشال', cleanCommentText('من المكالمة: طلب معاينة') === 'طلب معاينة');
 check('بادئة «فيدباك» بتتشال', cleanCommentText('فيدباك: طلب معاينة') === 'طلب معاينة');
+check(
+  'سطر النظام الآلي في أول الكومنت بيتشال',
+  cleanCommentText('No answer\nالمش مجمع هكلمه تاني') === 'المش مجمع هكلمه تاني'
+);
+check(
+  'كلام المندوب بعد سطر النظام بيفضل',
+  commentActivitiesOf({
+    activities: [{ id: 's1', type: 'feedback', text: 'No answer\nالمش مجمع هكلمه تاني', at: AT }],
+  })[0].text === 'المش مجمع هكلمه تاني'
+);
 check('نص النظام الآلي مش كلام مندوب', isSystemOnlyText('No answer') && isSystemOnlyText('اتصال: تم الرد'));
 check('كلام المندوب مش نظام', !isSystemOnlyText('طلب معاينة العقار Saturday'));
 check('نشاط الكومنت يتعرف عليه', isCommentActivity({ type: 'feedback' }) && !isCommentActivity({ type: 'call' }));

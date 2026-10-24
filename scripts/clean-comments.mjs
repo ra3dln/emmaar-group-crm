@@ -71,20 +71,22 @@ let removedDupes = 0;
 let cleanedClients = 0;
 
 const nextClients = clients.map((client) => {
-  const before = Array.isArray(client?.activities) ? client.activities.length : 0;
+  const before = Array.isArray(client?.activities) ? client.activities : [];
   const copy = JSON.parse(JSON.stringify(client || {}));
   sanitizeClientRecord(copy);
-  const after = Array.isArray(copy.activities) ? copy.activities.length : 0;
-  if (after !== before) cleanedClients += 1;
-  removedLogs += Math.max(0, before - after);
+  const after = Array.isArray(copy.activities) ? copy.activities : [];
+  removedLogs += Math.max(0, before.length - after.length);
+  if (JSON.stringify(before) !== JSON.stringify(after)) cleanedClients += 1;
   return copy;
 });
 
-// التكرار داخل كل عميل: نفس النص في نفس الدقيقة
+// التكرار داخل كل عميل: نفس النص (مندوب) في نفس الدقيقة
 for (const client of nextClients) {
   const acts = Array.isArray(client.activities) ? client.activities : [];
   const seen = new Set();
   for (const a of acts) {
+    const type = String(a?.type || '').toLowerCase();
+    if (!['feedback', 'comment', 'note'].includes(type)) continue;
     const text = String(a?.text || '').trim();
     const sig = `${text}|${String(a?.at || '').slice(0, 16)}`;
     if (seen.has(sig)) removedDupes += 1;
