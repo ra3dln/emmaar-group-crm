@@ -52,8 +52,7 @@ check(
 check(
   'الكارت الموحّد: مفيش اتصال مباشر (tel:) — الرقم مش بيرنّ لوحده',
   !/tel:/.test(card)
-);
-check(
+);check(
   'رقم الهاتف في الكارت بيفتح نفس النافذة (مش رنّ مباشر)',
   /className="cc-phone"[\s\S]{0,160}onCall\?\.\(client\)/.test(card)
 );
@@ -110,14 +109,14 @@ check(
     /<StatusBoardView[\s\S]{0,800}onCall=\{\(c: any\) => setCallClient\(c\)\}/.test(app)
 );
 
-// ===== ٥) النافذة نفسها: «تم الرد / لم يرد» + الاتصال من جواها =====
+// ===== ٥) النافذة نفسها: «Answered / No Answer» + الاتصال من جواها =====
 check(
-  'النافذة فيها نتيجتي «تم الرد» و«لم يرد»',
-  /تم الرد/.test(modal) && /لم يرد/.test(modal)
+  'النافذة فيها نتيجتي Answered و No Answer',
+  /Answered/.test(modal) && /No Answer/.test(modal)
 );
 check(
-  'الاتصال الفعلي (الرنّ) من جوه النافذة: «الاتصال بالعميل الآن»',
-  /الاتصال بالعميل الآن/.test(modal) && /href=\{`tel:\$\{client\.phone\}`\}/.test(modal)
+  'الاتصال الفعلي (الرنّ) من جوه النافذة: زر «Call now»',
+  /Call now/.test(modal) && /href=\{`tel:\$\{client\.phone\}`\}/.test(modal)
 );
 check(
   'النافذة بتوضّح للرقم الموزّع إن المكالمة على الرقم نفسه',

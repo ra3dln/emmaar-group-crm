@@ -68,8 +68,28 @@ export const feedbackByPhone = (
     if (!key) return;
     const prev = map.get(key);
     if (prev && String(prev.at) > String(snapshot.at)) return;
+    // حالة فارغة ما بتقدرش تمسح حالة معروفة (فيدباك من غير حالة صريحة)
+    if (!snapshot.status && prev?.status) {
+      if (String(snapshot.at) > String(prev.at)) prev.at = snapshot.at;
+      return;
+    }
     map.set(key, snapshot);
   };
+
+  // ===== ترتيب مهم =====
+  // سجل المكالمات الأول، بعدين بطاقات الفيدباك: لأن أكتر من حدث واحد (مكالمة +
+  // فيدباك) بيتسجّل في نفس اللحظة، والفيصل هو **الحالة الصريحة** اللي اختارها
+  // المندوب في الفيدباك (follow up / meeting / done deal …)، لا نتيجة المكالمة
+  // الضمنية. فلو المعالجة كانت بالعكس، المكالمة كانت هتنسخ الحالة وترجّع
+  // الرقم لـ follow-up حتى لو المندوب حطّه meeting.
+  for (const log of callLogs || []) {
+    put(log?.clientPhone, {
+      status: log?.result === 'no-answer' ? 'no-answer' : 'follow-up',
+      cancelReason: '',
+      note: String(log?.comment || ''),
+      at: String(log?.createdAt || ''),
+    });
+  }
 
   for (const feedback of feedbacks || []) {
     put(feedback?.clientPhone, {
@@ -77,16 +97,6 @@ export const feedbackByPhone = (
       cancelReason: String(feedback?.cancelReason || ''),
       note: String(feedback?.feedback || ''),
       at: String(feedback?.createdAt || feedback?.date || ''),
-    });
-  }
-
-  // سجل المكالمة يحمل حالة ضمنية (تم الرد / لم يرد) حتى لو ما اختارش المندوب حالة
-  for (const log of callLogs || []) {
-    put(log?.clientPhone, {
-      status: log?.result === 'no-answer' ? 'no-answer' : 'follow-up',
-      cancelReason: '',
-      note: String(log?.comment || ''),
-      at: String(log?.createdAt || ''),
     });
   }
 

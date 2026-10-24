@@ -3541,6 +3541,44 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
 }
 .eg-filter.is-on b { background: var(--brand-primary-soft); color: var(--text-strong); }
 
+/* ---------- صفحة الأرقام: العنوان + الرجوع ---------- */
+.eg-leads-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.eg-back {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.eg-back:hover { background: var(--tint-2); color: var(--text-strong); }
+.eg-leads-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eg-leads-count {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-muted);
+  background: var(--tint-2);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- كارت الرقم ---------- */
 .eg-list { display: flex; flex-direction: column; gap: 10px; }
 .eg-empty {

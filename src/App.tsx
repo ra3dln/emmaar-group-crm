@@ -1287,47 +1287,58 @@ function DevPreview({ screen: initial }: { screen: string }) {
       <style>{`
         .eg-preview .eg-tabbar { display: flex; position: static; margin-top: 14px; border-radius: var(--r-lg); border: 1px solid var(--border); }
         .eg-preview-body { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px; }
+        /* إطار موبايل 390px: التحويل (transform) بيخلي العناصر fixed جوّه الإطار
+           تتحسب جوّه الإطار نفسه — زي ما هي على شاشة الموبايل فعلاً */
+        .eg-phone {
+          width: 390px; margin: 0 auto; overflow: hidden;
+          border-radius: 28px; border: 1px solid var(--border);
+          background: var(--bg); position: relative; transform: translateZ(0);
+          box-shadow: 0 18px 50px rgba(0,0,0,.45);
+        }
+        .eg-phone.is-screen { height: 760px; }
       `}</style>
       <div className="mx-auto eg-preview" style={{ maxWidth: 430 }}>
         <div className="eg-filters mb-4">
           {[
-            { id: 'dashboard', label: 'الرئيسية (لوحة الأرقام)' },
-            { id: 'leads', label: 'الأرقام (Leads)' },
-            { id: 'sheet', label: 'نافذة الإجراء' },
+            { id: 'dashboard', label: 'Dashboard (Leads Board)' },
+            { id: 'leads', label: 'Leads' },
+            { id: 'sheet', label: 'Action sheet' },
           ].map((s) => (
             <button key={s.id} type="button" className={`eg-filter ${screen === s.id ? 'is-on' : ''}`}
               onClick={() => setScreen(s.id)}>{s.label}</button>
           ))}
         </div>
 
-        <div className="eg-preview-body">
-          {screen === 'dashboard' && (
-            <DashboardView
-              stats={mockStats} clients={mockClients} numbers={mockNumbers} reminders={[]}
-              properties={[]} currentUser={mockUser} impersonating={true} callLogs={mockCallLogs}
-              onOpenStatus={() => {}} onCompleteReminder={() => {}} onActed={() => {}}
+        <div className={`eg-phone ${screen === 'sheet' ? 'is-screen' : ''}`}>
+          <div className="eg-preview-body">
+            {screen === 'dashboard' && (
+              <DashboardView
+                stats={mockStats} clients={mockClients} numbers={mockNumbers} reminders={[]}
+                properties={[]} currentUser={mockUser} impersonating={true} callLogs={mockCallLogs}
+                onOpenStatus={() => {}} onCompleteReminder={() => {}} onActed={() => {}}
+              />
+            )}
+            {screen === 'leads' && (
+              <LeadsView
+                currentUser={mockUser} numbers={mockNumbers} leads={mockLeads} callLogs={mockCallLogs}
+                filter="" onFilter={() => {}} onOpen={() => {}} onBack={() => setScreen('dashboard')}
+              />
+            )}
+          </div>
+
+          {screen === 'sheet' && (
+            <CallFlowModal
+              client={{ id: 'crm-lead-01001234567', name: 'محمد كامل', phone: '01001234567' }}
+              comments={mockComments}
+              onClose={() => setScreen('leads')}
+              onSave={() => {}}
             />
           )}
-          {screen === 'leads' && (
-            <LeadsView
-              currentUser={mockUser} numbers={mockNumbers} leads={mockLeads} callLogs={mockCallLogs}
-              filter="" onFilter={() => {}} onOpen={() => {}}
-            />
+
+          {screen !== 'sheet' && (
+            <MobileTabBar activeTab={screen === 'leads' ? 'leads' : 'dashboard'} onTab={() => {}} onMore={() => {}} badge={2} />
           )}
         </div>
-
-        {screen === 'sheet' && (
-          <CallFlowModal
-            client={{ id: 'crm-lead-01001234567', name: 'محمد كامل', phone: '01001234567' }}
-            comments={mockComments}
-            onClose={() => setScreen('leads')}
-            onSave={() => {}}
-          />
-        )}
-
-        {screen !== 'sheet' && (
-          <MobileTabBar activeTab={screen === 'leads' ? 'leads' : 'dashboard'} onTab={() => {}} onMore={() => {}} badge={2} />
-        )}
       </div>
     </div>
   );
@@ -1407,6 +1418,8 @@ function App() {
   // فلتر الحالة في صفحة «الأرقام» ('' = كل الأرقام) — العدّادات في «الرئيسية»
   // بتفتح نفس الصفحة مفلترة على الحالة اللي اتضغطت.
   const [leadsFilter, setLeadsFilter] = useState<string>('');
+  // صفحة الأرقام مفتوحة جوه الرئيسية (مش تبويب مستقل) — دي «الرقم» في ENGAZ
+  const [leadsOpen, setLeadsOpen] = useState(false);
   // صوت رسائل المحادثة فقط — التذكيرات نوتفكيشن صامتة (بند ٦) وما بتستخدمش الصوت.
   const [soundEnabled, setSoundEnabled] = useState(true);
   // صلاحية إشعارات المتصفح على هذا الجهاز (default = لم يُسأل بعد)
@@ -1825,6 +1838,8 @@ function App() {
   // فلو عملت ريفريش ترجع لنفس المكان، ولو قفلت الموقع وفتحته تاني كذلك.
   useEffect(() => {
     if (!currentUser) return;
+    // صفحة الأرقام جوه الرئيسية: لو خرجنا للتبويب تاني نرجع للوحة الأرقام
+    if (activeTab !== 'dashboard') setLeadsOpen(false);
     // لو تغيّرت صلاحية الحساب أثناء فتح الصفحة، نرجع لتبويب مسموح بدل شاشة فاضية
     const devMenus = !!(currentUser as User).developer && !impersonator;
     const guardRole = impersonator && (currentUser as User).developer ? 'sales' : currentUser.role;
@@ -3154,9 +3169,6 @@ function App() {
                     {tab.id === chatTab && unreadCount > 0 && (
                       <span className="side-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>
                     )}
-                    {tab.id === 'leads' && newCampaignLeadsCount > 0 && (
-                      <span className="side-badge">{newCampaignLeadsCount > 9 ? '9+' : newCampaignLeadsCount}</span>
-                    )}
                   </button>
                 ))}
               </div>
@@ -3383,21 +3395,25 @@ function App() {
           </div>
         )}
         <AnimatePresence mode="wait">
-          {activeTab === 'dashboard' && isSalesView && <DashboardView stats={stats} clients={clients} numbers={workNumbers} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} callLogs={callLogs} onOpenStatus={(id: string) => { setLeadsFilter(id || ''); setActiveTab('leads'); }} onCompleteReminder={completeReminder} onActed={markReminderAction} />}
-          {/* ===== صفحة الأرقام (نفس موديل Leads في ENGAZ) ===== */}
-          {activeTab === 'leads' && isSalesView && <LeadsView
-            currentUser={currentUser}
-            numbers={workNumbers}
-            leads={assignedLeads}
-            callLogs={callLogs}
-            filter={leadsFilter}
-            onFilter={setLeadsFilter}
-            onOpen={(target: any) => {
-              if (!target) return;
-              const client = (clients || []).find((c: Client) => String(c.id) === String(target.id));
-              setCallClient(client || leadCallTarget(target));
-            }}
-          />}
+          {activeTab === 'dashboard' && isSalesView && (leadsOpen ? (
+            /* ===== كل الأرقام بتتعمل من الرئيسية: العدّادات بتفتح الصفحة دي ===== */
+            <LeadsView
+              currentUser={currentUser}
+              numbers={workNumbers}
+              leads={assignedLeads}
+              callLogs={callLogs}
+              filter={leadsFilter}
+              onFilter={setLeadsFilter}
+              onBack={() => setLeadsOpen(false)}
+              onOpen={(target: any) => {
+                if (!target) return;
+                const client = (clients || []).find((c: Client) => String(c.id) === String(target.id));
+                setCallClient(client || leadCallTarget(target));
+              }}
+            />
+          ) : (
+            <DashboardView stats={stats} clients={clients} numbers={workNumbers} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} callLogs={callLogs} onOpenStatus={(id: string) => { setLeadsFilter(id || ''); setLeadsOpen(true); }} onCompleteReminder={completeReminder} onActed={markReminderAction} />
+          ))}
           {activeTab === 'clients' && isSalesView && <ClientsView
             currentUser={currentUser}
             onRefresh={loadData}
@@ -3542,7 +3558,7 @@ function App() {
             activeTab={activeTab}
             onTab={(id: string) => setActiveTab(id as TabType)}
             onMore={() => setSidebarOpen(true)}
-            badge={newCampaignLeadsCount}
+            badge={0}
           />
         )}
         </div>
@@ -4195,10 +4211,8 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
       label: 'لوحة العمل',
       items: [
         { id: 'dashboard', icon: Home, label: 'الرئيسية' },
-        // كل الأرقام (عملاء + أرقام camshain) بفلاتر الحالة — مثل صفحة Leads في ENGAZ
-        { id: 'leads', icon: Share2, label: 'الأرقام' },
         // «العملاء» = الأرقام اللي أضافها السيلز بنفسه فقط (مش أرقام الكامبين)
-        { id: 'clients', icon: Users, label: 'العملاء' },
+        { id: 'clients', icon: Users, label: 'عملائي' },
       ],
     },
     {
@@ -4209,7 +4223,7 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
       label: 'المتابعة',
       items: [
         // التذكيرات ما بقاش لها تبويب: بقيت إشعار + شارة برتقالية على الجرس
-        { id: 'daily-feedback', icon: ClipboardList, label: 'الفيدباك' },
+        // والفيدباك: كومنتاته بتظهر جوّه نافذة الإجراء على كل رقم
         { id: 'chat', icon: MessagesSquare, label: 'المحادثة' },
         { id: 'reports', icon: BarChart3, label: 'التقارير' },
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
@@ -4677,15 +4691,15 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
   );
 }
 
-// ===== شريط التنقل السفلي (موديل ENGAZ: Home / Leads / Timeline / More) =====
-// على الموبايل: ٤ أزرار ثابتة في أسفل الشاشة — الرئيسية، الأرقام، الفيدباك
-// (الخط الزمني للأحداث)، والمزيد (بيفتح القائمة الجانبية بكل التبويبات).
+// ===== شريط التنقل السفلي (موديل ENGAZ) =====
+// على الموبايل: ٣ أزرار ثابتة في أسفل الشاشة — الرئيسية، عملائي، والمزيد
+// (بيفتح القائمة الجانبية بكل التبويبات). الأرقام كلها بتتعمل من الرئيسية:
+// العدّادات بتفتح صفحة الأرقام، وكل رقم بيفتح نافذة الإجراء.
 // على الشاشات الكبيرة القائمة الجانبية هي اللي بتضل هي والأيقونات دي بتختفي.
 function MobileTabBar({ activeTab, onTab, onMore, badge = 0 }: any) {
   const items = [
     { id: 'dashboard', label: 'الرئيسية', icon: Home },
-    { id: 'leads', label: 'الأرقام', icon: Share2 },
-    { id: 'daily-feedback', label: 'الفيدباك', icon: ClipboardList },
+    { id: 'clients', label: 'عملائي', icon: Users },
   ];
   return (
     <nav className="eg-tabbar" aria-label="تنقل سريع">
@@ -4694,7 +4708,7 @@ function MobileTabBar({ activeTab, onTab, onMore, badge = 0 }: any) {
           onClick={() => onTab(item.id)} aria-current={activeTab === item.id ? 'page' : undefined}>
           <span className="eg-tab-icon">
             <item.icon className="w-5 h-5" />
-            {item.id === 'leads' && badge > 0 && <i className="eg-tab-badge">{badge > 9 ? '9+' : badge}</i>}
+            {item.id === 'clients' && badge > 0 && <i className="eg-tab-badge">{badge > 9 ? '9+' : badge}</i>}
           </span>
           <span className="eg-tab-label">{item.label}</span>
         </button>
@@ -4759,8 +4773,8 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
           عدّاد يفتح صفحة «الأرقام» مفلترة على الحالة دي. */}
       <section className="eg-dash">
         <div className="eg-dash-head">
-          <h3>لوحة الأرقام</h3>
-          <span className="chip">{scopeNumbers.length} رقم</span>
+          <h3>Leads Board</h3>
+          <span className="chip">{scopeNumbers.length} leads</span>
         </div>
         <div className="eg-dash-grid">
           {DASH_CARDS.map((card) => {
@@ -6580,41 +6594,44 @@ function LeadFeedCard({ lead, record, onLeadViewed, onCall, cancelled = false, c
 }
 
 // ===== الحالات كما في ENGAZ =====
+// الأسماء بالإنجليزي زي ما كانت في لوحة «المراحل» (follow up / meeting / done deal)،
+// والألوان هي ألوان المراحل نفسها (fs-follow / fs-meeting …).
 // «مكالمات باردة» مش حالة فيدباك: هو رقم لسه ما اتصلنا بيه خالص.
 // والترتيب هو ترتيب ENGAZ: كل الأرقام، جديد، مكالمات باردة، متابعة، معاينة…
 const COLD_CALL_ID = 'cold-call';
 const LEAD_STATUS_LABELS: Record<string, string> = {
-  'fresh-stage': 'أرقام جديدة',
-  [COLD_CALL_ID]: 'مكالمات باردة',
-  'follow-up': 'متابعة',
-  meeting: 'معاينة',
-  'after-meeting': 'متابعة بعد المعاينة',
-  reschedule: 'إعادة جدولة',
-  cancellation: 'إلغاء',
-  'no-answer': 'لم يرد',
-  'done-deal': 'تم البيع',
-  reservation: 'حجز',
+  '': 'All Leads',
+  'fresh-stage': 'Fresh Leads',
+  [COLD_CALL_ID]: 'Cold Calls',
+  'follow-up': 'Follow Up',
+  meeting: 'Meeting',
+  'after-meeting': 'Following after Meeting',
+  reschedule: 'Reschedule Meeting',
+  cancellation: 'Cancellation',
+  'no-answer': 'No Answer',
+  'done-deal': 'Done Deal',
+  reservation: 'Reservation',
 };
 const LEAD_STATUS_ORDER = [
   'fresh-stage', COLD_CALL_ID, 'follow-up', 'meeting', 'after-meeting',
   'reschedule', 'cancellation', 'no-answer', 'done-deal', 'reservation',
 ];
 
-// ===== عدّادات لوحة الأرقام (ترتيب ENGAZ) =====
-// كل الأرقام، جديد، مكالمات باردة، متابعة، معاينة، متابعة بعد المعاينة،
-// إعادة جدولة، إلغاء، لم يرد، تم البيع، حجز.
+// ===== عدّادات لوحة الأرقام (ترتيب ENGAZ — أسماء إنجليزي) =====
+// All Leads, Fresh Leads, Cold Calls, Follow Up, Meeting, Following after
+// Meeting, Reschedule Meeting, Cancellation, No Answer, Done Deal, Reservation.
 const DASH_CARDS: Array<{ id: string; label: string; cls: string }> = [
-  { id: '', label: 'كل الأرقام', cls: '' },
-  { id: 'fresh-stage', label: 'أرقام جديدة', cls: 'fs-fresh' },
-  { id: COLD_CALL_ID, label: 'مكالمات باردة', cls: 'fs-cold' },
-  { id: 'follow-up', label: 'متابعة', cls: 'fs-follow' },
-  { id: 'meeting', label: 'معاينة', cls: 'fs-meeting' },
-  { id: 'after-meeting', label: 'متابعة بعد المعاينة', cls: 'fs-after' },
-  { id: 'reschedule', label: 'إعادة جدولة', cls: 'fs-reschedule' },
-  { id: 'cancellation', label: 'إلغاء', cls: 'fs-cancel' },
-  { id: 'no-answer', label: 'لم يرد', cls: 'fs-noanswer' },
-  { id: 'done-deal', label: 'تم البيع', cls: 'fs-done' },
-  { id: 'reservation', label: 'حجز', cls: 'fs-reservation' },
+  { id: '', label: 'All Leads', cls: '' },
+  { id: 'fresh-stage', label: 'Fresh Leads', cls: 'fs-fresh' },
+  { id: COLD_CALL_ID, label: 'Cold Calls', cls: 'fs-cold' },
+  { id: 'follow-up', label: 'Follow Up', cls: 'fs-follow' },
+  { id: 'meeting', label: 'Meeting', cls: 'fs-meeting' },
+  { id: 'after-meeting', label: 'Following after Meeting', cls: 'fs-after' },
+  { id: 'reschedule', label: 'Reschedule Meeting', cls: 'fs-reschedule' },
+  { id: 'cancellation', label: 'Cancellation', cls: 'fs-cancel' },
+  { id: 'no-answer', label: 'No Answer', cls: 'fs-noanswer' },
+  { id: 'done-deal', label: 'Done Deal', cls: 'fs-done' },
+  { id: 'reservation', label: 'Reservation', cls: 'fs-reservation' },
 ];
 
 // ملاحظة الرقم: نص الوصف بدون جزء «التاريخ: …» (الوقت معروض في مكانه)
@@ -6651,6 +6668,8 @@ type LeadRow = {
   formName: string;
   note: string;
   isLead: boolean;
+  // رقم جديد ما اتصلناش فيه خالص (يدخل في فلتر «Cold Calls»)
+  cold?: boolean;
   client?: any;
   lead?: any;
 };
@@ -6702,7 +6721,7 @@ function EngazLeadCard({ row, onOpen, onCall }: { row: LeadRow; onOpen: () => vo
 // الحالة (زي ENGAZ)، وضغط أي حالة بيصفّي الأرقام، والضغط على رقم بيفتح نافذة
 // الإجراء (الحالة + الكومنت + التذكير + آخر التعليقات).
 function LeadsView({
-  currentUser, numbers = [], leads = [], callLogs = [], filter = '', onFilter, onOpen, onAdd,
+  currentUser, numbers = [], leads = [], callLogs = [], filter = '', onFilter, onOpen, onBack,
 }: any) {
   const [query, setQuery] = useState('');
   const [field, setField] = useState<'all' | 'name' | 'phone' | 'form'>('all');
@@ -6726,20 +6745,21 @@ function LeadsView({
         : leadByKey.get(key);
       const record = client || lead || {};
       const bucket = String(n?.bucket || 'fresh-stage');
+      // «Cold Calls» مش حالة: هو الرقم الجديد اللي ما اتصلناش فيه خالص
       const cold = bucket === 'fresh-stage' && !calledKeys.has(key);
-      const status = cold ? COLD_CALL_ID : bucket;
       const time = campaignTimeOf(record);
       out.push({
         key: String(n?.key || key || ''),
         name: String(n?.name || record?.name || 'بدون اسم'),
         phone: String(n?.phone || record?.phone || ''),
-        status,
-        statusLabel: LEAD_STATUS_LABELS[status] || LEAD_STATUS_LABELS['fresh-stage'],
-        statusCls: status === COLD_CALL_ID ? 'fs-cold' : (FEEDBACK_STATUS_BY_ID[status]?.cls || 'fs-fresh'),
+        status: bucket,
+        statusLabel: LEAD_STATUS_LABELS[bucket] || LEAD_STATUS_LABELS['fresh-stage'],
+        statusCls: FEEDBACK_STATUS_BY_ID[bucket]?.cls || 'fs-fresh',
         dateLabel: campaignStamp(time.at),
         formName: formNameOf(record),
         note: leadNoteOf(lead || client || {}),
         isLead: !client,
+        cold,
         client,
         lead,
       });
@@ -6750,14 +6770,19 @@ function LeadsView({
   // العدّادات: كل الأرقام + كل حالة (الباردة = لسه ما اتصلنا بيه)
   const counts = useMemo(() => {
     const map: Record<string, number> = {};
-    for (const row of rows) map[row.status] = (map[row.status] || 0) + 1;
+    for (const row of rows) {
+      map[row.status] = (map[row.status] || 0) + 1;
+      if (row.cold) map[COLD_CALL_ID] = (map[COLD_CALL_ID] || 0) + 1;
+    }
     return map;
   }, [rows]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     let list = rows;
-    if (filter) list = list.filter((row) => row.status === filter);
+    // «Cold Calls» فلتر خاص: الأرقام الجديدة اللي ما اتصلناش فيها
+    if (filter === COLD_CALL_ID) list = list.filter((row) => row.cold);
+    else if (filter) list = list.filter((row) => row.status === filter);
     if (!q) return list;
     return list.filter((row) => {
       if (field === 'name') return row.name.toLowerCase().includes(q);
@@ -6773,18 +6798,27 @@ function LeadsView({
 
   return (
     <div className="eg-leads">
+      {/* ===== العنوان + الرجوع للوحة الأرقام ===== */}
+      <div className="eg-leads-head">
+        <button type="button" className="eg-back" onClick={onBack} title="رجوع" aria-label="رجوع">
+          <ChevronRight className="w-4.5 h-4.5" />
+        </button>
+        <h3 className="eg-leads-title">{LEAD_STATUS_LABELS[filter] || LEAD_STATUS_LABELS['']}</h3>
+        <span className="eg-leads-count">{visible.length}</span>
+      </div>
+
       {/* ===== شريط البحث: نبحث في كل البيانات أو في حقل واحد ===== */}
       <div className="eg-search">
         <select className="eg-search-field" value={field} onChange={(e) => setField(e.target.value as any)}
-          aria-label="نبحث في">
-          <option value="all">بيانات الرقم</option>
-          <option value="name">الاسم</option>
-          <option value="phone">الهاتف</option>
-          <option value="form">الفورم</option>
+          aria-label="Search in">
+          <option value="all">Lead Info</option>
+          <option value="name">Name</option>
+          <option value="phone">Phone</option>
+          <option value="form">Form</option>
         </select>
         <input className="eg-search-input" value={query} onChange={(e) => setQuery(e.target.value)}
-          placeholder="بحث…" aria-label="بحث في الأرقام" />
-        <button type="button" className="eg-search-btn" title="بحث" aria-label="بحث">
+          placeholder="Search…" aria-label="Search leads" />
+        <button type="button" className="eg-search-btn" title="Search" aria-label="Search">
           <Search className="w-4.5 h-4.5" />
         </button>
       </div>
@@ -6792,7 +6826,7 @@ function LeadsView({
       {/* ===== فلاتر الحالة (نفس ترتيب ENGAZ) ===== */}
       <div className="eg-filters nav-scroll">
         <button type="button" className={`eg-filter ${!filter ? 'is-on' : ''}`} onClick={() => onFilter('')}>
-          كل الأرقام <b>{rows.length}</b>
+          {LEAD_STATUS_LABELS['']} <b>{rows.length}</b>
         </button>
         {LEAD_STATUS_ORDER.map((id) => (
           <button key={id} type="button" className={`eg-filter ${filter === id ? 'is-on' : ''}`}
@@ -6806,7 +6840,7 @@ function LeadsView({
       <div className="eg-list">
         {visible.length === 0 ? (
           <p className="eg-empty">
-            {rows.length === 0 ? 'لسه مفيش أرقام — استلم أرقام من الإدارة أو ضيف رقم بنفسك.' : 'مفيش أرقام في الفلتر ده.'}
+            {rows.length === 0 ? 'No leads yet — get leads from the admin or add one yourself.' : 'No leads in this filter.'}
           </p>
         ) : (
           visible.map((row) => (
@@ -7121,31 +7155,31 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
             <div className="w-16 h-16 mx-auto rounded-[var(--r-xl)] gradient-success flex items-center justify-center mb-4">
               <Check className="w-8 h-8 text-[var(--text-strong)]" />
             </div>
-            <h3 className="text-lg font-bold text-[var(--text-strong)] mb-1">تم تسجيل الإجراء</h3>
+            <h3 className="text-lg font-bold text-[var(--text-strong)] mb-1">Action saved</h3>
             <p className="text-xs text-[var(--text-muted)] mb-5">
-              {result === 'answered' ? 'مسجّل: تم الرد ' : 'مسجّل: لم يرد '}
-              {nextCallAt ? ' • وتم ضبط تذكير بموعد الإجراء القادم' : ''}
+              {result === 'answered' ? 'Saved: Answered ' : 'Saved: No Answer '}
+              {nextCallAt ? ' • a reminder was scheduled for the next action' : ''}
             </p>
-            <button onClick={onClose} className="btn-primary w-full justify-center">إغلاق</button>
+            <button onClick={onClose} className="btn-primary w-full justify-center">Close</button>
           </div>
         ) : (
           <>
             {/* ===== شريط الأدوات فوق (زي ENGAZ) ===== */}
             <div className="eg-sheet-tools">
-              <button type="button" className="eg-icon-btn" title="عرض التفاصيل" onClick={() => onOpenDetails?.(client)}>
+              <button type="button" className="eg-icon-btn" title="View details" onClick={() => onOpenDetails?.(client)}>
                 <Eye className="w-4.5 h-4.5" />
               </button>
-              <button type="button" className="eg-icon-btn" title="اكتب الكومنت" onClick={() => commentRef.current?.focus()}>
+              <button type="button" className="eg-icon-btn" title="Write comment" onClick={() => commentRef.current?.focus()}>
                 <Edit3 className="w-4.5 h-4.5" />
               </button>
-              <button type="button" className="eg-icon-btn is-primary" title="إجراء جديد"
+              <button type="button" className="eg-icon-btn is-primary" title="New action"
                 onClick={() => { setComment(''); setResult(''); setTimeout(() => commentRef.current?.focus(), 30); }}>
                 <Plus className="w-4.5 h-4.5" />
               </button>
-              <button type="button" className="eg-icon-btn" title="نسخ الرقم" onClick={() => void copyPhone()}>
+              <button type="button" className="eg-icon-btn" title="Copy number" onClick={() => void copyPhone()}>
                 <Menu className="w-4.5 h-4.5" />
               </button>
-              <button type="button" className="eg-icon-btn" title="إغلاق" onClick={onClose}>
+              <button type="button" className="eg-icon-btn" title="Close" onClick={onClose}>
                 <LogOut className="w-4.5 h-4.5" />
               </button>
             </div>
@@ -7156,22 +7190,22 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
                 <h2 className="eg-sheet-name">{client.name}</h2>
                 <p className="eg-sheet-phone" dir="ltr">{client.phone}</p>
                 {client.virtualLead && (
-                  <p className="eg-sheet-tag">رقم موزّع — المكالمة هتتسجَّل على الرقم نفسه</p>
+                  <p className="eg-sheet-tag">Distributed lead — the call is saved on the number itself</p>
                 )}
               </div>
             </div>
 
             {/* ===== الاتصال (الرنّ الحقيقي بيحصل هنا) ===== */}
             <a href={`tel:${client.phone}`} onClick={() => setDialed(true)} className="eg-call">
-              <PhoneCall className="w-4.5 h-4.5" /> الاتصال بالعميل الآن
+              <PhoneCall className="w-4.5 h-4.5" /> Call now
             </a>
-            {dialed && <p className="eg-hint">حدّد النتيجة بعد ما تقفل الاتصال.</p>}
+            {dialed && <p className="eg-hint">Set the result after you end the call.</p>}
 
             {/* ===== الحالة ===== */}
             <div className="eg-row">
               <StatusMenu
                 value={status}
-                label="اختر الحالة (follow up / done deal …)"
+                label="Select status (follow up / done deal …)"
                 className="fc-status-menu"
                 stopPropagation={false}
                 onPick={(id: string) => {
@@ -7189,14 +7223,14 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
               <input type="datetime-local" value={nextCallAt} dir="ltr" className="eg-date-input"
                 onChange={(e) => setNextCallAt(e.target.value)} />
               {nextCallAt && (
-                <button type="button" className="eg-clear" title="مسح الموعد" onClick={() => setNextCallAt('')}>
+                <button type="button" className="eg-clear" title="Clear date" onClick={() => setNextCallAt('')}>
                   <X className="w-4 h-4" />
                 </button>
               )}
             </div>
 
             <div className="eg-quick">
-              {[['بعد ساعة', 60], ['بعد ساعتين', 120], ['بكرة', 1440], ['الأسبوع الجاي', 10080]].map(([label, mins]) => (
+              {[['After 1hr', 60], ['After 2hr', 120], ['Tomorrow', 1440], ['Next week', 10080]].map(([label, mins]) => (
                 <button key={label as string} type="button"
                   onClick={() => { const d = new Date(); d.setMinutes(d.getMinutes() + (mins as number)); setNextCallAt(toLocalInput(d)); }}
                   className="eg-quick-btn">
@@ -7208,16 +7242,16 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
             {/* ===== تم الرد / لم يرد ===== */}
             <div className="eg-seg">
               <button type="button" className={result === 'answered' ? 'is-on is-yes' : ''} onClick={() => pick('answered')}>
-                تم الرد
+                Answered
               </button>
               <button type="button" className={result === 'no-answer' ? 'is-on is-no' : ''} onClick={() => pick('no-answer')}>
-                لم يرد
+                No Answer
               </button>
             </div>
 
             {/* ===== الكومنت ===== */}
             <textarea ref={commentRef} value={comment} onChange={(e) => setComment(e.target.value)}
-              placeholder="اكتب الكومنت هنا…"
+              placeholder="Enter your comment here…"
               className="eg-textarea" />
 
             {status === 'cancellation' && (
@@ -7236,30 +7270,30 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
             {/* ===== آخر التعليقات ===== */}
             <div className="eg-comments">
               <div className="eg-comments-head">
-                آخر التعليقات <b>{comments.length}</b>
+                Last comments <b>{comments.length}</b>
               </div>
               {comments.length === 0 ? (
-                <p className="eg-empty">لسه مفيش تعليقات على الرقم ده.</p>
+                <p className="eg-empty">No comments on this lead yet.</p>
               ) : (
                 comments.map((c: any) => (
                   <div key={c.id} className="eg-comment">
-                    <span className="eg-avatar">{String(c.by || '؟').trim().charAt(0) || '؟'}</span>
+                    <span className="eg-avatar">{String(c.by || '?').trim().charAt(0) || '?'}</span>
                     <div className="eg-comment-body">
                       <div className="eg-comment-top">
                         <b>{c.by}</b>
                         {c.status && FEEDBACK_STATUS_BY_ID[c.status] && (
                           <span className={`eg-chip ${FEEDBACK_STATUS_BY_ID[c.status].cls}`}>
-                            {FEEDBACK_STATUS_BY_ID[c.status].ar}
+                            {LEAD_STATUS_LABELS[c.status] || FEEDBACK_STATUS_BY_ID[c.status].label}
                           </span>
                         )}
                       </div>
                       {c.at && <span className="eg-comment-at">{formatDateTime(c.at)}</span>}
                       {c.text && <p className="eg-comment-text">{c.text}</p>}
-                      {c.nextAt && <p className="eg-comment-next">الإجراء التالي: {c.nextAt}</p>}
+                      {c.nextAt && <p className="eg-comment-next">Next Action : {c.nextAt}</p>}
                     </div>
                     {c.result && (
                       <span className={`eg-result ${c.result === 'answered' ? 'is-yes' : 'is-no'}`}>
-                        {c.result === 'answered' ? 'تم الرد' : 'لم يرد'}
+                        {c.result === 'answered' ? 'Answered' : 'No Answer'}
                       </span>
                     )}
                   </div>
@@ -7269,9 +7303,9 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
 
             <button type="button" onClick={save} className="eg-submit"
               disabled={status === 'cancellation' && !cancelReason}>
-              إضافة إجراء
+              Add Action
             </button>
-            {!result && <p className="eg-hint text-center">اختر «تم الرد» أو «لم يرد» ثم اكتب الكومنت.</p>}
+            {!result && <p className="eg-hint text-center">Pick “Answered” or “No Answer”, then write your comment.</p>}
           </>
         )}
       </motion.div>
