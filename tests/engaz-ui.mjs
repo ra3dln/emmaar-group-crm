@@ -167,6 +167,11 @@ check('ستايل نافذة الإجراء موجود', /\.eg-sheet \{/.test(cs
 check('ستايل الشريط السفلي موجود', /\.eg-tabbar \{/.test(css) && /\.eg-tab \{/.test(css));
 check('ستايل عنوان صفحة الأرقام موجود', /\.eg-leads-head \{/.test(css) && /\.eg-back \{/.test(css));
 check('لون «مكالمات باردة» مستقل', /\.fs-cold \{/.test(css));
+// وضع الاختصار (standalone) على آيفون: الارتفاع لازم يُقاس بالمساحة المرئية (dvh)
+// لا بـ vh — وإلا زرار «Add Action» بيختفي تحت الشاشة والأزرار ما تشتغلش.
+check('نافذة الإجراء بتقاس بارتفاع dvh (آيفون في وضع الاختصار)', /\.eg-sheet \{[^}]*max-height: 92dvh/.test(css));
+check('المحتوى بيترك مساحة تحت شريط التنقل السفلي', /padding-bottom: calc\(84px \+ var\(--safe-bottom\)\)/.test(css));
+check('الدرج الجانبي فوق شريط التنقل (مش متداخل)', /\.app-sidebar\.open|\.app-sidebar \{/.test(css) && /z-index: 110/.test(css));
 
 // ===== ١٢) المعاينة المحلية (تطوير فقط — مش في الإنتاج) =====
 check('معاينة الواجهة شغالة بس في وضع التطوير', /import\.meta\.env\.DEV/.test(app) && /DevPreview/.test(app));

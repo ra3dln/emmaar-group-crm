@@ -3701,7 +3701,10 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
   position: relative;
   width: 100%;
   max-width: 560px;
+  /* الارتفاع بالمساحة المرئية فعلاً (dvh) لا بـ vh: في وضع الاختصار (standalone)
+     على آيفون الـ vh أكبر من الشاشة، فكان زرار «Add Action» بيختفي تحت الشاشة. */
   max-height: 92vh;
+  max-height: 92dvh;
   overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
