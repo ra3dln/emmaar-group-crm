@@ -102,6 +102,8 @@ export interface AssignedLead {
   formName?: string;
   // وقت تسجيل الرقم في الكامبين (وقت نزوله في الفورم) — مش وقت استيراده
   campaignAt?: string;
+  // الرقم أضافه السيلز بنفسه (مش رقم camshain) — تبويب «العملاء» بيعرضه
+  manual?: boolean;
 }
 
 export interface Reminder {
@@ -206,4 +208,4 @@ export interface ChatMessage {
   readBy?: string[]; // من قرأها — تُستخدم في غرفة المدراء الجماعية
 }
 
-export type TabType = 'dashboard' | 'clients' | 'admin-clients' | 'admin-forms' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'new-leads' | 'reports' | 'chat' | 'admin-users' | 'admin-feedback' | 'admin-leads' | 'admin-attendance' | 'admin-analytics' | 'admin-chat' | 'admin-settings';
+export type TabType = 'dashboard' | 'clients' | 'leads' | 'admin-clients' | 'admin-forms' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'new-leads' | 'reports' | 'chat' | 'admin-users' | 'admin-feedback' | 'admin-leads' | 'admin-attendance' | 'admin-analytics' | 'admin-chat' | 'admin-settings';

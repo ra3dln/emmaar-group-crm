@@ -44,12 +44,13 @@ import {
   type LeadAssignment,
 } from '../shared/autoAssign.js';
 import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount } from '../shared/roles.js';
-import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor } from '../shared/leadClients.js';
+import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor, LEAD_CLIENT_ID_PREFIX } from '../shared/leadClients.js';
 import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
 import {
   FEEDBACK_STATUS_TO_STAGE,
   LEAD_STATUS_TO_FEEDBACK_STATUS,
   buildWorkNumbers,
+  digitsOfPhone,
   feedbackBucketOf,
   feedbackByPhone,
   latestFeedbackStatusOf,
@@ -130,6 +131,68 @@ const leadCallTarget = (lead: any, record?: any): CallTarget => {
     stage: 'new',
     virtualLead: true,
   };
+};
+
+// ===== الرقم اليدوي: اللي أضافه السيلز بنفسه (مش رقم كامبين) =====
+// أرقام الكامبين جايها باسم الفورم (formName) ووقت تسجيلها في الفورم
+// (campaignAt)، فاللي مالوش الاتنين = رقم أضافه السيلز بنفسه.
+// وتبويب «العملاء» بيعرض الأرقام دي فقط — وأرقام الكامبين في صفحة «الأرقام».
+const isManualLead = (lead: any): boolean =>
+  !!(lead?.manual) || (!lead?.formName && !lead?.campaignAt);
+
+// ===== آخر التعليقات على رقم (عميل أو رقم موزَّع) =====
+// العميل: خطّه الزمني + بطاقات الفيدباك على نفس الهاتف. الرقم الموزَّع:
+// بطاقات الفيدباك + سجل المكالمات — كلهم مربوطين بالهاتف، فتبقى القصة كاملة.
+const commentsOfTarget = (
+  target: any,
+  clients: any[] = [],
+  feedbacks: any[] = [],
+  callLogs: any[] = [],
+  users: any[] = []
+): Array<{ id: string; by: string; at: string; text: string; status?: string; result?: string; nextAt?: string }> => {
+  const phone = digitsOfPhone(target?.phone);
+  const nameOf = (userId: any) =>
+    String((users || []).find((u: any) => String(u?.id) === String(userId))?.name || 'المندوب');
+  const out: Array<{ id: string; by: string; at: string; text: string; status?: string; result?: string; nextAt?: string }> = [];
+
+  const client = (clients || []).find((c: any) => String(c?.id) === String(target?.id));
+  for (const a of (client?.activities || [])) {
+    const text = String(a?.text || '').trim();
+    if (!text) continue;
+    out.push({
+      id: String(a?.id || ''),
+      by: String(a?.by || nameOf(a?.authorId)),
+      at: String(a?.at || ''),
+      text,
+      status: String(a?.status || ''),
+    });
+  }
+
+  for (const f of (feedbacks || [])) {
+    if (digitsOfPhone(f?.clientPhone) !== phone) continue;
+    out.push({
+      id: String(f?.id || ''),
+      by: nameOf(f?.userId),
+      at: String(f?.createdAt || f?.date || ''),
+      text: String(f?.feedback || ''),
+      status: String(f?.status || ''),
+      result: f?.callStatus === 'called' ? 'answered' : f?.callStatus === 'no-answer' ? 'no-answer' : '',
+    });
+  }
+
+  for (const l of (callLogs || [])) {
+    if (digitsOfPhone(l?.clientPhone) !== phone) continue;
+    out.push({
+      id: String(l?.id || ''),
+      by: nameOf(l?.salesId),
+      at: String(l?.createdAt || ''),
+      text: String(l?.comment || ''),
+      result: l?.result === 'no-answer' ? 'no-answer' : 'answered',
+    });
+  }
+
+  out.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  return out;
 };
 
 // وقت مختصر للرسالة: الساعة لو اليوم، وإلا اليوم والشهر
@@ -1155,6 +1218,121 @@ const sendNotification = (title: string, body: string, tag?: string) => {
   void localNotification(title, body, tag || `crm-${Date.now()}`);
 };
 
+// ===== معاينة الواجهة الجديدة (وضع التطوير فقط) =====
+// تفتح بـ ?preview=dashboard أو ?preview=leads أو ?preview=sheet — بتعرض نفس
+// الكومبوننتس اللي في النسخة الحقيقية ببيانات وهمية، عشان تشوف الشكل قبل الرفع.
+// الكود ده بيتشال بالكامل من نسخة الإنتاج (import.meta.env.DEV = false).
+function DevPreview({ screen: initial }: { screen: string }) {
+  const [screen, setScreen] = useState(initial);
+
+  const mockUser = { id: 'u1', name: 'محمد سمير', role: 'sales' } as any;
+  const mockClients: any[] = [
+    {
+      id: 'crm-lead-01001234567', name: 'محمد كامل', phone: '01001234567',
+      stage: 'contacted', createdAt: '2026-10-10T14:00:00.000Z', campaignAt: '2026-10-10T14:00:00.000Z',
+      updatedAt: '2026-10-24T08:00:00.000Z', formName: 'New CAVA',
+      source: 'رقم موزّع — استيراد تلقائي • المصدر: فيسبوك - New CAVA • التاريخ: 10/10/2026 - 02:00 م',
+      activities: [
+        { id: 'a1', type: 'feedback', text: 'طلب معاينة العقار Saturday', status: 'follow-up', at: '2026-10-23T12:10:00.000Z', by: 'محمد سمير' },
+        { id: 'a2', type: 'call', text: 'اتصال: تم الرد', at: '2026-10-23T12:00:00.000Z', by: 'محمد سمير' },
+      ],
+    },
+    {
+      id: 'crm-lead-01112223344', name: 'عمر ياسر', phone: '01112223344',
+      stage: 'meeting', createdAt: '2026-10-23T12:00:00.000Z', campaignAt: '2026-10-23T12:00:00.000Z',
+      updatedAt: '2026-10-24T08:00:00.000Z', formName: 'CAVA VIP',
+      source: 'رقم موزّع — استيراد تلقائي • المصدر: فيسبوك - CAVA VIP • التاريخ: 23/10/2026 - 03:00 م',
+      activities: [
+        { id: 'b1', type: 'feedback', text: 'اتفق على معاينة units 12', status: 'meeting', at: '2026-10-24T09:00:00.000Z', by: 'محمد سمير' },
+      ],
+    },
+    {
+      id: 'crm-lead-01223334455', name: 'محمود احمد', phone: '01223334455',
+      stage: 'new', createdAt: '2026-10-22T07:43:00.000Z', campaignAt: '2026-10-22T07:43:00.000Z',
+      updatedAt: '2026-10-22T09:43:00.000Z', formName: 'GO ADS',
+      source: 'رقم موزّع — استيراد تلقائي • المصدر: فيسبوك - GO ADS • التاريخ: 22/10/2026 - 09:43 ص',
+      activities: [],
+    },
+  ];
+  const mockLeads: any[] = [
+    {
+      id: 'l1', name: 'OmYazed WeEyad', phone: '01099887766', formName: 'New CAVA',
+      campaignAt: '2026-10-23T12:00:00.000Z', status: 'new', salesId: 'u1',
+      description: 'استيراد تلقائي • المصدر: فيسبوك - New CAVA • التاريخ: 23/10/2026 - 03:00 م',
+      createdAt: '2026-10-23T12:05:00.000Z',
+    },
+    {
+      id: 'l2', name: 'محمود احمد', phone: '01088776655', formName: 'Palm Hills',
+      campaignAt: '2026-10-22T07:43:00.000Z', status: 'new', salesId: 'u1',
+      description: 'استيراد تلقائي • المصدر: فيسبوك - Palm Hills • التاريخ: 22/10/2026 - 09:43 ص',
+      createdAt: '2026-10-22T09:43:00.000Z',
+    },
+  ];
+  const mockCallLogs: any[] = [
+    { id: 'cl1', salesId: 'u1', clientPhone: '01001234567', result: 'answered', comment: 'طلب معاينة', createdAt: '2026-10-23T12:00:00.000Z' },
+  ];
+  const mockNumbers = buildWorkNumbers(mockClients, mockLeads, new Map());
+  const mockStats = {
+    totalClients: mockClients.length, campaignClients: mockClients.length,
+    facebookClients: 0, externalClients: 0, totalProperties: 0, dueNow: 0,
+  };
+  const mockComments = [
+    { id: 'k1', by: 'محمد سمير', at: '2026-10-23T12:10:00.000Z', text: 'طلب معاينة العقار Saturday', status: 'follow-up', result: 'answered' },
+    { id: 'k2', by: 'محمد سمير', at: '2026-10-23T12:00:00.000Z', text: 'اتصال: تم الرد', result: 'answered' },
+  ];
+
+  return (
+    <div className="min-h-screen bg-[var(--bg)] p-4">
+      {/* المعاينة على شاشة الموبايل: الشريط السفلي يبان جوه الإطار */}
+      <style>{`
+        .eg-preview .eg-tabbar { display: flex; position: static; margin-top: 14px; border-radius: var(--r-lg); border: 1px solid var(--border); }
+        .eg-preview-body { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px; }
+      `}</style>
+      <div className="mx-auto eg-preview" style={{ maxWidth: 430 }}>
+        <div className="eg-filters mb-4">
+          {[
+            { id: 'dashboard', label: 'الرئيسية (لوحة الأرقام)' },
+            { id: 'leads', label: 'الأرقام (Leads)' },
+            { id: 'sheet', label: 'نافذة الإجراء' },
+          ].map((s) => (
+            <button key={s.id} type="button" className={`eg-filter ${screen === s.id ? 'is-on' : ''}`}
+              onClick={() => setScreen(s.id)}>{s.label}</button>
+          ))}
+        </div>
+
+        <div className="eg-preview-body">
+          {screen === 'dashboard' && (
+            <DashboardView
+              stats={mockStats} clients={mockClients} numbers={mockNumbers} reminders={[]}
+              properties={[]} currentUser={mockUser} impersonating={true} callLogs={mockCallLogs}
+              onOpenStatus={() => {}} onCompleteReminder={() => {}} onActed={() => {}}
+            />
+          )}
+          {screen === 'leads' && (
+            <LeadsView
+              currentUser={mockUser} numbers={mockNumbers} leads={mockLeads} callLogs={mockCallLogs}
+              filter="" onFilter={() => {}} onOpen={() => {}}
+            />
+          )}
+        </div>
+
+        {screen === 'sheet' && (
+          <CallFlowModal
+            client={{ id: 'crm-lead-01001234567', name: 'محمد كامل', phone: '01001234567' }}
+            comments={mockComments}
+            onClose={() => setScreen('leads')}
+            onSave={() => {}}
+          />
+        )}
+
+        {screen !== 'sheet' && (
+          <MobileTabBar activeTab={screen === 'leads' ? 'leads' : 'dashboard'} onTab={() => {}} onMore={() => {}} badge={2} />
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   // نبدأ من آخر تبويب محفوظ للحساب (بدل «الرئيسية» في كل ريفريش)، فالاستعادة
@@ -1226,6 +1404,9 @@ function App() {
   const [propertySearch, setPropertySearch] = useState('');
   // بند ٤: الحالة المفتوحة — صفحة فيها كل أرقام الحالة دي
   const [statusBoard, setStatusBoard] = useState<string | null>(null);
+  // فلتر الحالة في صفحة «الأرقام» ('' = كل الأرقام) — العدّادات في «الرئيسية»
+  // بتفتح نفس الصفحة مفلترة على الحالة اللي اتضغطت.
+  const [leadsFilter, setLeadsFilter] = useState<string>('');
   // صوت رسائل المحادثة فقط — التذكيرات نوتفكيشن صامتة (بند ٦) وما بتستخدمش الصوت.
   const [soundEnabled, setSoundEnabled] = useState(true);
   // صلاحية إشعارات المتصفح على هذا الجهاز (default = لم يُسأل بعد)
@@ -2445,6 +2626,14 @@ function App() {
   // «عملاء كامبين» و«توزيع الأرقام» (قبل أي return شرطي احتراماً لقواعد الـ Hooks)
   const activeCampaignForms = useActiveCampaignForms(!!currentUser && currentUser.role !== 'sales');
 
+  // ===== معاينة الواجهة الجديدة (وضع التطوير فقط) =====
+  // ?preview=dashboard|leads|sheet — نفس الكومبوننتس الحقيقية ببيانات وهمية،
+  // عشان نتفق على الشكل قبل الرفع. الكود ده مش موجود في نسخة الإنتاج.
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    const preview = new URLSearchParams(window.location.search).get('preview');
+    if (preview) return <DevPreview screen={preview} />;
+  }
+
   if (!currentUser) {
     return <LoginScreen onLogin={(user) => {
       setCurrentUser(user);
@@ -2476,7 +2665,8 @@ function App() {
   const queryWords = (value: string): string[] =>
     normalizeArabicText(value).split(/\s+/).filter((word) => word.length >= 3);
 
-  const filteredClients = clients.filter((c) => {
+  // بحث العميل: نفس الفلتر لكل القوائم (كل العملاء، أو الأرقام اليدوية بس)
+  const matchesClientQuery = (c: Client): boolean => {
     const query = normalizeArabicText(searchTerm).trim();
     if (!query) return true;
     const ownerName = users.find((u: User) => u.id === c.userId || u.id === c.assignedTo)?.name || '';
@@ -2497,7 +2687,18 @@ function App() {
     if (digitsQuery.length >= 3 && normalizeDigits(haystack).replace(/\D/g, '').includes(digitsQuery)) return true;
 
     return moneyMatches(searchTerm, c.budget || '', parsePrice(c.budget || ''));
-  });
+  };
+  const filteredClients = clients.filter(matchesClientQuery);
+
+  // ===== تبويب «العملاء»: الأرقام اللي أضافها السيلز بنفسه فقط =====
+  // عملاء الكامبين التلقائيين (المعرّف crm-lead-…) مش في العملاء: هم في صفحة
+  // «الأرقام» مع باقي الأرقام، عشان العدّادات تبقى صورة واحدة للحقيقة.
+  const manualClients = clients
+    .filter((c: Client) => !String(c?.id || '').startsWith(LEAD_CLIENT_ID_PREFIX))
+    .filter(matchesClientQuery);
+  const manualLeads = assignedLeads.filter(
+    (l: AssignedLead) => l.salesId === currentUser.id && isManualLead(l)
+  );
 
   // فلتر الاحتياجات يُستخدم أيضاً في البحث العام (غرفتين، عشر آلاف، متشطبة…)
   const propertyNeeds = propertySearch.trim() ? parseNeeds(propertySearch) : null;
@@ -2656,6 +2857,12 @@ function App() {
   const newCampaignLeadsCount = isSalesView
     ? assignedLeads.filter((l) => l.salesId === currentUser.id && l.status === 'new' && isCampaignRecord(l)).length
     : 0;
+
+  // ===== التذكيرات المتأخرة: ما بقاش لها تبويب، بقت شارة برتقانية على الجرس =====
+  // أي حساب عنده تذكير اتأخر (ولا مستحقّ لسه) بيشوف العدد ده فوق الجرس فوراً.
+  const delayedRemindersCount = (reminders || []).filter(
+    (r: Reminder) => !r.isCompleted && (r.isDelayed || isReminderDue(r))
+  ).length;
 
   // فتح جرس الإشعارات = قراءة كل الإشعارات دفعة واحدة (كل التبويبات)،
   // لا التبويب المعروض فقط — وإلا يظل العدّاد الأحمر عالقاً بعد الإغلاق.
@@ -2947,10 +3154,7 @@ function App() {
                     {tab.id === chatTab && unreadCount > 0 && (
                       <span className="side-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>
                     )}
-                    {tab.id === 'reminders' && stats.dueNow > 0 && (
-                      <span className="side-badge">{stats.dueNow}</span>
-                    )}
-                    {tab.id === 'clients' && newCampaignLeadsCount > 0 && (
+                    {tab.id === 'leads' && newCampaignLeadsCount > 0 && (
                       <span className="side-badge">{newCampaignLeadsCount > 9 ? '9+' : newCampaignLeadsCount}</span>
                     )}
                   </button>
@@ -3033,10 +3237,14 @@ function App() {
               className="icon-btn relative"
             >
               <Bell className="w-4 h-4" />
-              {unseenNotifCount > 0 && (
+              {delayedRemindersCount > 0 ? (
+                <span className="topbar-badge is-delay" title={`${delayedRemindersCount} تذكير متأخر`}>
+                  {delayedRemindersCount > 9 ? '9+' : delayedRemindersCount}
+                </span>
+              ) : unseenNotifCount > 0 ? (
                 <span className="topbar-badge">{unseenNotifCount > 9 ? '9+' : unseenNotifCount}</span>
-              )}
-              {notifState !== 'subscribed' && unseenNotifCount === 0 && (
+              ) : null}
+              {notifState !== 'subscribed' && unseenNotifCount === 0 && delayedRemindersCount === 0 && (
                 <span className="topbar-badge is-warn" />
               )}
             </motion.button>
@@ -3175,12 +3383,26 @@ function App() {
           </div>
         )}
         <AnimatePresence mode="wait">
-          {activeTab === 'dashboard' && isSalesView && <DashboardView stats={stats} clients={clients} numbers={workNumbers} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} onOpenStatus={setStatusBoard} onCompleteReminder={completeReminder} onActed={markReminderAction} />}
+          {activeTab === 'dashboard' && isSalesView && <DashboardView stats={stats} clients={clients} numbers={workNumbers} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} callLogs={callLogs} onOpenStatus={(id: string) => { setLeadsFilter(id || ''); setActiveTab('leads'); }} onCompleteReminder={completeReminder} onActed={markReminderAction} />}
+          {/* ===== صفحة الأرقام (نفس موديل Leads في ENGAZ) ===== */}
+          {activeTab === 'leads' && isSalesView && <LeadsView
+            currentUser={currentUser}
+            numbers={workNumbers}
+            leads={assignedLeads}
+            callLogs={callLogs}
+            filter={leadsFilter}
+            onFilter={setLeadsFilter}
+            onOpen={(target: any) => {
+              if (!target) return;
+              const client = (clients || []).find((c: Client) => String(c.id) === String(target.id));
+              setCallClient(client || leadCallTarget(target));
+            }}
+          />}
           {activeTab === 'clients' && isSalesView && <ClientsView
             currentUser={currentUser}
             onRefresh={loadData}
-            clients={filteredClients}
-            leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)}
+            clients={manualClients}
+            leads={manualLeads}
             callLogs={callLogs.filter((l: CallLog) => l.salesId === currentUser.id)}
             feedbacks={dailyFeedbacks}
             searchTerm={searchTerm}
@@ -3315,6 +3537,14 @@ function App() {
           {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} />}
         </AnimatePresence>
         </main>
+        {isSalesView && (
+          <MobileTabBar
+            activeTab={activeTab}
+            onTab={(id: string) => setActiveTab(id as TabType)}
+            onMore={() => setSidebarOpen(true)}
+            badge={newCampaignLeadsCount}
+          />
+        )}
         </div>
       </div>
 
@@ -3335,7 +3565,21 @@ function App() {
             onClose={() => setSelectedUserFeedback(null)}
           />}
         {selectedClient && <ClientDetailModal client={selectedClient} onClose={() => setSelectedClient(null)} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
-        {callClient && <CallFlowModal client={callClient} user={currentUser} fromReminder={!!reminderCallId} onClose={() => { setCallClient(null); setReminderCallId(null); }} onSave={handleSaveCall} />}
+        {callClient && <CallFlowModal
+          client={callClient}
+          user={currentUser}
+          fromReminder={!!reminderCallId}
+          comments={commentsOfTarget(callClient, clients, dailyFeedbacks, callLogs, users)}
+          onOpenDetails={(target: any) => {
+            const detail = (clients || []).find((x: Client) => String(x.id) === String(target?.id));
+            if (!detail) return;
+            setCallClient(null);
+            setReminderCallId(null);
+            setSelectedClient(detail);
+          }}
+          onClose={() => { setCallClient(null); setReminderCallId(null); }}
+          onSave={handleSaveCall}
+        />}
         {selectedProperty && <PropertyDetailModal property={selectedProperty} users={users} onClose={() => setSelectedProperty(null)} onSuccess={loadData} />}
         {selectedUser && <UserDetailModal user={selectedUser} currentUser={currentUser} onClose={() => setSelectedUser(null)} onSuccess={loadData} />}
         {selectedTeam && <TeamDetailModal team={selectedTeam} users={users} currentUser={currentUser} onClose={() => setSelectedTeam(null)} onSuccess={loadData} />}
@@ -3951,9 +4195,10 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
       label: 'لوحة العمل',
       items: [
         { id: 'dashboard', icon: Home, label: 'الرئيسية' },
-        // أرقام الكامبين بقت جوه «العملاء» — وكل رقم موزَّع بيتحوّل عميلاً تلقائياً
+        // كل الأرقام (عملاء + أرقام camshain) بفلاتر الحالة — مثل صفحة Leads في ENGAZ
+        { id: 'leads', icon: Share2, label: 'الأرقام' },
+        // «العملاء» = الأرقام اللي أضافها السيلز بنفسه فقط (مش أرقام الكامبين)
         { id: 'clients', icon: Users, label: 'العملاء' },
-        { id: 'pipeline', icon: Workflow, label: 'المراحل' },
       ],
     },
     {
@@ -3963,10 +4208,11 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
     {
       label: 'المتابعة',
       items: [
-        { id: 'reminders', icon: BellRing, label: 'التذكيرات' },
+        // التذكيرات ما بقاش لها تبويب: بقيت إشعار + شارة برتقالية على الجرس
         { id: 'daily-feedback', icon: ClipboardList, label: 'الفيدباك' },
         { id: 'chat', icon: MessagesSquare, label: 'المحادثة' },
         { id: 'reports', icon: BarChart3, label: 'التقارير' },
+        { id: 'pipeline', icon: Workflow, label: 'المراحل' },
       ],
     },
   ];
@@ -4431,8 +4677,38 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
   );
 }
 
+// ===== شريط التنقل السفلي (موديل ENGAZ: Home / Leads / Timeline / More) =====
+// على الموبايل: ٤ أزرار ثابتة في أسفل الشاشة — الرئيسية، الأرقام، الفيدباك
+// (الخط الزمني للأحداث)، والمزيد (بيفتح القائمة الجانبية بكل التبويبات).
+// على الشاشات الكبيرة القائمة الجانبية هي اللي بتضل هي والأيقونات دي بتختفي.
+function MobileTabBar({ activeTab, onTab, onMore, badge = 0 }: any) {
+  const items = [
+    { id: 'dashboard', label: 'الرئيسية', icon: Home },
+    { id: 'leads', label: 'الأرقام', icon: Share2 },
+    { id: 'daily-feedback', label: 'الفيدباك', icon: ClipboardList },
+  ];
+  return (
+    <nav className="eg-tabbar" aria-label="تنقل سريع">
+      {items.map((item) => (
+        <button key={item.id} type="button" className={`eg-tab ${activeTab === item.id ? 'is-on' : ''}`}
+          onClick={() => onTab(item.id)} aria-current={activeTab === item.id ? 'page' : undefined}>
+          <span className="eg-tab-icon">
+            <item.icon className="w-5 h-5" />
+            {item.id === 'leads' && badge > 0 && <i className="eg-tab-badge">{badge > 9 ? '9+' : badge}</i>}
+          </span>
+          <span className="eg-tab-label">{item.label}</span>
+        </button>
+      ))}
+      <button type="button" className="eg-tab" onClick={onMore}>
+        <span className="eg-tab-icon"><Menu className="w-5 h-5" /></span>
+        <span className="eg-tab-label">المزيد</span>
+      </button>
+    </nav>
+  );
+}
+
 // Dashboard View
-function DashboardView({ stats, clients, numbers = [], reminders, properties, currentUser, impersonating, onOpenStatus, onCompleteReminder, onActed }: any) {
+function DashboardView({ stats, clients, numbers = [], reminders, properties, currentUser, impersonating, onOpenStatus, onCompleteReminder, onActed, callLogs = [] }: any) {
   const dueReminders = reminders
     .filter((r: Reminder) => isReminderDue(r) && !r.isCompleted)
     .slice()
@@ -4444,6 +4720,14 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
   const myClients = (clients || []) as Client[];
   // لوحة الحالات تعدّ كل رقم في نطاقي (عميل مسجّل أو رقم في التوزيع) — لا العملاء وحدهم
   const scopeNumbers: any[] = numbers.length ? numbers : myClients;
+  // «مكالمات باردة» (زي ENGAZ): أرقام ما اتصلنا بيها خالص — بلا أي مكالمة مسجّلة
+  const calledPhones = new Set(
+    (callLogs || []).map((l: any) => digitsOfPhone(l?.clientPhone)).filter(Boolean)
+  );
+  const coldCalls = scopeNumbers.filter((record: any) => {
+    const bucket = record.bucket || feedbackBucketOf(record);
+    return bucket === 'fresh-stage' && !calledPhones.has(digitsOfPhone(record.phone));
+  }).length;
   const [todayRecord, setTodayRecord] = useState<Attendance | undefined>(() => getTodayCheckIn(currentUser.id));
   const myHistory = getAttendance().filter((a: Attendance) => a.userId === currentUser.id).sort((a: Attendance, b: Attendance) => b.checkInAt.localeCompare(a.checkInAt)).slice(0, 7);
   
@@ -4471,47 +4755,28 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
         />
       )}
 
-      {/* الأرقام العامة: سطر واحد هادئ. البطل في الصفحة دي هو لوحة الحالات تحت. */}
-      <div className="stat-strip">
-        {[
-          { label: 'إجمالي العملاء', value: stats.totalClients },
-          { label: 'عملاء كامبين', value: stats.campaignClients },
-          { label: 'عملاء فيسبوك', value: stats.facebookClients },
-          { label: 'عملاء خارجي', value: stats.externalClients },
-          { label: 'العقارات', value: stats.totalProperties },
-          { label: 'مستحقة الآن', value: stats.dueNow, alert: true },
-        ].map((stat) => (
-          <div key={stat.label} className={`stat-cell${stat.alert && stat.value > 0 ? ' is-alert' : ''}`}>
-            <span className="stat-label">{stat.label}</span>
-            <span className="stat-value">{stat.value}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* بند ٤: لوحة الحالات — الرقم هو البطل، والضغط يفتح صفحة كل أرقام الحالة */}
-      <section className="panel status-panel">
-        <div className="panel-head">
-          <h3>حالات عملائي</h3>
+      {/* بند ٤: لوحة الأرقام — العدّادات هي البطل (زي ENGAZ)، والضغط على أي
+          عدّاد يفتح صفحة «الأرقام» مفلترة على الحالة دي. */}
+      <section className="eg-dash">
+        <div className="eg-dash-head">
+          <h3>لوحة الأرقام</h3>
           <span className="chip">{scopeNumbers.length} رقم</span>
         </div>
-        <div className="status-buckets">
-          {FEEDBACK_STATUSES.map((s) => {
-            const n = scopeNumbers.filter((record: any) =>
-              (record.bucket || feedbackBucketOf(record)) === s.id
-            ).length;
+        <div className="eg-dash-grid">
+          {DASH_CARDS.map((card) => {
+            const n = card.id === ''
+              ? scopeNumbers.length
+              : card.id === COLD_CALL_ID
+              ? coldCalls
+              : scopeNumbers.filter((record: any) => (record.bucket || feedbackBucketOf(record)) === card.id).length;
+            const pct = scopeNumbers.length ? Math.min(100, Math.round((n / scopeNumbers.length) * 100)) : 0;
             return (
-              <button
-                key={s.id}
-                type="button"
-                title={s.ar}
-                className={`sb-cell ${s.cls}${n === 0 ? ' is-empty' : ''}`}
-                onClick={() => onOpenStatus?.(s.id)}
-              >
-                <span className="sb-count">{n}</span>
-                <span className="sb-body">
-                  <b>{s.label}</b>
-                  <small>{s.ar}</small>
-                </span>
+              <button key={card.id || 'all'} type="button" title={card.label}
+                className={`eg-dash-card ${card.cls}${n === 0 ? ' is-empty' : ''}`}
+                onClick={() => onOpenStatus?.(card.id)}>
+                <span className="eg-dash-label">{card.label}</span>
+                <span className="eg-dash-count">{n}</span>
+                <span className="eg-dash-bar"><i style={{ width: `${pct}%` }} /></span>
               </button>
             );
           })}
@@ -5077,15 +5342,17 @@ function FormNameChip({ record, className = '' }: { record: any; className?: str
 
 // ===== توقيت تسجيل الرقم في الكامبين: اليوم/الشهر + الساعة =====
 // يُكتب جمب الرقم زي اسم الفورم بالظبط (٢٤/١٠ • ١١:٢٦ ص)
+// التوقيت المخزَّن هو وقت التسجيل نفسه (بتوقيت UTC كما كتبه السيرفر)،
+// فنعرضه بتوقيت UTC باش يطلع بنفس الوقت المسجَّل في الفورم — مش متغيّر بتوقيت الجهاز.
 const campaignTimeLabel = (value?: string): string => {
   const at = Date.parse(String(value || ''));
   if (!value || Number.isNaN(at)) return '';
   const d = new Date(at);
   const pad = (n: number) => String(n).padStart(2, '0');
-  const hours = d.getHours();
+  const hours = d.getUTCHours();
   const period = hours < 12 ? 'ص' : 'م';
   const hour12 = hours % 12 === 0 ? 12 : hours % 12;
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} • ${pad(hour12)}:${pad(d.getMinutes())} ${period}`;
+  return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)} • ${pad(hour12)}:${pad(d.getUTCMinutes())} ${period}`;
 };
 
 // ===== توقيت تسجيل الرقم في الكامبين: اليوم/الشهر + الساعة =====
@@ -6312,6 +6579,250 @@ function LeadFeedCard({ lead, record, onLeadViewed, onCall, cancelled = false, c
   );
 }
 
+// ===== الحالات كما في ENGAZ =====
+// «مكالمات باردة» مش حالة فيدباك: هو رقم لسه ما اتصلنا بيه خالص.
+// والترتيب هو ترتيب ENGAZ: كل الأرقام، جديد، مكالمات باردة، متابعة، معاينة…
+const COLD_CALL_ID = 'cold-call';
+const LEAD_STATUS_LABELS: Record<string, string> = {
+  'fresh-stage': 'أرقام جديدة',
+  [COLD_CALL_ID]: 'مكالمات باردة',
+  'follow-up': 'متابعة',
+  meeting: 'معاينة',
+  'after-meeting': 'متابعة بعد المعاينة',
+  reschedule: 'إعادة جدولة',
+  cancellation: 'إلغاء',
+  'no-answer': 'لم يرد',
+  'done-deal': 'تم البيع',
+  reservation: 'حجز',
+};
+const LEAD_STATUS_ORDER = [
+  'fresh-stage', COLD_CALL_ID, 'follow-up', 'meeting', 'after-meeting',
+  'reschedule', 'cancellation', 'no-answer', 'done-deal', 'reservation',
+];
+
+// ===== عدّادات لوحة الأرقام (ترتيب ENGAZ) =====
+// كل الأرقام، جديد، مكالمات باردة، متابعة، معاينة، متابعة بعد المعاينة،
+// إعادة جدولة، إلغاء، لم يرد، تم البيع، حجز.
+const DASH_CARDS: Array<{ id: string; label: string; cls: string }> = [
+  { id: '', label: 'كل الأرقام', cls: '' },
+  { id: 'fresh-stage', label: 'أرقام جديدة', cls: 'fs-fresh' },
+  { id: COLD_CALL_ID, label: 'مكالمات باردة', cls: 'fs-cold' },
+  { id: 'follow-up', label: 'متابعة', cls: 'fs-follow' },
+  { id: 'meeting', label: 'معاينة', cls: 'fs-meeting' },
+  { id: 'after-meeting', label: 'متابعة بعد المعاينة', cls: 'fs-after' },
+  { id: 'reschedule', label: 'إعادة جدولة', cls: 'fs-reschedule' },
+  { id: 'cancellation', label: 'إلغاء', cls: 'fs-cancel' },
+  { id: 'no-answer', label: 'لم يرد', cls: 'fs-noanswer' },
+  { id: 'done-deal', label: 'تم البيع', cls: 'fs-done' },
+  { id: 'reservation', label: 'حجز', cls: 'fs-reservation' },
+];
+
+// ملاحظة الرقم: نص الوصف بدون جزء «التاريخ: …» (الوقت معروض في مكانه)
+// ومن غير سطور المصدر والاستيراد (اسم الفورم معروض في مكانه أصلاً).
+const leadNoteOf = (record: any): string =>
+  String(record?.description || record?.source || '')
+    .replace(/^رقم\s*موز[\u064B-\u0652]*ع\s*[—–-]\s*/u, '')
+    .split('•')
+    .map((part) => part.trim())
+    .filter((part) => part && !/^(التاريخ|المصدر)\s*:/.test(part))
+    .filter((part) => !/^(استيراد تلقائي|رقم تجريبي)/.test(part))
+    .join(' • ');
+
+// ===== توقيت الرقم بالشكل ENGAZ (ميلادي، LTR) =====
+// التوقيت المخزَّن هو وقت التسجيل نفسه بتوقيت UTC (كما كتبه السيرفر)،
+// فنعرضه بتوقيت UTC باش يطلع بنفس الرقم المسجَّل في الفورم بالظبط.
+const campaignStamp = (value?: string): string => {
+  const at = Date.parse(String(value || ''));
+  if (!value || Number.isNaN(at)) return '';
+  const d = new Date(at);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+};
+
+// ===== صف الرقم في صفحة الأرقام =====
+type LeadRow = {
+  key: string;
+  name: string;
+  phone: string;
+  status: string;
+  statusLabel: string;
+  statusCls: string;
+  dateLabel: string;
+  formName: string;
+  note: string;
+  isLead: boolean;
+  client?: any;
+  lead?: any;
+};
+
+// ===== كارت الرقم (موديل ENGAZ) =====
+// الحالة بنقطة ملوّنة + وقت التسجيل + الاسم + الرقم + اسم الفورم (زي ما هو)
+// + الملاحظة + زرار الاتصال والواتساب. الضغط على الكارت يفتح نافذة الإجراء.
+function EngazLeadCard({ row, onOpen, onCall }: { row: LeadRow; onOpen: () => void; onCall: () => void }) {
+  return (
+    <article className="eg-card" onClick={onOpen}>
+      <div className="eg-card-top">
+        <span className={`eg-chip ${row.statusCls}`}>
+          <i className="eg-dot" />
+          {row.statusLabel}
+        </span>
+        <span className="eg-date" dir="ltr">{row.dateLabel}</span>
+      </div>
+
+      <div className="eg-card-main">
+        <div className="eg-name">{row.name}</div>
+        <div className="eg-phone" dir="ltr">{row.phone}</div>
+        {row.note && <p className="eg-note">{row.note}</p>}
+      </div>
+
+      <div className="eg-card-side">
+        {row.formName && (
+          <span className="eg-form" title={`الفورم: ${row.formName}`}>
+            <Building2 className="w-3.5 h-3.5 shrink-0" />
+            <span translate="no">{row.formName}</span>
+          </span>
+        )}
+        <div className="eg-acts" onClick={(e) => e.stopPropagation()}>
+          <button type="button" className="eg-act is-call" title="تسجيل اتصال (رد / لم يرد)"
+            onClick={(e) => { e.stopPropagation(); onCall(); }}>
+            <PhoneCall className="w-4.5 h-4.5" />
+          </button>
+          <a className="eg-act is-wa" title="واتساب" dir="ltr" target="_blank" rel="noreferrer"
+            href={waLink(row.phone)} onClick={(e) => e.stopPropagation()}>
+            <MessageCircle className="w-4.5 h-4.5" />
+          </a>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+// ===== صفحة الأرقام (موديل ENGAZ: Leads) =====
+// كل رقم شغّال عليه المندوب في مكان واحد: عميل مسجّل أو رقم موزَّع. فوقه فلاتر
+// الحالة (زي ENGAZ)، وضغط أي حالة بيصفّي الأرقام، والضغط على رقم بيفتح نافذة
+// الإجراء (الحالة + الكومنت + التذكير + آخر التعليقات).
+function LeadsView({
+  currentUser, numbers = [], leads = [], callLogs = [], filter = '', onFilter, onOpen, onAdd,
+}: any) {
+  const [query, setQuery] = useState('');
+  const [field, setField] = useState<'all' | 'name' | 'phone' | 'form'>('all');
+
+  // كل الأرقام مرة واحدة: العميل بحالته، والرقم الموزَّع بحالة آخر فيدباك عليه
+  const rows: LeadRow[] = useMemo(() => {
+    const leadByKey = new Map<string, any>();
+    for (const lead of leads || []) {
+      const key = digitsOfPhone(lead?.phone);
+      if (key && !leadByKey.has(key)) leadByKey.set(key, lead);
+    }
+    const calledKeys = new Set(
+      (callLogs || []).map((l: any) => digitsOfPhone(l?.clientPhone)).filter(Boolean)
+    );
+    const out: LeadRow[] = [];
+    for (const n of numbers || []) {
+      const client = n?.client;
+      const key = digitsOfPhone(n?.phone);
+      const lead = n?.leadId
+        ? (leads || []).find((l: any) => String(l?.id) === String(n.leadId))
+        : leadByKey.get(key);
+      const record = client || lead || {};
+      const bucket = String(n?.bucket || 'fresh-stage');
+      const cold = bucket === 'fresh-stage' && !calledKeys.has(key);
+      const status = cold ? COLD_CALL_ID : bucket;
+      const time = campaignTimeOf(record);
+      out.push({
+        key: String(n?.key || key || ''),
+        name: String(n?.name || record?.name || 'بدون اسم'),
+        phone: String(n?.phone || record?.phone || ''),
+        status,
+        statusLabel: LEAD_STATUS_LABELS[status] || LEAD_STATUS_LABELS['fresh-stage'],
+        statusCls: status === COLD_CALL_ID ? 'fs-cold' : (FEEDBACK_STATUS_BY_ID[status]?.cls || 'fs-fresh'),
+        dateLabel: campaignStamp(time.at),
+        formName: formNameOf(record),
+        note: leadNoteOf(lead || client || {}),
+        isLead: !client,
+        client,
+        lead,
+      });
+    }
+    return out;
+  }, [numbers, leads, callLogs]);
+
+  // العدّادات: كل الأرقام + كل حالة (الباردة = لسه ما اتصلنا بيه)
+  const counts = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const row of rows) map[row.status] = (map[row.status] || 0) + 1;
+    return map;
+  }, [rows]);
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let list = rows;
+    if (filter) list = list.filter((row) => row.status === filter);
+    if (!q) return list;
+    return list.filter((row) => {
+      if (field === 'name') return row.name.toLowerCase().includes(q);
+      if (field === 'phone') return row.phone.replace(/\D/g, '').includes(q.replace(/\D/g, ''));
+      if (field === 'form') return row.formName.toLowerCase().includes(q);
+      return (
+        row.name.toLowerCase().includes(q) ||
+        row.phone.replace(/\D/g, '').includes(q.replace(/\D/g, '')) ||
+        row.formName.toLowerCase().includes(q)
+      );
+    });
+  }, [rows, filter, query, field]);
+
+  return (
+    <div className="eg-leads">
+      {/* ===== شريط البحث: نبحث في كل البيانات أو في حقل واحد ===== */}
+      <div className="eg-search">
+        <select className="eg-search-field" value={field} onChange={(e) => setField(e.target.value as any)}
+          aria-label="نبحث في">
+          <option value="all">بيانات الرقم</option>
+          <option value="name">الاسم</option>
+          <option value="phone">الهاتف</option>
+          <option value="form">الفورم</option>
+        </select>
+        <input className="eg-search-input" value={query} onChange={(e) => setQuery(e.target.value)}
+          placeholder="بحث…" aria-label="بحث في الأرقام" />
+        <button type="button" className="eg-search-btn" title="بحث" aria-label="بحث">
+          <Search className="w-4.5 h-4.5" />
+        </button>
+      </div>
+
+      {/* ===== فلاتر الحالة (نفس ترتيب ENGAZ) ===== */}
+      <div className="eg-filters nav-scroll">
+        <button type="button" className={`eg-filter ${!filter ? 'is-on' : ''}`} onClick={() => onFilter('')}>
+          كل الأرقام <b>{rows.length}</b>
+        </button>
+        {LEAD_STATUS_ORDER.map((id) => (
+          <button key={id} type="button" className={`eg-filter ${filter === id ? 'is-on' : ''}`}
+            onClick={() => onFilter(filter === id ? '' : id)}>
+            {LEAD_STATUS_LABELS[id]} <b>{counts[id] || 0}</b>
+          </button>
+        ))}
+      </div>
+
+      {/* ===== الأرقام ===== */}
+      <div className="eg-list">
+        {visible.length === 0 ? (
+          <p className="eg-empty">
+            {rows.length === 0 ? 'لسه مفيش أرقام — استلم أرقام من الإدارة أو ضيف رقم بنفسك.' : 'مفيش أرقام في الفلتر ده.'}
+          </p>
+        ) : (
+          visible.map((row) => (
+            <EngazLeadCard
+              key={row.key}
+              row={row}
+              onOpen={() => onOpen(row.client || row.lead, row)}
+              onCall={() => onOpen(row.client || row.lead, row)}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, currentUser, onSelectClient, onRefresh, onLeadViewed, onCall }: any) {
   // كل رقم في نطاقي: العميل بحالته، والرقم الموزّع بحالة آخر فيدباك عليه.
   // بدون كده أعمدة المراحل كانت تعرض صفراً رغم وجود أرقام في التوزيع.
@@ -6545,16 +7056,20 @@ const toLocalInput = (d: Date): string => {
 };
 
 // ===== الاتصال بالعميل: اتصال ← تم الرد / لم يرد ← كومنت ← موعد الاتصال القادم (تذكير) =====
-function CallFlowModal({ client, user, onClose, onSave, fromReminder = false }: any) {
+// ===== نافذة الإجراء (موديل ENGAZ) =====
+// تفتح بالضغط على أي رقم: الحالة، موعد الإجراء القادم (تذكير)، نتيجة الاتصال
+// (تم الرد / لم يرد)، الكومنت، وآخر التعليقات — وكلها تتحفظ بزر «إضافة إجراء».
+function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, comments = [], onOpenDetails }: any) {
   const [result, setResult] = useState<'' | 'answered' | 'no-answer'>('');
   const [comment, setComment] = useState('');
-  // الحالة تبدأ بحالة آخر فيدباك على العميل: مش إلزامي يغيّرها مع كل مكالمة
+  // الحالة تبدأ بحالة آخر فيدباك على العميل: مش إلزامي يغيّرها مع كل إجراء
   const [status, setStatus] = useState(() => latestFeedbackStatusOf(client) || '');
   // سبب الإلغاء — يُطلب فقط عند اختيار حالة «cancellation»
   const [cancelReason, setCancelReason] = useState('');
   const [nextCallAt, setNextCallAt] = useState('');
   const [dialed, setDialed] = useState(false);
   const [done, setDone] = useState(false);
+  const commentRef = useRef<HTMLTextAreaElement>(null);
 
   // الموعد المقترح: بعد ساعتين لو لم يرد، وبعد يوم لو تم الرد
   const pick = (r: 'answered' | 'no-answer') => {
@@ -6586,138 +7101,177 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false }: 
     setDone(true);
   };
 
+  const copyPhone = async () => {
+    try {
+      await navigator.clipboard.writeText(String(client?.phone || ''));
+    } catch {
+      /* المتصفح رافض النسخ — الرقم ظاهر فوق */
+    }
+  };
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[75] flex items-center justify-center p-3 sm:p-4 bg-black/85" onClick={onClose}>
-      <motion.div initial={{ scale: 0.94, y: 14 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.94 }}
-        className="panel p-5 sm:p-6 w-full max-w-lg max-h-[92vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}>
+      className="fixed inset-0 z-[75] flex items-end sm:items-center justify-center bg-black/85" onClick={onClose}>
+      <motion.div initial={{ scale: 0.98, y: 24 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.98, y: 24 }}
+        className="eg-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="eg-sheet-handle" />
 
         {done ? (
           <div className="text-center py-6">
             <div className="w-16 h-16 mx-auto rounded-[var(--r-xl)] gradient-success flex items-center justify-center mb-4">
               <Check className="w-8 h-8 text-[var(--text-strong)]" />
             </div>
-            <h3 className="text-lg font-bold text-[var(--text-strong)] mb-1">تم تسجيل الاتصال</h3>
+            <h3 className="text-lg font-bold text-[var(--text-strong)] mb-1">تم تسجيل الإجراء</h3>
             <p className="text-xs text-[var(--text-muted)] mb-5">
-              {result === 'answered' ? 'مسجّلة: تم الرد ' : 'مسجّلة: لم يرد '}
-              {nextCallAt ? ' • وتم ضبط تذكير بموعد الاتصال القادم' : ''}
+              {result === 'answered' ? 'مسجّل: تم الرد ' : 'مسجّل: لم يرد '}
+              {nextCallAt ? ' • وتم ضبط تذكير بموعد الإجراء القادم' : ''}
             </p>
             <button onClick={onClose} className="btn-primary w-full justify-center">إغلاق</button>
           </div>
         ) : (
           <>
-            <div className="flex items-start justify-between gap-3 mb-4">
+            {/* ===== شريط الأدوات فوق (زي ENGAZ) ===== */}
+            <div className="eg-sheet-tools">
+              <button type="button" className="eg-icon-btn" title="عرض التفاصيل" onClick={() => onOpenDetails?.(client)}>
+                <Eye className="w-4.5 h-4.5" />
+              </button>
+              <button type="button" className="eg-icon-btn" title="اكتب الكومنت" onClick={() => commentRef.current?.focus()}>
+                <Edit3 className="w-4.5 h-4.5" />
+              </button>
+              <button type="button" className="eg-icon-btn is-primary" title="إجراء جديد"
+                onClick={() => { setComment(''); setResult(''); setTimeout(() => commentRef.current?.focus(), 30); }}>
+                <Plus className="w-4.5 h-4.5" />
+              </button>
+              <button type="button" className="eg-icon-btn" title="نسخ الرقم" onClick={() => void copyPhone()}>
+                <Menu className="w-4.5 h-4.5" />
+              </button>
+              <button type="button" className="eg-icon-btn" title="إغلاق" onClick={onClose}>
+                <LogOut className="w-4.5 h-4.5" />
+              </button>
+            </div>
+
+            {/* ===== اسم العميل + الرقم ===== */}
+            <div className="eg-sheet-head">
               <div className="min-w-0">
-                <h2 className="text-lg font-bold text-[var(--text-strong)] truncate">{client.name}</h2>
-                <p className="text-sm text-[var(--text-muted)]" dir="ltr">{client.phone}</p>
+                <h2 className="eg-sheet-name">{client.name}</h2>
+                <p className="eg-sheet-phone" dir="ltr">{client.phone}</p>
                 {client.virtualLead && (
-                  <p className="text-xs text-[var(--text-muted)] mt-0.5">رقم موزّع — المكالمة هتتسجَّل على الرقم نفسه</p>
+                  <p className="eg-sheet-tag">رقم موزّع — المكالمة هتتسجَّل على الرقم نفسه</p>
                 )}
               </div>
-              <button type="button" onClick={onClose} title="إغلاق"
-                className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
-                <X className="w-4 h-4 text-[var(--text)]" />
-              </button>
             </div>
 
-            <a href={`tel:${client.phone}`} onClick={() => setDialed(true)}
-              className="btn-primary w-full justify-center py-3.5 text-base">
-              <PhoneCall className="w-5 h-5" /> الاتصال بالعميل الآن
+            {/* ===== الاتصال (الرنّ الحقيقي بيحصل هنا) ===== */}
+            <a href={`tel:${client.phone}`} onClick={() => setDialed(true)} className="eg-call">
+              <PhoneCall className="w-4.5 h-4.5" /> الاتصال بالعميل الآن
             </a>
+            {dialed && <p className="eg-hint">حدّد النتيجة بعد ما تقفل الاتصال.</p>}
 
-            <p className="text-xs text-[var(--text-muted)] text-center mt-2 mb-4">
-              {dialed ? 'حدّد نتيجة الاتصال بعد ما تقفل:' : 'اتصل بالعميل ثم سجّل النتيجة:'}
-            </p>
+            {/* ===== الحالة ===== */}
+            <div className="eg-row">
+              <StatusMenu
+                value={status}
+                label="اختر الحالة (follow up / done deal …)"
+                className="fc-status-menu"
+                stopPropagation={false}
+                onPick={(id: string) => {
+                  setStatus(id);
+                  // الحالة غير الإلغاء تمسح أي سبب قديم
+                  setCancelReason('');
+                  if (id === 'cancellation') setComment('');
+                }}
+              />
+            </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <button type="button" onClick={() => pick('answered')}
-                className={`py-3.5 rounded-[var(--r-md)] font-bold text-sm border-2 transition-all flex items-center justify-center gap-2 ${
-                  result === 'answered'
-                    ? 'border-emerald-400 bg-emerald-500/20 text-emerald-300'
-                    : 'border-[var(--border)] bg-[var(--tint-1)] text-[var(--text)] hover:border-emerald-400/50'
-                }`}>
-                <Check className="w-4 h-4" /> تم الرد
+            {/* ===== موعد الإجراء القادم (يتسجّل تذكير في وقته) ===== */}
+            <div className="eg-row eg-date-row">
+              <Calendar className="w-4.5 h-4.5 shrink-0 text-[var(--text-muted)]" />
+              <input type="datetime-local" value={nextCallAt} dir="ltr" className="eg-date-input"
+                onChange={(e) => setNextCallAt(e.target.value)} />
+              {nextCallAt && (
+                <button type="button" className="eg-clear" title="مسح الموعد" onClick={() => setNextCallAt('')}>
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+
+            <div className="eg-quick">
+              {[['بعد ساعة', 60], ['بعد ساعتين', 120], ['بكرة', 1440], ['الأسبوع الجاي', 10080]].map(([label, mins]) => (
+                <button key={label as string} type="button"
+                  onClick={() => { const d = new Date(); d.setMinutes(d.getMinutes() + (mins as number)); setNextCallAt(toLocalInput(d)); }}
+                  className="eg-quick-btn">
+                  {label as string}
+                </button>
+              ))}
+            </div>
+
+            {/* ===== تم الرد / لم يرد ===== */}
+            <div className="eg-seg">
+              <button type="button" className={result === 'answered' ? 'is-on is-yes' : ''} onClick={() => pick('answered')}>
+                تم الرد
               </button>
-              <button type="button" onClick={() => pick('no-answer')}
-                className={`py-3.5 rounded-[var(--r-md)] font-bold text-sm border-2 transition-all flex items-center justify-center gap-2 ${
-                  result === 'no-answer'
-                    ? 'border-red-400 bg-red-500/20 text-red-300'
-                    : 'border-[var(--border)] bg-[var(--tint-1)] text-[var(--text)] hover:border-red-400/50'
-                }`}>
-                <X className="w-4 h-4" /> لم يرد
+              <button type="button" className={result === 'no-answer' ? 'is-on is-no' : ''} onClick={() => pick('no-answer')}>
+                لم يرد
               </button>
             </div>
 
-            {result && (
-              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-4 space-y-3">
-                <div>
-                  <label className="block text-xs font-bold text-[var(--text)] mb-1.5">
-                    {result === 'answered' ? 'فيدباك المكالمة / كومنت *' : 'ملاحظة (سبب عدم الرد مثلاً) *'}
-                  </label>
-                  <textarea value={comment} onChange={(e) => setComment(e.target.value)}
-                    placeholder="اكتب ما قاله العميل أو ملاحظاتك…"
-                    className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-24" />
-                </div>
+            {/* ===== الكومنت ===== */}
+            <textarea ref={commentRef} value={comment} onChange={(e) => setComment(e.target.value)}
+              placeholder="اكتب الكومنت هنا…"
+              className="eg-textarea" />
 
-                {/* بند ٢: القائمة المنسدلة لحالة الفيدباك تظهر بعد كتابة الكومنت */}
-                {comment.trim() ? (
-                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
-                    <div>
-                      <label className="block text-xs font-bold text-[var(--text)] mb-1.5">حالة الفيدباك (اختياري — تفضل زي آخر فيدباك)</label>
-                      <StatusMenu
-                        value={status}
-                        label="اختر الحالة (follow up / done deal …)"
-                        className="fc-status-menu"
-                        stopPropagation={false}
-                        onPick={(id: string) => {
-                          setStatus(id);
-                          // الحالة غير الإلغاء تمسح أي سبب قديم
-                          setCancelReason('');
-                          if (id === 'cancellation') setComment('');
-                        }}
-                      />
-                      {status === 'cancellation' && (
-                        <div className="mt-2">
-                          <CancelReasonPicker
-                            value={cancelReason}
-                            onChange={(reason) => {
-                              setCancelReason(reason);
-                              // اختيار السبب يكتب الكومنت فوراً
-                              setComment(reason ? cancelReasonLabelOf(reason) : '');
-                            }}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* بند ٥: تاريخ الاتصال القادم ← يتسجّل تذكير */}
-                    <div>
-                      <label className="block text-xs font-bold text-[var(--text)] mb-1.5 flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-[var(--warn)]" /> موعد الاتصال القادم (يتسجّل تذكير في وقته)
-                      </label>
-                      <input type="datetime-local" value={nextCallAt} onChange={(e) => setNextCallAt(e.target.value)}
-                        className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" />
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {[['بعد ساعة', 60], ['بعد ٣ ساعات', 180], ['بكرة نفس الوقت', 1440], ['بعد أسبوع', 10080]].map(([label, mins]) => (
-                          <button key={label as string} type="button"
-                            onClick={() => { const d = new Date(); d.setMinutes(d.getMinutes() + (mins as number)); setNextCallAt(toLocalInput(d)); }}
-                            className="rc-action">
-                            {label as string}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <button onClick={save} disabled={status === 'cancellation' && !cancelReason} className="btn-primary w-full justify-center py-3.5 disabled:opacity-55">
-                      <Send className="w-4 h-4" /> حفظ نتيجة الاتصال
-                    </button>
-                  </motion.div>
-                ) : (
-                  <p className="fc-hint">اكتب الكومنت الأول — وبعدها تظهر حالة الفيدباك وموعد الاتصال القادم.</p>
-                )}
-              </motion.div>
+            {status === 'cancellation' && (
+              <div className="eg-row">
+                <CancelReasonPicker
+                  value={cancelReason}
+                  onChange={(reason) => {
+                    setCancelReason(reason);
+                    // اختيار السبب يكتب الكومنت فوراً
+                    setComment(reason ? cancelReasonLabelOf(reason) : '');
+                  }}
+                />
+              </div>
             )}
+
+            {/* ===== آخر التعليقات ===== */}
+            <div className="eg-comments">
+              <div className="eg-comments-head">
+                آخر التعليقات <b>{comments.length}</b>
+              </div>
+              {comments.length === 0 ? (
+                <p className="eg-empty">لسه مفيش تعليقات على الرقم ده.</p>
+              ) : (
+                comments.map((c: any) => (
+                  <div key={c.id} className="eg-comment">
+                    <span className="eg-avatar">{String(c.by || '؟').trim().charAt(0) || '؟'}</span>
+                    <div className="eg-comment-body">
+                      <div className="eg-comment-top">
+                        <b>{c.by}</b>
+                        {c.status && FEEDBACK_STATUS_BY_ID[c.status] && (
+                          <span className={`eg-chip ${FEEDBACK_STATUS_BY_ID[c.status].cls}`}>
+                            {FEEDBACK_STATUS_BY_ID[c.status].ar}
+                          </span>
+                        )}
+                      </div>
+                      {c.at && <span className="eg-comment-at">{formatDateTime(c.at)}</span>}
+                      {c.text && <p className="eg-comment-text">{c.text}</p>}
+                      {c.nextAt && <p className="eg-comment-next">الإجراء التالي: {c.nextAt}</p>}
+                    </div>
+                    {c.result && (
+                      <span className={`eg-result ${c.result === 'answered' ? 'is-yes' : 'is-no'}`}>
+                        {c.result === 'answered' ? 'تم الرد' : 'لم يرد'}
+                      </span>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button type="button" onClick={save} className="eg-submit"
+              disabled={status === 'cancellation' && !cancelReason}>
+              إضافة إجراء
+            </button>
+            {!result && <p className="eg-hint text-center">اختر «تم الرد» أو «لم يرد» ثم اكتب الكومنت.</p>}
           </>
         )}
       </motion.div>
@@ -6801,9 +7355,9 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
 
   const goTarget =
     tab === 'leads'
-      ? 'clients'
+      ? 'leads'
       : tab === 'reminders'
-      ? 'reminders'
+      ? 'leads'
       : tab === 'calls'
       ? (isSales ? 'daily-feedback' : 'admin-feedback')
       : (isSales ? 'chat' : 'admin-chat');
@@ -12590,6 +13144,8 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
       id: crypto.randomUUID(),
       adminId: currentUser.id,
       status: 'new',
+      // رقم أضافه السيلز بنفسه (مش رقم كامبين) — فتبقى في تبويب «العملاء»
+      manual: true,
       createdAt: new Date().toISOString()
     };
     localStorage.setItem('crm_assigned_leads', JSON.stringify([newLead, ...leads]));
