@@ -201,7 +201,37 @@ check(
   /addClientActivity\(client\.id, 'feedback', text/.test(app)
 );
 
-// ===== ١١) آيفون مثبّت على الشاشة الرئيسية: الشاشة الآمنة =====
+// ===== ١١) كارت واحد في كل مكان: «العملاء» = «المراحل» = صفحة الحالة =====
+// «شلت الشكل القديم في العملاء… قصدي تاخد اللي في تبويب العملاء وتخليه في
+// تبويبات الـ stage زي الـ follow up» — يعني كارت تبويب «العملاء» هو نفسه
+// في تبويب «المراحل» وفي صفحات الحالات (follow up / meeting / …)،
+// والشكل القديم (كارت الرقم الموزّع لوحده) اتشال من النظام كله.
+check('الكارت المشترك موجود (كارت العميل)', /function ClientFeedbackCard\(/.test(app));
+check('الكارت المشترك موجود (كارت الرقم الموزّع)', /function LeadFeedCard\(/.test(app));
+check('الشكل القديم اتشال بالكامل', !/LeadStageCard/.test(app));
+const countOf = (needle) => app.split(needle).length - 1;
+check(
+  'كارت العميل مستخدم في ٣ places: العملاء + المراحل + صفحة الحالة',
+  countOf('<ClientFeedbackCard') === 3
+);
+check(
+  'كارت الرقم الموزّع مستخدم في ٣ places: العملاء + المراحل + صفحة الحالة',
+  countOf('<LeadFeedCard') === 3
+);
+check(
+  'تبويب «العملاء» بياكل الكارت المشترك',
+  /function ClientsView[\s\S]{0,40000}<ClientFeedbackCard/.test(app)
+);
+check(
+  'صفحة الحالة (follow up وغيره) بياكل الكارت المشترك',
+  /function StatusBoardView[\s\S]{0,4000}<ClientFeedbackCard/.test(app)
+);
+check(
+  'المراحل بتياكل الكارت المشترك',
+  /function PipelineView[\s\S]{0,4000}<ClientFeedbackCard/.test(app)
+);
+
+// ===== ١٢) آيفون مثبّت على الشاشة الرئيسية: الشاشة الآمنة =====
 check('الصفحة بتغطي الشاشة الآمنة (viewport-fit=cover)', /viewport-fit=cover/.test(html));
 check(
   'المتغيرات الأربعة للشاشة الآمنة معرّفة',
