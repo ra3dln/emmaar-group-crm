@@ -13,6 +13,8 @@ import fs from 'node:fs';
 import {
   LEAD_CLIENT_ID_PREFIX,
   buildLeadClients,
+  campaignAtFromText,
+  campaignTimeOf,
   clientPhoneKeys,
   leadClientIdFor,
 } from '../shared/leadClients.js';
@@ -130,7 +132,76 @@ check(
     /freshData\.crm_assigned_leads = \[/.test(server)
 );
 
-// ===== ٩) آيفون مثبّت على الشاشة الرئيسية: الشاشة الآمنة =====
+// ===== ٩) وقت تسجيل العميل في الكامبين (مش وقت إضافته في النظام) =====
+// الشكوى: «ضفت وقت إضافة العملاء بس انا كان قصدي وقت تسجيل العملاء في الكامبين».
+// وقت نزول الرقم في الفورم موجود في نص الوصف: «التاريخ: 22/10/2026 - 09:43 ص».
+check(
+  'وقت الكامبين بيتقرا من نص الوصف',
+  campaignAtFromText('استيراد تلقائي • المصدر: فيسبوك - X • التاريخ: 22/10/2026 - 09:43 ص') ===
+    '2026-10-22T09:43:00.000Z'
+);
+check(
+  'الليل (م) بيتحسب صح',
+  campaignAtFromText('التاريخ: 22/10/2026 - 08:05 م') === '2026-10-22T20:05:00.000Z'
+);
+check('نص من غير تاريخ ما بيعملش وقت', campaignAtFromText('مفيش تاريخ هنا') === '');
+check(
+  'سجل فيه تاريخ كامبين = kind campaign',
+  campaignTimeOf({ description: 'التاريخ: 22/10/2026 - 09:43 ص', createdAt: '2026-10-24T08:14:28.291Z' }).kind ===
+    'campaign'
+);
+check(
+  'سجل من غير تاريخ كامبين = kind added (وقت الإضافة)',
+  campaignTimeOf({ createdAt: '2026-10-24T08:14:28.291Z', source: 'campaign' }).kind === 'added'
+);
+const registered = buildLeadClients({
+  leads: [
+    lead('l9', {
+      salesId: 'u-ahmed',
+      description: 'استيراد تلقائي • المصدر: فيسبوك - X • التاريخ: 22/10/2026 - 09:43 ص',
+      createdAt: '2026-10-24T08:14:28.291Z',
+    }),
+  ],
+  at: '2026-10-24T08:14:28.465Z',
+});
+check(
+  'تاريخ العميل = وقت تسجيله في الكامبين (مش وقت تحويله)',
+  registered[0]?.createdAt === '2026-10-22T09:43:00.000Z'
+);
+check(
+  'وقت التحويل لعميل بيفضل متسجّل (updatedAt)',
+  registered[0]?.updatedAt === '2026-10-24T08:14:28.465Z'
+);
+check('وقت الكامبين متخزّن في العميل (campaignAt)', registered[0]?.campaignAt === '2026-10-22T09:43:00.000Z');
+check(
+  'الواجهة بتقرأ وقت الكامبين من السجل (مش من createdAt بس)',
+  /campaignTimeOf\(/.test(app) && /kind=\{campaignTimeOf\(/.test(app)
+);
+check(
+  'الرقاقة بتقول: سُجّل في الكامبين ولا أُضيف في النظام',
+  /سُجّل في الكامبين/.test(app) && /أُضيف في النظام/.test(app)
+);
+check(
+  'السيرفر بيخزّن وقت تسجيل الرقم في الكامبين مع الرقم',
+  /campaignAt: String\(row\.dateIso\)/.test(server) && /dateIso: created/.test(server)
+);
+
+// ===== ١٠) زر + (كومنت مباشر) في تبويب العملاء زي ما هو في المراحل =====
+check('في زر + مشترك بين كارت المراحل وكارت العملاء', /function QuickNoteButton/.test(app));
+check(
+  'كارت تبويب العملاء فيه زر +',
+  /<QuickNoteButton[\s\S]{0,160}toggleQuickNote\(client!\)/.test(app)
+);
+check(
+  'صندوق الكومنت المباشر بيشتغل في تبويب العملاء',
+  /className="quick-note"[\s\S]{0,400}saveQuickNote\(client!\)/.test(app)
+);
+check(
+  'الكومنت المباشر يتحفظ على العميل نفسه',
+  /addClientActivity\(client\.id, 'comment', text/.test(app)
+);
+
+// ===== ١١) آيفون مثبّت على الشاشة الرئيسية: الشاشة الآمنة =====
 check('الصفحة بتغطي الشاشة الآمنة (viewport-fit=cover)', /viewport-fit=cover/.test(html));
 check(
   'المتغيرات الأربعة للشاشة الآمنة معرّفة',

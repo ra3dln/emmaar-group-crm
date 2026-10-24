@@ -65,6 +65,8 @@ export interface Client {
   source: string;
   // اسم فورم الكامبين الذي جاء منه الرقم (للعرض في «عملاء كامبين»)
   formName?: string;
+  // وقت تسجيل الرقم في الكامبين (وقت نزوله في الفورم) — مش وقت إضافته في النظام
+  campaignAt?: string;
   // آخر سبب إلغاء اختاره المندوب — أساس فلتر الإلغاء في قائمة العملاء
   cancelReason?: string;
   createdAt: string;
@@ -86,6 +88,8 @@ export interface AssignedLead {
   assignedAt?: string;
   // اسم الفورم الذي نزل منه الرقم — يُكتب جمب الرقم في كل القوائم
   formName?: string;
+  // وقت تسجيل الرقم في الكامبين (وقت نزوله في الفورم) — مش وقت استيراده
+  campaignAt?: string;
 }
 
 export interface Reminder {

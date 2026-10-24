@@ -14,6 +14,38 @@ import { phoneKeyOf } from './autoAssign.js';
 // بادئة معرّف العميل التلقائي — تميّزه عن العميل اليدوي (معرّف عشوائي)
 export const LEAD_CLIENT_ID_PREFIX = 'crm-lead-';
 
+// ===== وقت تسجيل الرقم في الكامبين =====
+// الرقم المسجَّل في الفورم (كامبين) له وقت تسجيل حقيقي: وقت ما الـlead اتسجّل
+// عند ميتا. النص ده بيوصلنا في وصف الرقم: «التاريخ: 22/10/2026 - 09:43 ص».
+// (السيرفر بيكتب التوقيت بتوقيته = UTC، فبنقراه بنفس التوقيت عشان يبقى مطابق.)
+//
+// مهم: ده مش وقت إضافة العميل في النظام (ده وقت التحويل لعميل)، واللي كان
+// بيتبان غلط في كل القوائم — فبقى فيه فرق واضح بين التنين.
+const CAMPAIGN_DATE_RE = /التاريخ:\s*(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(?:-\s*(\d{1,2}):(\d{2}))?\s*(ص|م)?/;
+
+// يحوّل نص «التاريخ: …» إلى وقت ISO (UTC) — أو '' لو النص مش موجود
+export const campaignAtFromText = (text) => {
+  const m = CAMPAIGN_DATE_RE.exec(String(text || ''));
+  if (!m) return '';
+  const [, dd, mm, yyyy, hh, min, period] = m;
+  let hours = Number(hh || 0) % 12;
+  if (period === 'م') hours += 12;
+  const date = new Date(
+    Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd), hours, Number(min || 0))
+  );
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+};
+
+// وقت الرقم: وقت تسجيله في الكامبين إن وُجد، وإلا وقت إضافته في النظام.
+// kind = 'campaign' (سُجّل في الكامبين) أو 'added' (أُضيف في النظام)
+export const campaignTimeOf = (record) => {
+  const explicit = String(record?.campaignAt || '');
+  if (explicit) return { at: explicit, kind: 'campaign' };
+  const parsed = campaignAtFromText(record?.description || record?.source || '');
+  if (parsed) return { at: parsed, kind: 'campaign' };
+  return { at: String(record?.createdAt || ''), kind: 'added' };
+};
+
 const asList = (value) => (Array.isArray(value) ? value : []);
 
 // معرّف العميل التلقائي لرقم معيّن — نفس الرقم = نفس المعرّف على كل الأجهزة
@@ -62,6 +94,12 @@ export function buildLeadClients({
     if (taken.has(key)) continue; // الرقم عند حدّ سلفاً — ما نكرّرش العميل
     taken.add(key);
     const description = String(lead?.description || '').trim();
+    // وقت تسجيل الرقم في الكامبين (وقت نزوله في الفورم) — مش وقت تحويله لعميل.
+    // بنقراه من نص الوصف لأن المصدر الأصلي (created_time) ما كانش متخزّن.
+    const registeredAt =
+      String(lead?.campaignAt || '') ||
+      campaignAtFromText(description) ||
+      String(lead?.createdAt || at);
     created.push({
       id: leadClientIdFor(lead.phone),
       userId: owner,
@@ -79,7 +117,9 @@ export function buildLeadClients({
       priority: 'high',
       source: description ? `رقم موزّع — ${description}` : 'رقم موزّع',
       ...(lead?.formName ? { formName: String(lead.formName) } : {}),
-      createdAt: at,
+      // وقت التسجيل في الكامبين هو تاريخ العميل — وتحويله لعميل وقت منفصل (updatedAt)
+      createdAt: registeredAt,
+      campaignAt: registeredAt,
       updatedAt: at,
       activities: [
         {

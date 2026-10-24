@@ -388,6 +388,8 @@ async function fetchFromMeta(config, channel = 'facebook') {
           // يعتمد عليه، وليس على تحليل نص الوصف (اسم فيه | أو - كان يقتطع).
           formName: String(form.name || form.id),
           date: created ? readableDateTime(new Date(created * 1000)) : '',
+          // وقت التسجيل في الكامبين (وقت الـlead في الفورم) — بيتبان للعميل في كل القوائم
+          dateIso: created ? new Date(created * 1000).toISOString() : '',
           test,
         });
       }
@@ -769,6 +771,8 @@ export function buildAssignments({ fetched, knownPhones = [], at = new Date().to
       createdAt: at,
       salesId: '',
       ...(row.formName ? { formName: String(row.formName) } : {}),
+      // وقت تسجيله في الكامبين (وقت الـlead في الفورم) — منفصل عن وقت الاستيراد
+      ...(row.dateIso ? { campaignAt: String(row.dateIso) } : {}),
     };
 
     added.push(baseLead);
