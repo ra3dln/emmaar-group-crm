@@ -44,7 +44,7 @@ import {
   type LeadAssignment,
 } from '../shared/autoAssign.js';
 import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount } from '../shared/roles.js';
-import { buildLeadClients } from '../shared/leadClients.js';
+import { buildLeadClients, campaignAtFromText, campaignTimeOf } from '../shared/leadClients.js';
 import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
 import {
   FEEDBACK_STATUS_TO_STAGE,
@@ -4955,14 +4955,37 @@ const campaignTimeLabel = (value?: string): string => {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} • ${pad(hour12)}:${pad(d.getMinutes())} ${period}`;
 };
 
-function CampaignTimeChip({ at, className = '' }: { at?: string; className?: string }) {
+// ===== توقيت تسجيل الرقم في الكامبين: اليوم/الشهر + الساعة =====
+// يُكتب جمب الرقم زي اسم الفورم بالظبط (٢٤/١٠ • ١١:٢٦ ص)
+// kind: 'campaign' = سُجّل في الكامبين (وقت نزول الرقم في الفورم)
+//       'added'    = أُضيف في النظام (وقت إضافة العميل يدوياً — مفيش وقت كامبين)
+function CampaignTimeChip({ at, kind = 'campaign', className = '' }: { at?: string; kind?: 'campaign' | 'added'; className?: string }) {
   const label = campaignTimeLabel(at);
   if (!label) return null;
+  const title = kind === 'campaign' ? `سُجّل في الكامبين: ${label}` : `أُضيف في النظام: ${label}`;
   return (
-    <span className={`cc-time ${className}`.trim()} title={`سُجّل في الكامبين: ${label}`}>
+    <span className={`cc-time ${className}`.trim()} title={title}>
       <Clock className="w-3 h-3 shrink-0" />
       <span dir="ltr">{label}</span>
     </span>
+  );
+}
+
+// ===== زر + للكومنت المباشر: نفس الزر في كارت المراحل وكارت تبويب العملاء =====
+// الكومنت يُحفظ على العميل نفسه (من غير مكالمة وبلا حالة) فيظهر تحت الكارت
+// فوراً وفي كومنتات العميل، وينزل في «الفيدباك اليومي».
+function QuickNoteButton({ active, onToggle }: { active: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      className={`cc-note-add ${active ? 'on' : ''}`.trim()}
+      title="إضافة كومنت مباشر على العميل (بدون مكالمة)"
+      aria-label="إضافة كومنت مباشر"
+      aria-expanded={active}
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+    >
+      <Plus className="w-3 h-3" />
+    </button>
   );
 }
 
@@ -5075,18 +5098,9 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
           <div className="cc-phone-row">
             <a className="cc-phone" dir="ltr" href={`tel:${client?.phone}`} onClick={(e) => e.stopPropagation()}>{client?.phone}</a>
             <FormNameChip record={client} />
-            <CampaignTimeChip at={client?.createdAt} />
+            <CampaignTimeChip at={campaignTimeOf(client).at} kind={campaignTimeOf(client).kind} />
             {/* كومنت مباشر بدل تسجيل مكالمة — يتكتب ويظهر تحت العميل وفي كومنتاته */}
-            <button
-              type="button"
-              className={`cc-note-add ${quickOpen ? 'on' : ''}`.trim()}
-              title="إضافة كومنت مباشر على العميل (بدون مكالمة)"
-              aria-label="إضافة كومنت مباشر"
-              aria-expanded={quickOpen}
-              onClick={(e) => { e.stopPropagation(); setQuickOpen((v) => !v); }}
-            >
-              <Plus className="w-3 h-3" />
-            </button>
+            <QuickNoteButton active={quickOpen} onToggle={() => setQuickOpen((v) => !v)} />
           </div>
 
           {facts.length > 0 && (
@@ -5383,16 +5397,41 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
       });
     }
 
-    // منع تكرار نفس الكومنت (الخط الزمني + سجل المكالمة)
-    const seen = new Set<string>();
-    return list
-      .filter((entry) => {
-        const key = `${String(entry.at).slice(0, 16)}|${String(entry.text).trim()}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    // ===== كل تفاعل يظهر مرة واحدة فقط =====
+    // تسجيل مكالمة أو فيدباك يكتب نفس الحكاية في أكثر من مكان (حدث على العميل +
+    // بطاقة فيدباك + سجل مكالمة)، فكان العميل الواحد يظهر بـ«٣ فيدباك» لنفس
+    // اللحظة ونفس النتيجة. هنا ندمج سجلات نفس الدقيقة ونفس النتيجة في سطر واحد،
+    // ونُبقي نص الكومنت المكتوب (مش نص المكالمة الآلي).
+    const minuteOf = (at: string) => String(at || '').slice(0, 16);
+    const outcomeOf = (entry: (typeof list)[number]): 'no-answer' | 'answered' | 'none' => {
+      if (entry.result === 'no-answer' || entry.status === 'no-answer') return 'no-answer';
+      if (entry.result === 'answered' || entry.status) return 'answered';
+      return 'none';
+    };
+    const merged = new Map<string, (typeof list)[number]>();
+    for (const entry of list) {
+      const outcome = outcomeOf(entry);
+      const key =
+        outcome === 'none'
+          ? `${minuteOf(entry.at)}|none|${String(entry.text).trim()}`
+          : `${minuteOf(entry.at)}|${outcome}`;
+      const current = merged.get(key);
+      if (!current) {
+        merged.set(key, entry);
+        continue;
+      }
+      // نص الكومنت المكتوب يغلب نص المكالمة الآلي
+      const primary = current.kind === 'call' && entry.kind !== 'call' ? entry : current;
+      merged.set(key, {
+        ...current,
+        ...primary,
+        at: current.at,
+        by: current.by || entry.by,
+        status: current.status || entry.status,
+        result: current.result || entry.result,
+      });
+    }
+    return [...merged.values()].sort((a, b) => String(b.at).localeCompare(String(a.at)));
   }, [client, callLogs, feedbacks]);
 
   const days = useMemo(() => {
@@ -5468,9 +5507,9 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
                           {kindLabel(entry.kind)}
                         </span>
                         {entry.status && <FeedbackChip status={entry.status} />}
-                        {entry.result && (
+                        {entry.result && entry.result !== 'not-called' && (
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${entry.result === 'answered' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}`}>
-                            {entry.result === 'answered' ? 'تم الرد' : 'لم يرد'}
+                            {entry.result === 'answered' ? 'تم الرد' : entry.result === 'busy' ? 'مشغول' : 'لم يرد'}
                           </span>
                         )}
                       </div>
@@ -5509,6 +5548,34 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
   // فلتر الإلغاء في القائمة (أيقونة الفلتر بجوار البحث)
   const [cancelFilter, setCancelFilter] = useState('');
   const [showCancelFilter, setShowCancelFilter] = useState(false);
+  // كومنت مباشر من علامة + (نفس الزر الموجود في كارت المراحل): يظهر تحت الكارت
+  const [quickFor, setQuickFor] = useState<string | null>(null);
+  const [quickNote, setQuickNote] = useState('');
+
+  // كومنت مباشر على العميل: يُحفظ على العميل نفسه بلا مكالمة وبلا حالة،
+  // فيظهر تحت الكارت فوراً وفي كومنتات العميل، وينزل في «الفيدباك اليومي».
+  const saveQuickNote = (client: Client) => {
+    const text = quickNote.trim();
+    if (!text) return;
+    addClientActivity(client.id, 'comment', text, currentUser?.name || '', {
+      authorId: currentUser?.id,
+      callStatus: 'not-called',
+    });
+    setQuickNote('');
+    setQuickFor(null);
+    onRefresh?.();
+    void pushKey('crm_clients');
+  };
+
+  const toggleQuickNote = (client: Client) => {
+    if (quickFor === client.id) {
+      setQuickFor(null);
+      setQuickNote('');
+      return;
+    }
+    setQuickFor(client.id);
+    setQuickNote('');
+  };
 
   // فتح الصندوق: بضغطة على حالة في الشريط (تتحدد تلقائياً) أو من زر الكومنت
   const openComposer = (client: Client, status?: string) => {
@@ -5861,7 +5928,10 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                     <span role="cell" className="ct-phone">
                       <a href={`tel:${phone}`} dir="ltr" onClick={(e) => e.stopPropagation()}>{phone}</a>
                       <FormNameChip record={isLead ? lead : client} />
-                      <CampaignTimeChip at={isLead ? lead!.createdAt : client!.createdAt} />
+                      <CampaignTimeChip
+                        at={campaignTimeOf(isLead ? lead : client).at}
+                        kind={campaignTimeOf(isLead ? lead : client).kind}
+                      />
                     </span>
                     <span role="cell">
                       <span className={`cc-src ${src.cls}`} title={sourceText}><SrcIcon className="w-3 h-3" />{sourceText}</span>
@@ -5980,7 +6050,17 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                     <div className="cc-phone-row">
                       <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
                       <FormNameChip record={isLead ? lead : client} />
-                      <CampaignTimeChip at={isLead ? lead!.createdAt : client!.createdAt} />
+                      <CampaignTimeChip
+                        at={campaignTimeOf(isLead ? lead : client).at}
+                        kind={campaignTimeOf(isLead ? lead : client).kind}
+                      />
+                      {/* كومنت مباشر من علامة + — نفس الزر في كارت المراحل وصفحة الحالة */}
+                      {!isLead && (
+                        <QuickNoteButton
+                          active={quickFor === client!.id}
+                          onToggle={() => toggleQuickNote(client!)}
+                        />
+                      )}
                     </div>
 
                     {facts.length > 0 && (
@@ -5993,7 +6073,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
 
                     {isLead && (
                       <p className="cc-note">
-                        وصل من {sourceText} — {formatDateTime(lead!.createdAt)}
+                        وصل من {sourceText} — {formatDateTime(campaignTimeOf(lead!).at)}
                       </p>
                     )}
                   </div>
@@ -6019,6 +6099,24 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                   </div>
                 </motion.article>
                 {open && !isLead && <FeedbackComposer />}
+                {/* صندوق الكومنت المباشر: يظهر تحت الكارت لما تضغط علامة + */}
+                {!isLead && quickFor === client!.id && (
+                  <form
+                    className="quick-note"
+                    onClick={(e) => e.stopPropagation()}
+                    onSubmit={(e) => { e.preventDefault(); saveQuickNote(client!); }}
+                  >
+                    <input
+                      autoFocus
+                      value={quickNote}
+                      onChange={(e) => setQuickNote(e.target.value)}
+                      placeholder="كومنت مباشر على العميل (بدون اتصال) — هيظهر تحت العميل وفي كومنتاته"
+                      className="quick-note-input"
+                    />
+                    <button type="submit" disabled={!quickNote.trim()}>حفظ</button>
+                    <button type="button" title="إلغاء" onClick={() => { setQuickFor(null); setQuickNote(''); }}>✕</button>
+                  </form>
+                )}
               </Fragment>
             );
           })}
@@ -6166,10 +6264,10 @@ function LeadStageCard({ lead, record, onLeadViewed }: any) {
         <div className="cc-phone-row">
           <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
           <FormNameChip record={lead || record} />
-          <CampaignTimeChip at={lead?.createdAt || record?.createdAt} />
+          <CampaignTimeChip at={campaignTimeOf(lead || record).at} kind={campaignTimeOf(lead || record).kind} />
         </div>
         <p className="cc-note">
-          وصل من {sourceText}{lead?.createdAt ? ` — ${formatDateTime(lead.createdAt)}` : ''}
+          وصل من {sourceText}{lead?.createdAt ? ` — ${formatDateTime(campaignTimeOf(lead).at)}` : ''}
         </p>
       </div>
 
@@ -6769,7 +6867,7 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
               <div className="flex items-center justify-between gap-2 flex-wrap mt-1">
                 <a className="text-xs text-[var(--brand)] font-bold" dir="ltr" href={`tel:${l.phone}`}>{l.phone}</a>
                 <FormNameChip record={l} />
-                <CampaignTimeChip at={l.createdAt} />
+                <CampaignTimeChip at={campaignTimeOf(l).at} kind={campaignTimeOf(l).kind} />
               </div>
               {l.description && <p className="text-xs text-[var(--text-dim)] mt-1">{formatLeadDescription(l.description)}</p>}
             </div>
@@ -8348,11 +8446,11 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onAdd }: any) {
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="text-[var(--text-muted)] text-lg" dir="ltr">{lead.phone}</p>
                   <FormNameChip record={lead} />
-                  <CampaignTimeChip at={lead.createdAt} />
+                  <CampaignTimeChip at={campaignTimeOf(lead).at} kind={campaignTimeOf(lead).kind} />
                 </div>
                 {lead.description && <p className="text-sm text-[var(--text-muted)] mt-2">{formatLeadDescription(lead.description)}</p>}
                 <p className="text-xs text-[var(--text-dim)] mt-2">
-                  {formatDateTime(lead.createdAt)}
+                  {formatDateTime(campaignTimeOf(lead).at)}
                 </p>
               </div>
               <div className="flex flex-col gap-2 items-end">
@@ -9013,7 +9111,10 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, active
                     {formNameOf(client) && (
                       <p className="truncate text-[var(--brand)] font-bold">الفورم: {formNameOf(client)}</p>
                     )}
-                    <p>{formatDateTime(client.createdAt)}</p>
+                    <p>
+                      {campaignTimeOf(client).kind === 'campaign' ? 'سُجّل في الكامبين: ' : 'أُضيف في النظام: '}
+                      {formatDateTime(campaignTimeOf(client).at)}
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -9045,7 +9146,10 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, active
                   {formNameOf(lead) && (
                     <p className="truncate text-[var(--brand)] font-bold">الفورم: {formNameOf(lead)}</p>
                   )}
-                  <p>{formatDateTime(lead.createdAt)}</p>
+                  <p>
+                    {campaignTimeOf(lead).kind === 'campaign' ? 'سُجّل في الكامبين: ' : 'أُضيف في النظام: '}
+                    {formatDateTime(campaignTimeOf(lead).at)}
+                  </p>
                   <p className="text-[10.5px] text-[var(--text-dim)]">لسه ما اتحوّلش لسجل عميل — موجود في «توزيع الأرقام».</p>
                 </div>
                 <a
@@ -9483,7 +9587,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                   <div className="flex items-center gap-2 flex-wrap mt-1">
                     <p className="text-[var(--brand)]" dir="ltr">{lead.phone}</p>
                     <FormNameChip record={lead} />
-                    <CampaignTimeChip at={lead.createdAt} />
+                    <CampaignTimeChip at={campaignTimeOf(lead).at} kind={campaignTimeOf(lead).kind} />
                   </div>
                   {lead.description && <p className="text-[11.5px] text-[var(--text-muted)] mt-1.5">{formatLeadDescription(lead.description)}</p>}
                 </div>
@@ -12034,15 +12138,19 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
 
     const newLeads: AssignedLead[] = assignment.map(({ row, owner }) => {
       counts.set(owner.id, (counts.get(owner.id) || 0) + 1);
+      const description = [row.source && `المصدر: ${row.source}`, row.date && `التاريخ: ${row.date}`, row.note].filter(Boolean).join(' • ');
+      // وقت تسجيل الرقم في الكامبين (لو الملف فيه تاريخ) — منفصل عن وقت الاستيراد
+      const campaignAt = campaignAtFromText(description);
       return {
         id: crypto.randomUUID(),
         adminId: currentUser.id,
         salesId: owner.id,
         name: row.name || 'عميل بدون اسم',
         phone: row.phone,
-        description: [row.source && `المصدر: ${row.source}`, row.date && `التاريخ: ${row.date}`, row.note].filter(Boolean).join(' • '),
+        description,
         status: 'new',
         createdAt: new Date().toISOString(),
+        ...(campaignAt ? { campaignAt } : {}),
       };
     });
 

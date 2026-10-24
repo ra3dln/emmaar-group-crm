@@ -164,5 +164,9 @@ check(
   'الضغط على العميل يفتح فيدباكه وكومنتاته',
   app.includes('فيدباك العميل وكومنتاته') && app.includes('feedbackEntries')
 );
+check(
+  'نفس الفيدباك مكتوب مرة واحدة في الكومنتات (دمج الحدث + بطاقة الفيدباك + سجل المكالمة)',
+  app.includes('const minuteOf =') && app.includes('const outcomeOf =') && app.includes('const merged = new Map')
+);
 
 console.log(`\n✅ نجحت ${passed} فحوصات لواجهة الهاتف`);
