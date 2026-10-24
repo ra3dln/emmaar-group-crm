@@ -21,6 +21,7 @@ import {
   signSession,
   stripUserSecrets,
 } from './auth.js';
+import { sanitizeClientRecord, sanitizeDailyFeedbackCards } from '../shared/comments.js';
 
 const KEY_PATTERN = /^crm_[a-z_]+$/;
 // صور العقارات تُخزَّن داخل نفس قاعدة البيانات (base64)، فحجم الطلب الواحد يهم:
@@ -145,6 +146,15 @@ export function mergeKeepingRecords(key, incoming, stored, tombstones = []) {
     // سجل أُنشئ/عُدّل بعد الحذف = إعادة إنشاء حقيقية => يعيش (وإلا كنا منعنا إعادة إنشائه)
     return recordStamp(row) > at;
   });
+}
+
+// ===== تنظيف الكومنتات عند الدمج =====
+// اللوجات (اتصال/تذكير/واتساب) والكومنتات المكررة ما لازمش ترجع من جهاز قديم:
+// نفس القاعدة اللي بتطبّقها الواجهة (shared/comments.js) — فكل الأجهزة تشوف نفس الكومنتات.
+export function sanitizeMergedKey(key, rows) {
+  if (key === 'crm_clients') return (rows || []).map((row) => sanitizeClientRecord(row));
+  if (key === 'crm_daily_feedback') return sanitizeDailyFeedbackCards(rows || []);
+  return rows;
 }
 
 // شواهد الحذف لا تُستبدل: جهاز قديم يرفع شواهده الناقصة مايقدرش يلغي حذفاً تمّ.
@@ -282,7 +292,10 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
         // ولا تُمسح كلمة مرور سجل موجود (server/auth.js: preserveUserPasswords)
         const accept = (key, value) => {
           if (key === TOMBSTONE_DATA_KEY) return mergeTombstones(data[TOMBSTONE_DATA_KEY], value);
-          const merged = mergeKeepingRecords(key, value, data[key], tombstones());
+          const merged = sanitizeMergedKey(
+            key,
+            mergeKeepingRecords(key, value, data[key], tombstones())
+          );
           return key === 'crm_users'
             ? preserveUserPasswords(merged, data.crm_users, { canManage: session?.r === 'admin' })
             : merged;

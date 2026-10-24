@@ -125,7 +125,9 @@ check('والبطاقة محفوظة باسم كاتبها (السيلز) لا �
 check('والحالة والكومنت محفوظان كما هما', seenByAdmin?.feedback === 'No answer' && seenByAdmin?.status === 'follow-up');
 
 // ===== ٢) جهاز قديم لا يمسح فيدباك غيره =====
-await push('crm_daily_feedback', [card, { ...card, id: 'fb-2', feedback: 'اتصال' }], salesCookie);
+// ملاحظة: نص الكومنت هنا كلام مندوب حقيقي — النصوص الآلية («اتصال» / «تم الرد»)
+// بتتشال من البيانات لأنها لوجات نظام مش كلام مندوب.
+await push('crm_daily_feedback', [card, { ...card, id: 'fb-2', feedback: 'طلب معاينة العقار' }], salesCookie);
 await push('crm_daily_feedback', [], salesCookie); // جهاز فاضي يرفع قائمة فارغة
 const afterStale = (await pull(adminCookie)).crm_daily_feedback || [];
 check(

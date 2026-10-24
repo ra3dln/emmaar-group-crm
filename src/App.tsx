@@ -45,6 +45,12 @@ import {
 } from '../shared/autoAssign.js';
 import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount } from '../shared/roles.js';
 import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor, LEAD_CLIENT_ID_PREFIX } from '../shared/leadClients.js';
+import {
+  cleanCommentText,
+  commentActivitiesOf,
+  dedupeComments,
+  isSystemOnlyText,
+} from '../shared/comments.js';
 import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
 import {
   FEEDBACK_STATUS_TO_STAGE,
@@ -141,8 +147,9 @@ const isManualLead = (lead: any): boolean =>
   !!(lead?.manual) || (!lead?.formName && !lead?.campaignAt);
 
 // ===== آخر التعليقات على رقم (عميل أو رقم موزَّع) =====
-// العميل: خطّه الزمني + بطاقات الفيدباك على نفس الهاتف. الرقم الموزَّع:
-// بطاقات الفيدباك + سجل المكالمات — كلهم مربوطين بالهاتف، فتبقى القصة كاملة.
+// **كلام السيلز فقط**: لا لوجات (اتصال/تذكير/واتساب) ولا تكرار.
+// العميل: كومنتاته في خطّه الزمني + بطاقات الفيدباك على نفس الهاتف.
+// الرقم الموزَّع: بطاقات الفيدباك فقط. كلهم مربوطين بالهاتف فتبقى القصة كاملة.
 const commentsOfTarget = (
   target: any,
   clients: any[] = [],
@@ -156,43 +163,37 @@ const commentsOfTarget = (
   const out: Array<{ id: string; by: string; at: string; text: string; status?: string; result?: string; nextAt?: string }> = [];
 
   const client = (clients || []).find((c: any) => String(c?.id) === String(target?.id));
-  for (const a of (client?.activities || [])) {
-    const text = String(a?.text || '').trim();
-    if (!text) continue;
+  // كومنتات العميل: بلا لوجات وبلا تكرار (shared/comments.js)
+  for (const a of commentActivitiesOf(client)) {
     out.push({
       id: String(a?.id || ''),
       by: String(a?.by || nameOf(a?.authorId)),
       at: String(a?.at || ''),
-      text,
+      text: String(a?.text || ''),
       status: String(a?.status || ''),
     });
   }
 
+  // بطاقات الفيدباك اليومي: نفس كلام المندوب — بتتدمج مع الكومنت فوقيه
   for (const f of (feedbacks || [])) {
     if (digitsOfPhone(f?.clientPhone) !== phone) continue;
+    const text = cleanCommentText(f?.feedback);
+    if (!text || isSystemOnlyText(text)) continue;
     out.push({
       id: String(f?.id || ''),
       by: nameOf(f?.userId),
       at: String(f?.createdAt || f?.date || ''),
-      text: String(f?.feedback || ''),
+      text,
       status: String(f?.status || ''),
       result: f?.callStatus === 'called' ? 'answered' : f?.callStatus === 'no-answer' ? 'no-answer' : '',
     });
   }
 
-  for (const l of (callLogs || [])) {
-    if (digitsOfPhone(l?.clientPhone) !== phone) continue;
-    out.push({
-      id: String(l?.id || ''),
-      by: nameOf(l?.salesId),
-      at: String(l?.createdAt || ''),
-      text: String(l?.comment || ''),
-      result: l?.result === 'no-answer' ? 'no-answer' : 'answered',
-    });
-  }
+  // سجل المكالمات (لوج) ما بيظهرش هنا — الكومنت بيوصل في بطاقات الفيدباك والخط الزمني.
 
   out.sort((a, b) => String(b.at).localeCompare(String(a.at)));
-  return out;
+  // نفس الكومنت ممكن يتكتب في أكتر من مكان — نخليه مرة واحدة بس
+  return dedupeComments(out);
 };
 
 // وقت مختصر للرسالة: الساعة لو اليوم، وإلا اليوم والشهر
@@ -2955,14 +2956,11 @@ function App() {
     const isRegisteredClient = storeClients.some((c) => c.id === target.id);
 
     if (isRegisteredClient) {
-      addClientActivity(
-        target.id,
-        'call',
-        payload.result === 'answered' ? 'اتصال: تم الرد ' : 'اتصال: لم يرد ',
-        currentUser.name
-      );
+      // الكومنت بس — ما فيش لوج «اتصال: تم الرد» في خط العميل:
+      // سجل المكالمات (crm_call_logs) هو اللي بيحفظ نتيجة المكالمة،
+      // والكومنتات بتعرض كلام السيلز فقط.
       if (callComment) {
-        addClientActivity(target.id, 'feedback', `من المكالمة: ${callComment}`, currentUser.name, {
+        addClientActivity(target.id, 'feedback', callComment, currentUser.name, {
           authorId: currentUser.id,
           callStatus: payload.result === 'answered' ? 'called' : 'no-answer',
           cardId: log.id,
@@ -5189,8 +5187,8 @@ const quickStageOf = (stage?: string): 'new' | 'followup' | 'closed' =>
     : 'new';
 const sourceLabelOf = (c: any): string =>
   (c.source && String(c.source).trim()) || SOURCE_LABEL[c.status] || 'غير محدد';
-const commentCountOf = (c: any): number =>
-  (c.activities || []).filter((a: ClientActivity) => /feedback|call|comment|note|فيدباك|اتصال/i.test(`${a.type}`)).length;
+// عدد كومنتات العميل: كلام المندوب فقط (لا لوجات ولا تكرار)
+const commentCountOf = (c: any): number => commentActivitiesOf(c).length;
 
 // ===== شريط الفيدباك: ٩ حالات، كل حالة بلون مضيء يظهر في الشريط بعد الاختيار =====
 // كل فيدباك = **حالة + كومنت إلزامي**: لا يُحفظ فيدباك بحالة بلا كومنت ولا كومنت بلا حالة.
@@ -5219,13 +5217,13 @@ const NEW_CLIENT_FEEDBACK = 'عميل جديد — لم يتم التواصل م
 
 // آخر حالة فيدباك على العميل — انظر src/feedbackBuckets.ts
 // (فيه أيضاً السقوط على المرحلة عند غياب حالة، حتى لا تبقى عدّادات اللوحة صفراً)
-// آخر فيدباك للعميل: نُفضّل آخر حدث يحمل حالة (فيدباك مسجّل من الشريط أو من مكالمة)
-// حتى لا يحل حدث «تغيير مرحلة» التلقائي مكان الكومنت الذي كتبه المندوب.
+// آخر فيدباك للعميل: نُفضّل آخر كومنت حقيقي يحمل حالة، وإلا آخر كومنت خالص.
+// (اللوجات — اتصال/تذكير/واتساب — ما بتظهرش هنا: الكومنت هو كلام المندوب.)
 const lastCommentOf = (c: any): ClientActivity | null => {
-  const activities: ClientActivity[] = c?.activities || [];
+  const comments = commentActivitiesOf(c) as ClientActivity[];
   return (
-    activities.find((a: ClientActivity) => a?.status && String(a?.text || '').trim()) ||
-    activities.find((a: ClientActivity) => !!String(a?.text || '').trim()) ||
+    comments.find((a: ClientActivity) => a?.status) ||
+    comments[0] ||
     null
   );
 };
@@ -5755,9 +5753,8 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
 
     const list: Array<{ id: string; at: string; text: string; by?: string; status?: string; kind: string; result?: string }> = [];
 
-    for (const activity of client?.activities || []) {
-      if (!String(activity?.text || '').trim()) continue;
-      if (!/feedback|call|note|comment|فيدباك|اتصال|ملاحظة/i.test(String(activity.type || ''))) continue;
+    // كومنتات العميل: كلام المندوب فقط — لا لوجات (اتصال/تذكير/واتساب)
+    for (const activity of commentActivitiesOf(client)) {
       list.push({
         id: `act-${activity.id}`,
         at: activity.at,
@@ -5772,69 +5769,25 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
       const samePhone = digits && normalizeDigits(String(feedback.clientPhone || '')).replace(/\D/g, '') === digits;
       const sameName = name && normalizeArabicText(String(feedback.clientName || '')) === name;
       if (!samePhone && !sameName) continue;
-      if (!String(feedback.feedback || '').trim()) continue;
+      const fbText = cleanCommentText(feedback.feedback);
+      if (!fbText || isSystemOnlyText(fbText)) continue;
       list.push({
         id: `fb-${feedback.id}`,
         at: feedback.date || feedback.createdAt,
-        text: feedback.feedback,
+        text: fbText,
         status: feedback.status,
         kind: 'feedback',
         result: feedback.callStatus,
       });
     }
 
-    for (const log of callLogs || []) {
-      const sameClient = String(log.clientId || '') === String(client?.id || '');
-      const samePhone = digits && normalizeDigits(String(log.clientPhone || '')).replace(/\D/g, '') === digits;
-      if (!sameClient && !samePhone) continue;
-      if (!String(log.comment || '').trim()) continue;
-      list.push({
-        id: `call-${log.id}`,
-        at: log.createdAt,
-        text: log.comment,
-        by: log.salesName,
-        kind: 'call',
-        result: log.result,
-        status: log.result === 'answered' ? 'follow-up' : 'no-answer',
-      });
-    }
+    // سجل المكالمات (لوج) ما بيظهرش هنا — الكومنت بيوصل في بطاقات الفيدباك والخط الزمني.
 
-    // ===== كل تفاعل يظهر مرة واحدة فقط =====
-    // تسجيل مكالمة أو فيدباك يكتب نفس الحكاية في أكثر من مكان (حدث على العميل +
-    // بطاقة فيدباك + سجل مكالمة)، فكان العميل الواحد يظهر بـ«٣ فيدباك» لنفس
-    // اللحظة ونفس النتيجة. هنا ندمج سجلات نفس الدقيقة ونفس النتيجة في سطر واحد،
-    // ونُبقي نص الكومنت المكتوب (مش نص المكالمة الآلي).
-    const minuteOf = (at: string) => String(at || '').slice(0, 16);
-    const outcomeOf = (entry: (typeof list)[number]): 'no-answer' | 'answered' | 'none' => {
-      if (entry.result === 'no-answer' || entry.status === 'no-answer') return 'no-answer';
-      if (entry.result === 'answered' || entry.status) return 'answered';
-      return 'none';
-    };
-    const merged = new Map<string, (typeof list)[number]>();
-    for (const entry of list) {
-      const outcome = outcomeOf(entry);
-      const key =
-        outcome === 'none'
-          ? `${minuteOf(entry.at)}|none|${String(entry.text).trim()}`
-          : `${minuteOf(entry.at)}|${outcome}`;
-      const current = merged.get(key);
-      if (!current) {
-        merged.set(key, entry);
-        continue;
-      }
-      // نص الكومنت المكتوب يغلب نص المكالمة الآلي
-      const primary = current.kind === 'call' && entry.kind !== 'call' ? entry : current;
-      merged.set(key, {
-        ...current,
-        ...primary,
-        at: current.at,
-        by: current.by || entry.by,
-        status: current.status || entry.status,
-        result: current.result || entry.result,
-      });
-    }
-    return [...merged.values()].sort((a, b) => String(b.at).localeCompare(String(a.at)));
-  }, [client, callLogs, feedbacks]);
+    // ===== كل كومنت يظهر مرة واحدة فقط =====
+    // نفس الكلام بينكتب في أكتر من مكان (حدث على العميل + بطاقة فيدباك في «الفيدباك
+    // اليومي»)، فكان نفس الكومنت بيتكرّر مرتين أو ثلاث. هنا ندمجهم في سطر واحد.
+    return dedupeComments(list).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  }, [client, feedbacks]);
 
   const days = useMemo(() => {
     const map = new Map<string, typeof entries>();
@@ -11845,9 +11798,8 @@ function AddReminderModal({ clients, currentUser, onClose, onSuccess }: any) {
         const newReminder = { ...form, id: crypto.randomUUID(), userId: currentUser.id, isCompleted: false, isDelayed: false, delayCount: 0, createdAt: new Date().toISOString() };
         localStorage.setItem('crm_reminders', JSON.stringify([newReminder, ...reminders]));
         setCreatedId(newReminder.id);
-        if (form.clientId) {
-          addClientActivity(form.clientId, 'reminder', `تم إنشاء تذكير${form.note ? `: ${form.note}` : ''}`, currentUser?.name);
-        }
+        // ما بنكتبش لوج «تم إنشاء تذكير» في خط العميل:
+        // التذكير نفسه في crm_reminders، والكومنتات بتعرض كلام السيلز فقط.
       }
       // لا نعتبر التذكير محفوظاً قبل وصوله للقاعدة: إشعار «الموقع مقفول» يرسله السيرفر من هناك
       const savedToDb = await pushKey('crm_reminders');
@@ -13265,15 +13217,14 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
   // عميل مسجَّل باسم الإدارة يظهر كأن الإدارة كتبته ولا يظهر في كارت المندوب إطلاقاً.
   for (const c of clients || []) {
     const isOwner = c.userId === userId || c.assignedTo === userId;
-    const acts = (c.activities || []).filter(
+    // كلام المندوب فقط: لا لوجات (اتصال/واتساب/تذكير) ولا كومنت مكرر
+    const acts = commentActivitiesOf(c).filter(
       (a: any) => isOwner || (!!userName && String(a.by || '').trim() === userName)
     );
-    if (!isOwner && !acts.some((a: any) => a && a.text)) continue;
+    if (!isOwner && !acts.length) continue;
     const entry = ensure(norm(c.phone) || `id:${c.id}`, { ...c, incoming: false });
     for (const a of acts) {
-      if (/feedback|call|comment|note/i.test(`${a.type}`) && a.text) {
-        entry.items.push({ id: a.id, text: a.text, at: a.at, kind: 'كومنت', status: '' });
-      }
+      entry.items.push({ id: a.id, text: a.text, at: a.at, kind: 'كومنت', status: a.status || '' });
     }
   }
 
@@ -13284,37 +13235,17 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
     if (!map.has(key)) ensure(key, { name: l.name, phone: l.phone, source: 'رقم وارد من الإدارة', incoming: true });
   }
 
-  // كومنتات الاتصالات
-  for (const log of callLogs || []) {
-    if (log.salesId !== userId || !log.comment) continue;
-    const key = norm(log.clientPhone);
-    const entry = key && map.has(key)
-      ? map.get(key)!
-      : ensure(key || `log:${log.id}`, { name: log.clientName, phone: log.clientPhone, source: 'مكالمة' });
-    entry.items.push({
-      id: log.id,
-      text: log.comment,
-      at: log.createdAt,
-      kind: 'مكالمة',
-      status: log.result === 'answered' ? 'تم الرد ' : 'لم يرد ',
-    });
-  }
+  // سجل المكالمات (لوج) ما بيظهرش في الفيدباك اليومي — كلام السيلز بس.
+  // لو المكالمة كانت مندوب ما عندوش عميل مسجّل، الكومنت بيوصل ببطاقة الفيدباك (تحت).
 
   // إزالة التكرار (نفس النص في نفس الدقيقة) + الترتيب من الأحدث
   for (const entry of map.values()) {
-    const seen = new Set<string>();
-    entry.items = entry.items
-      .sort((a, b) => String(b.at).localeCompare(String(a.at)))
-      .filter((item) => {
-        const clean = String(item.text).replace(/^(فيدباك:|من المكالمة:|اتصال:)\s*/, '').trim();
-        const sig = `${clean}|${String(item.at).slice(0, 16)}`;
-        if (seen.has(sig)) return false;
-        seen.add(sig);
-        return true;
-      });
+    entry.items = dedupeComments(entry.items).sort((a, b) => String(b.at).localeCompare(String(a.at)));
   }
 
-  return Array.from(map.values()).sort((a, b) => {
+  // الأرقام اللي مالها كلام مندوب ما بتتعرضش في لوحة الفيدباك اليومي
+  const withItems = Array.from(map.values()).filter((entry) => entry.items.length > 0);
+  return withItems.sort((a, b) => {
     if (!!a.items.length !== !!b.items.length) return a.items.length ? -1 : 1;
     const ta = Date.parse(a.items[0]?.at || '') || 0;
     const tb = Date.parse(b.items[0]?.at || '') || 0;
@@ -13342,6 +13273,9 @@ function mergeDailyFeedbackCards(
 ): FeedbackNumber[] {
   for (const card of dailyFeedbacks || []) {
     if (!card || card.userId !== userId || !String(card.feedback || '').trim()) continue;
+    // نص النظام الآلي (لوج) ما بيظهرش — كلام السيلز بس
+    const cardText = cleanCommentText(card.feedback);
+    if (!cardText || isSystemOnlyText(cardText)) continue;
     const key = normPhone(card.clientPhone) || `fb:${card.id}`;
     let target: FeedbackNumber | undefined = nums.find((n: FeedbackNumber) => n.key === key);
     if (!target) {
@@ -13359,9 +13293,9 @@ function mergeDailyFeedbackCards(
     const at = card.date || card.createdAt;
     const dup = target.items.some(
       (item: FeedbackNumber['items'][number]) =>
-        item.text === card.feedback && String(item.at).slice(0, 16) === String(at).slice(0, 16)
+        cleanCommentText(item.text) === cardText && String(item.at).slice(0, 16) === String(at).slice(0, 16)
     );
-    if (!dup) target.items.push({ id: card.id, text: card.feedback, at, kind: 'فيدباك', status: card.status || '' });
+    if (!dup) target.items.push({ id: card.id, text: cardText, at, kind: 'فيدباك', status: card.status || '' });
   }
   for (const number of nums)
     number.items.sort((a: FeedbackNumber['items'][number], b: FeedbackNumber['items'][number]) =>
@@ -13520,9 +13454,8 @@ const ACTIVITY_ICONS: Record<string, string> = {
 function ClientDetailModal({ client, onClose, onSuccess, onCall }: any) {
   const activities: ClientActivity[] = client.activities || [];
   // فيدباك العميل وكومنتاته — تظهر هنا لحظة الضغط على الكارت (بدل ما تفضل مخفية)
-  const feedbackEntries = activities
-    .filter((a) => String(a?.text || '').trim() && /feedback|call|comment|note|whatsapp|فيدباك|اتصال|ملاحظة/i.test(String(a?.type || '')))
-    .slice(0, 12);
+  // كلام المندوب فقط: لا لوجات (اتصال/واتساب/تذكير) ولا كومنت مكرر.
+  const feedbackEntries = commentActivitiesOf(client).slice(0, 12);
   const logActivity = (type: string, text: string) => {
     addClientActivity(client.id, type, text);
     onSuccess?.();

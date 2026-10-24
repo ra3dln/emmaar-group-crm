@@ -115,8 +115,11 @@ check('نافذة الإجراء: خانة الكومنت', /eg-textarea/.test(s
 check('نافذة الإجراء: آخر التعليقات بعدّاد', /Last comments/.test(sheet) && /eg-comment/.test(sheet) && /comments\.length/.test(sheet));
 check('نافذة الإجراء: زر Add Action', /eg-submit/.test(sheet) && /Add Action/.test(sheet));
 check(
-  'التعليقات بتتبني من خط العميل + بطاقات الفيدباك + سجل المكالمات',
-  /const commentsOfTarget =/.test(app) && /client\?\.activities/.test(app) && /digitsOfPhone\(f\?\.clientPhone\)/.test(app)
+  'التعليقات بتتبني من خط العميل + بطاقات الفيدباك (سجل المكالمات لوج — مش داخل)',
+  /const commentsOfTarget =/.test(app) &&
+    /commentActivitiesOf\(client\)/.test(app) &&
+    /digitsOfPhone\(f\?\.clientPhone\)/.test(app) &&
+    !/for \(const l of \(callLogs \|\| \[\]\)\)/.test(app)
 );
 
 // ===== ٦) تبويب «عملائي»: الأرقام اليدوية فقط =====

@@ -177,8 +177,10 @@ check(
   app.includes('فيدباك العميل وكومنتاته') && app.includes('feedbackEntries')
 );
 check(
-  'نفس الفيدباك مكتوب مرة واحدة في الكومنتات (دمج الحدث + بطاقة الفيدباك + سجل المكالمة)',
-  app.includes('const minuteOf =') && app.includes('const outcomeOf =') && app.includes('const merged = new Map')
+  'نفس الفيدباك مكتوب مرة واحدة في الكومنتات (دمج الحدث + بطاقة الفيدباك، بلا لوجات)',
+  app.includes('dedupeComments(list)') &&
+    app.includes('commentActivitiesOf(client)') &&
+    !app.includes("kind: 'call'")
 );
 
 console.log(`\n✅ نجحت ${passed} فحوصات لواجهة الهاتف`);
