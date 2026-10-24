@@ -31,7 +31,7 @@ self.addEventListener('push', (event) => {
   try {
     data = event.data ? event.data.json() : {};
   } catch {
-    data = { title: 'إعمار جروب', body: event.data ? event.data.text() : '' };
+    data = { title: 'MSA CRM', body: event.data ? event.data.text() : '' };
   }
 
   const title = data.title || 'تذكير بالاتصال';
@@ -109,7 +109,7 @@ self.addEventListener('message', (event) => {
   const msg = event.data || {};
   if (msg.type === 'notify') {
     event.waitUntil(
-      showSafe(msg.title || 'إعمار جروب', {
+      showSafe(msg.title || 'MSA CRM', {
         body: msg.body || '',
         icon: ICON,
         badge: ICON,

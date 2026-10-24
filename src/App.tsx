@@ -307,7 +307,7 @@ const initializeSystem = () => {
         id: 'admin-001',
         username: 'admin',
         password: 'admin123',
-        name: 'إدارة إعمار جروب',
+        name: 'إدارة MSA CRM',
         phone: '',
         role: 'admin',
         team: '',
@@ -2753,11 +2753,11 @@ function App() {
         {/* القائمة الجانبية — على يمين الشاشة */}
         <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''} ${desktopNavHidden ? 'rail' : ''}`}>
           <div className="sidebar-brand">
-            <img src="/emaar-logo.jpg" alt="Emaar Group" className="brand-mark object-cover" />
+            <img src="/msa-logo.png" alt="MSA CRM" className="brand-mark object-cover" />
             <div className="min-w-0">
-              <h1 className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight truncate">Emaar Group CRM</h1>
+              <h1 className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight truncate">MSA CRM</h1>
               <p className="text-[10.5px] text-[var(--text-dim)] truncate">
-                {(currentUser as User).developer ? 'إعمار جروب — System Deveolper' : 'إعمار جروب — إدارة العملاء'}
+                {(currentUser as User).developer ? 'MSA CRM — System Developer' : 'MSA CRM — إدارة العملاء'}
               </p>
             </div>
           </div>
@@ -4099,10 +4099,10 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
       <div className="login-wrap">
         <div className="login-brand">
           <div className="flex items-center gap-3">
-            <img src="/emaar-logo.jpg" alt="Emaar Group" className="login-mark" />
+            <img src="/msa-logo.png" alt="MSA CRM" className="login-mark" />
             <div className="min-w-0">
-              <p className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight">Emaar Group</p>
-              <p className="text-[11px] text-[var(--text-dim)] leading-tight">إعمار جروب — تسويق عقاري</p>
+              <p className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight">MSA CRM</p>
+              <p className="text-[11px] text-[var(--text-dim)] leading-tight">إدارة العملاء العقارية</p>
             </div>
           </div>
 
@@ -4128,7 +4128,7 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
             </button>
           </div>
 
-          <p className="login-code">Emaar Group CRM</p>
+          <p className="login-code">MSA CRM</p>
         </div>
 
         <LoginPlan lines={['متصل بقاعدة بيانات الفريق', 'أي تعديل يظهر على كل الأجهزة في ثوانٍ.']} />
@@ -4140,10 +4140,10 @@ function LoginScreen({ onLogin, initialNotice = '' }: { onLogin: (user: User) =>
     <div className="login-wrap">
       <div className="login-brand">
         <div className="flex items-center gap-3">
-          <img src="/emaar-logo.jpg" alt="Emaar Group" className="login-mark" />
+          <img src="/msa-logo.png" alt="MSA CRM" className="login-mark" />
           <div className="min-w-0">
-            <p className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight">Emaar Group</p>
-            <p className="text-[11px] text-[var(--text-dim)] leading-tight">إعمار جروب — تسويق عقاري</p>
+            <p className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight">MSA CRM</p>
+            <p className="text-[11px] text-[var(--text-dim)] leading-tight">إدارة العملاء العقارية</p>
           </div>
         </div>
 

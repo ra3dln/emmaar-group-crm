@@ -83,7 +83,7 @@ const publicProperty = (property = {}) => ({
 
 const companyName = (data) => {
   const row = Array.isArray(data?.crm_company) ? data.crm_company[0] : null;
-  return (row && row.name) || (data?.crm_company_settings && data.crm_company_settings.name) || 'إعمار جروب';
+  return (row && row.name) || (data?.crm_company_settings && data.crm_company_settings.name) || 'MSA CRM';
 };
 
 // التخزين يُمرَّر جاهزاً (ملف محلي على سيرفر الشركة، أو قاعدة مشتركة على الاستضافة)
@@ -255,7 +255,7 @@ function renderPage() {
 <body>
   <div class="wrap">
     <div class="brand">
-      <div class="logo" id="brand">إعمار جروب</div>
+      <div class="logo" id="brand">MSA CRM</div>
       <div class="chip">عرض وحدة</div>
     </div>
     <main id="content"><div class="card muted">جارٍ تحميل بيانات الوحدة…</div></main>

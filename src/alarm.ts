@@ -114,7 +114,7 @@ class AlarmEngine {
     try {
       const ms = (navigator as any).mediaSession;
       if (!ms) return;
-      ms.metadata = new (window as any).MediaMetadata({ title, artist: body, album: 'إعمار جروب CRM' });
+      ms.metadata = new (window as any).MediaMetadata({ title, artist: body, album: 'MSA CRM' });
       ms.playbackState = 'playing';
     } catch {
       /* غير مدعوم */

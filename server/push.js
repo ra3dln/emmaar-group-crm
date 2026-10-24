@@ -286,7 +286,7 @@ function buildPushHandler({ getKeys, loadDb, saveDb, stateStore = null, auth = n
         const body = await readBody(req);
         const userId = session ? session.u : body?.userId;
         const result = await pushToUser(userId, {
-          title: '🔔 إشعار تجريبي — إعمار جروب',
+          title: '🔔 إشعار تجريبي — MSA CRM',
           body: 'لو وصلتك الرسالة دي فالموقع شغّال كأنه تطبيق على جهازك ✓',
           tag: `test-${Date.now()}`,
           url: '/',
