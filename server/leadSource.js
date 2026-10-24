@@ -905,6 +905,14 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       : { leads: built.added, assignments: [], byRule: {} };
 
     if (auto.leads.length) {
+      // ===== وقت الإسناد معلَّم على الرقم =====
+      // إشعار المندوب يُحسب من لحظة الإسناد لا من لحظة وصول الرقم: رقم وارد من ساعات
+      // واتوزّع الآن لازم يوصل صاحبه إشعار، والعكس.
+      const assignedNow = new Set(auto.assignments.map((item) => String(item.id)));
+      for (const lead of auto.leads) {
+        if (assignedNow.has(String(lead.id)) && lead.salesId) lead.assignedAt = at;
+      }
+
       // ===== الحفظ: نعيد القراءة قبل الكتابة =====
       // السحب بياخد وقت، وأي رقم أو عميل أُضيف من جهاز مندوب أثناء السحب ما ينفعش
       // يضيع لما نكتب القوائم كاملة. فنعيد تحميل القاعدة وندمج الجديد فيها

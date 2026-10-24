@@ -249,6 +249,7 @@ try {
   const app = fs.readFileSync('src/App.tsx', 'utf8');
   const pushSrc = fs.readFileSync('src/push.ts', 'utf8');
   const swSrc = fs.readFileSync('public/sw.js', 'utf8');
+  const serverPushSrc = fs.readFileSync('server/push.js', 'utf8');
   check('ضغط الجرس يعلّم الرسائل مقروءة في السجل المشترك', /openNotifyCenter[\s\S]{0,400}handleMarkRead\(direct\)/.test(app));
   check('تعليم الرسائل مقروءة يُرفع للسيرفر', /handleMarkRead[\s\S]{0,900}pushKey\('crm_messages'\)/.test(app));
   check('كل جهاز مفتوح يطلب الإرسال المستحق دورياً', app.includes('flushPush()') && app.includes("setInterval(run, 60_000)"));
@@ -256,6 +257,15 @@ try {
   check('إعادة الاشتراك عند مفتاح قديم (InvalidStateError)', pushSrc.includes('stale.unsubscribe()'));
   check('ملف العامل يعرض الإشعار بمحاولة آمنة', swSrc.includes('showSafe') && swSrc.includes('requireInteraction'));
   check('إشعار الرقم الجديد يفتح الصفحة عند اللمس', swSrc.includes('notificationclick') && swSrc.includes('openWindow'));
+  // إشعار «رقم جديد نزل» للمندوب: يُحسب من وقت الإسناد لا الوصول، ويُسجَّل لكل
+  // «رقم × مستلم» على حدة، ويحمل اسم الفورم الذي نزل منه الرقم.
+  check('إشعار الرقم يُحسب من وقت الإسناد', serverPushSrc.includes('lead.assignedAt || lead.createdAt'));
+  check('إشعار الرقم يُسجّل لكل «رقم × مستلم»', serverPushSrc.includes('`${lead.id}|${target}`'));
+  check('إشعار الرقم يحمل اسم الفورم', serverPushSrc.includes('one?.formName'));
+  check(
+    'الواجهة تعلّم وقت الإسناد على الرقم وتفتح تبويب «أرقام جديدة» للسيلز',
+    app.includes('assignedAt: movedAt') && app.includes("label: 'أرقام جديدة'")
+  );
 
   // ===== ١٢) تنبيهات النظام (انتهاء توكن السحب) — تصل الإدارة وحدها ولا تتكرر كل دورة =====
   const bossLogin = await call('/api/auth?action=login', {
@@ -340,6 +350,55 @@ try {
     'دفعة ٥ أرقام = إشعار واحد (لا إغراق)',
     batchRun.leads === 5 && received.length === beforeBatch + 1,
     JSON.stringify(batchRun)
+  );
+
+  // ===== ١٤) رقم يوصل غير موزّع ثم يتوزّع: الإدارة تُنبَّه أولاً وصاحبه بعدها =====
+  // العلة الحقيقية التي كانت تمنع وصول الإشعار للمندوب: إشعار الإدارة عن رقم غير
+  // موزّع كان يسجّل الرقم نفسه، فلما يتوزّع على مندوب ما يوصلهوش أي شيء.
+  db.data.crm_assigned_leads = [
+    {
+      id: 'lead-late',
+      name: 'رقم اتوزّع بعد شوية',
+      phone: '01010004001',
+      salesId: '',
+      createdAt: new Date(Date.now() - 3 * 24 * 60 * 60_000).toISOString(),
+      formName: 'فورم أكتوبر',
+    },
+  ];
+  const beforeLate = received.length;
+  const staleRun = await processPushesOnce({ storage, vapidStore, stateStore });
+  check('رقم قديم غير موزّع لا يزعج أحداً', staleRun.leads === 0 && received.length === beforeLate, JSON.stringify(staleRun));
+
+  db.data.crm_assigned_leads[0].createdAt = new Date(Date.now() - 60_000).toISOString();
+  const arrivedRun = await processPushesOnce({ storage, vapidStore, stateStore });
+  check(
+    'رقم جديد غير موزّع يُنبّه الإدارة',
+    arrivedRun.leads === 1 && received.length === beforeLate + 1,
+    JSON.stringify(arrivedRun)
+  );
+
+  // دلوقتي بيتوزّع على مندوب: لازم يوصله إشعار **رغم** أن الإدارة عرفت بالرقم قبله
+  db.data.crm_assigned_leads[0].salesId = 'sales-1';
+  db.data.crm_assigned_leads[0].assignedAt = new Date().toISOString();
+  const assignedRun = await processPushesOnce({ storage, vapidStore, stateStore });
+  check(
+    'الرقم لما يتوزّع يوصل صاحبه إشعار حتى لو الإدارة اتنبّهت بيه قبل كده',
+    assignedRun.leads === 1 && received.length === beforeLate + 2,
+    JSON.stringify(assignedRun)
+  );
+  const repeatRun = await processPushesOnce({ storage, vapidStore, stateStore });
+  check('إشعار التوزيع لا يتكرر كل دورة', repeatRun.leads === 0 && received.length === beforeLate + 2, JSON.stringify(repeatRun));
+
+  // نفس الرقم لو اتنقل لمندوب بلا أجهزة: الإشعار ما يضيعش ولا يتسجّل كمُرسَل
+  db.data.crm_assigned_leads[0].salesId = 'sales-2';
+  db.data.crm_assigned_leads[0].assignedAt = new Date().toISOString();
+  const movedRun = await processPushesOnce({ storage, vapidStore, stateStore });
+  check(
+    'رقم اتنقل لمندوب بلا أجهزة: ما يتسجّلش كمُرسَل (يُعاد لما يشترك)',
+    movedRun.leads === 0 &&
+      received.length === beforeLate + 2 &&
+      (pushState.leads || {})['lead-late|sales-2'] === undefined,
+    JSON.stringify(movedRun)
   );
 
   console.log(`\n✅ كل اختبارات الإشعارات نجحت (${passed}).`);

@@ -1856,7 +1856,8 @@ function App() {
     localStorage.setItem('crm_assigned_leads', JSON.stringify(next));
     const scope = dataScopeOf(currentUser, JSON.parse(localStorage.getItem('crm_users') || '[]'));
     setAssignedLeads(scope ? next.filter((l: AssignedLead) => scope.has(String(l.salesId || ''))) : next);
-    void pushKey('crm_assigned_leads');
+    // نُرجع وعد الرفع حتى ينتظر من يحتاج إشعاراً بعد وصول التوزيع للسيرفر
+    return pushKey('crm_assigned_leads');
   };
 
   const handleLogout = () => {
@@ -1984,9 +1985,17 @@ function App() {
   //   • توزيع دفعة على مندوب واحد (كل القيم نفس المعرّف)
   //   • التوزيع التلقائي بالتساوي على عدة مندوبين (كل رقم يأخذ مندوبه)
   const applyLeadOwners = (ownerOf: Map<string, string>) => {
-    if (!currentUser || !ownerOf.size) return;
-    writeAssignedLeads((all) =>
-      all.map((l: AssignedLead) => (ownerOf.has(l.id) ? { ...l, salesId: ownerOf.get(l.id) || '' } : l))
+    if (!currentUser || !ownerOf.size) return null;
+    const movedAt = new Date().toISOString();
+    // `assignedAt` = وقت التوزيع: إشعار المندوب يُحسب منه لا من تاريخ وصول الرقم،
+    // فرقم قديم اتوزّع النهاردة يوصل صاحبه إشعار برضه.
+    const synced = writeAssignedLeads((all) =>
+      all.map((l: AssignedLead) => {
+        if (!ownerOf.has(l.id)) return l;
+        const owner = ownerOf.get(l.id) || '';
+        if (owner === String(l.salesId || '')) return l;
+        return { ...l, salesId: owner, ...(owner ? { assignedAt: movedAt } : {}) };
+      })
     );
 
     // لو أي رقم من الموزَّعين تحوَّل لعميل بالفعل، ينتقل العميل نفسه لمندوبه الجديد (مع حدث في خطه الزمني)
@@ -2006,7 +2015,6 @@ function App() {
     } catch {
       all = [];
     }
-    const movedAt = new Date().toISOString();
     let next = all;
     let touched = false;
 
@@ -2052,12 +2060,15 @@ function App() {
       localStorage.setItem('crm_clients', JSON.stringify(next));
       void pushKey('crm_clients');
     }
+    return synced;
   };
 
   const handleAssignLeads = (ids: string[], salesId: string) => {
     const unique = [...new Set((ids || []).filter(Boolean))];
     if (!unique.length) return;
-    applyLeadOwners(new Map(unique.map((id) => [id, salesId])));
+    const synced = applyLeadOwners(new Map(unique.map((id) => [id, salesId])));
+    // الإشعار الخارجي للمندوب ينطلق بعد ما يوصل التوزيع للسيرفر — بدل انتظار الدورة
+    if (synced) void synced.then(() => flushPush(true)).catch(() => {});
   };
 
   // ===== حفظ قاعدة «التوزيع التلقائي» لفورم =====
@@ -2499,8 +2510,17 @@ function App() {
     .slice()
     .sort((a, b) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
 
-  // أرقام توزيع الكامبين مش إشعارات إدارة — السيلز يشوفها في «عملاء كامبين».
-  const notifLeads: AssignedLead[] = [];
+  // ===== أرقام جديدة نزلت على السيلز =====
+  // السيلز كان ما يوصلهوش أي إشعار برقم اتوزّع عليه (لا في الجرس ولا عدّاد) — الأرقام
+  // كانت بتتسجّل في «عملاء كامبين» بس. فبقى له تبويب «أرقام جديدة» في مركز الإشعارات
+  // بعدّاد أحمر، ويعرض الأرقام اللي لسه ما اتفتحتش.
+  const notifLeads: AssignedLead[] = isSalesView
+    ? assignedLeads
+        .filter((l: AssignedLead) => l.salesId === currentUser.id && l.status === 'new')
+        .slice()
+        .sort((a, b) => String(b.assignedAt || b.createdAt || '').localeCompare(String(a.assignedAt || a.createdAt || '')))
+        .slice(0, 40)
+    : [];
 
   const notifMessages = messages
     .filter((m) => messageTargetsUser(m, currentUser))
@@ -2514,6 +2534,7 @@ function App() {
   // «اتصالات الفريق» إشعار إدارة: حساب المطوّر (سلوكه سيلز) ما يحسبش اتصالات زملائه
   // في العدّاد، وإلا ظهرت له إشعارات مش ليه.
   const unseenNotifIds = [
+    ...notifLeads.map((l) => `lead-${l.id}`),
     ...notifReminders.filter((r) => isReminderDue(r)).map((r) => `rem-${r.id}`),
     ...notifMessages.filter((m) => !isMessageReadBy(m, currentUser.id)).map((m) => `msg-${m.id}`),
     ...(effectiveRoleOf(currentUser) !== 'sales' ? notifCalls.slice(0, 30).map((c) => `call-${c.id}`) : []),
@@ -3156,6 +3177,7 @@ function App() {
             user={currentUser}
             reminders={notifReminders}
             leads={notifLeads}
+            showLeads={isSalesView}
             messages={notifMessages}
             callLogs={effectiveRoleOf(currentUser) === 'sales' ? [] : notifCalls}
             unseenIds={unseenNotifIds}
@@ -4835,6 +4857,20 @@ function FeedbackBar({ client, onPick }: { client: any; onPick?: (statusId: stri
   return <StatusMenu value={active} onPick={(id) => onPick?.(id)} className="fb-bar-menu" />;
 }
 
+// ===== اسم الفورم جنب كل رقم =====
+// كل رقم في النظام له فورم نزل منه؛ الاسم يظهر جمب الهاتف في كل القوائم
+// (السجلات القديمة اللي ما فيهاش `formName` يُقرأ اسمها من نص الوصف).
+function FormNameChip({ record, className = '' }: { record: any; className?: string }) {
+  const name = formNameOf(record);
+  if (!name) return null;
+  return (
+    <span className={`cc-form ${className}`.trim()} title={`الفورم: ${name}`} dir="auto">
+      <ClipboardList className="w-3 h-3 shrink-0" />
+      <span translate="no">{name}</span>
+    </span>
+  );
+}
+
 // ===== كارت العميل الواحد: نفس الكارت في تبويب «العملاء» وفي «المراحل» =====
 // نفس الشكل بالحرف (الأفاتار + مصدر الرقم + شريط الفيدباك بتسع حالات + آخر كومنت +
 // الهاتف + الأزرار)، لأن المراحل كانت تعرض سطرين بلا وسيلة لتسجيل فيدباك.
@@ -4920,7 +4956,10 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
             <p className="cc-lastfb"><FeedbackChip status={last.status} /> {last.text}</p>
           )}
 
-          <a className="cc-phone" dir="ltr" href={`tel:${client?.phone}`} onClick={(e) => e.stopPropagation()}>{client?.phone}</a>
+          <div className="cc-phone-row">
+            <a className="cc-phone" dir="ltr" href={`tel:${client?.phone}`} onClick={(e) => e.stopPropagation()}>{client?.phone}</a>
+            <FormNameChip record={client} />
+          </div>
 
           {facts.length > 0 && (
             <div className="cc-facts">
@@ -5673,8 +5712,9 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                         </span>
                       )}
                     </span>
-                    <span role="cell" dir="ltr" className="ct-phone">
-                      <a href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
+                    <span role="cell" className="ct-phone">
+                      <a href={`tel:${phone}`} dir="ltr" onClick={(e) => e.stopPropagation()}>{phone}</a>
+                      <FormNameChip record={isLead ? lead : client} />
                     </span>
                     <span role="cell">
                       <span className={`cc-src ${src.cls}`} title={sourceText}><SrcIcon className="w-3 h-3" />{sourceText}</span>
@@ -5785,7 +5825,10 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                       <p className="cc-lastfb"><FeedbackChip status={last.status} /> {last.text}</p>
                     )}
 
-                    <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
+                    <div className="cc-phone-row">
+                      <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
+                      <FormNameChip record={isLead ? lead : client} />
+                    </div>
 
                     {facts.length > 0 && (
                       <div className="cc-facts">
@@ -5967,7 +6010,10 @@ function LeadStageCard({ lead, record, onLeadViewed }: any) {
             {sourceText}
           </span>
         </div>
-        <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
+        <div className="cc-phone-row">
+          <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
+          <FormNameChip record={lead || record} />
+        </div>
         <p className="cc-note">
           وصل من {sourceText}{lead?.createdAt ? ` — ${formatDateTime(lead.createdAt)}` : ''}
         </p>
@@ -6384,9 +6430,18 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
 }
 
 // ===== مركز الإشعارات: كل ما يخصك مقسَّماً على تبويبات =====
-function NotificationsCenter({ user, reminders, leads, messages, callLogs, unseenIds, onSeen, onClose, onOpenAlarm, onGo }: any) {
+function NotificationsCenter({ user, reminders, leads, messages, callLogs, unseenIds, showLeads, onSeen, onClose, onOpenAlarm, onGo }: any) {
   const isSales = user.role === 'sales';
-  const tabs = isSales
+  // تبويب «أرقام جديدة» للحسابات اللي بتستقبل أرقاماً (سيلز/حساب المطوّر السيلز)
+  const leadsTab = showLeads === undefined ? isSales : !!showLeads;
+  const tabs = leadsTab
+    ? [
+        { id: 'leads', label: 'أرقام جديدة', icon: UserPlus },
+        { id: 'reminders', label: 'التذكيرات', icon: Bell },
+        { id: 'messages', label: 'الرسائل', icon: MessageCircle },
+        ...(isSales ? [] : [{ id: 'calls', label: 'اتصالات الفريق', icon: PhoneCall }]),
+      ]
+    : isSales
     ? [
         { id: 'reminders', label: 'التذكيرات', icon: Bell },
         { id: 'messages', label: 'الرسائل', icon: MessageCircle },
@@ -6448,7 +6503,14 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
           x.startsWith(id === 'calls' ? 'call-' : id === 'reminders' ? 'rem-' : id === 'leads' ? 'lead-' : 'msg-')
         ).length;
 
-  const goTarget = tab === 'reminders' ? 'reminders' : tab === 'calls' ? (isSales ? 'daily-feedback' : 'admin-feedback') : (isSales ? 'chat' : 'admin-chat');
+  const goTarget =
+    tab === 'leads'
+      ? 'clients'
+      : tab === 'reminders'
+      ? 'reminders'
+      : tab === 'calls'
+      ? (isSales ? 'daily-feedback' : 'admin-feedback')
+      : (isSales ? 'chat' : 'admin-chat');
 
   const now = Date.now();
   const empty = (text: string) => <p className="text-sm text-[var(--text-dim)] text-center py-10">{text}</p>;
@@ -6550,8 +6612,12 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
                   {l.status === 'new' ? 'جديد' : l.status === 'viewed' ? 'تم العرض' : 'تم التواصل'}
                 </span>
               </div>
-              <p className="text-xs text-[var(--text-muted)] mt-1" dir="ltr">{l.phone}</p>
-              {l.description && <p className="text-xs text-[var(--text-dim)] mt-1">{l.description}</p>}
+              <div className="flex items-center justify-between gap-2 flex-wrap mt-1">
+                <a className="text-xs text-[var(--brand)] font-bold" dir="ltr" href={`tel:${l.phone}`}>{l.phone}</a>
+                <FormNameChip record={l} />
+              </div>
+              {l.description && <p className="text-xs text-[var(--text-dim)] mt-1">{formatLeadDescription(l.description)}</p>}
+              <p className="text-[10px] text-[var(--text-dim)] mt-1">وصل: {formatDateTime(l.assignedAt || l.createdAt)}</p>
             </div>
           )))}
 
@@ -8195,7 +8261,10 @@ function NewLeadsViewForSales({ assignedLeads, onMarkViewed, onAdd }: any) {
             <div className="flex items-start justify-between">
               <div className="flex-1">
                 <h4 className="font-bold text-[var(--text-strong)] text-lg">{lead.name}</h4>
-                <p className="text-[var(--text-muted)] text-lg" dir="ltr">{lead.phone}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-[var(--text-muted)] text-lg" dir="ltr">{lead.phone}</p>
+                  <FormNameChip record={lead} />
+                </div>
                 {lead.description && <p className="text-sm text-[var(--text-muted)] mt-2">{formatLeadDescription(lead.description)}</p>}
                 <p className="text-xs text-[var(--text-dim)] mt-2">
                   {formatDateTime(lead.createdAt)}
@@ -9326,7 +9395,10 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                     </span>
                     {!owner && <span className="st-chip st-negotiation">غير مخصص</span>}
                   </div>
-                  <p className="text-[var(--brand)] mt-1" dir="ltr">{lead.phone}</p>
+                  <div className="flex items-center gap-2 flex-wrap mt-1">
+                    <p className="text-[var(--brand)]" dir="ltr">{lead.phone}</p>
+                    <FormNameChip record={lead} />
+                  </div>
                   {lead.description && <p className="text-[11.5px] text-[var(--text-muted)] mt-1.5">{formatLeadDescription(lead.description)}</p>}
                 </div>
 

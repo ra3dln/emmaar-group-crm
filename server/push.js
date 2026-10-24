@@ -523,22 +523,32 @@ async function processPushTick({
     changed = true;
   }
 
-  // ٤) أرقام جديدة نزلت (من الفورمات أو الاستيراد) — إشعار فوري حتى لو الموقع مقفول
-  //    • الرقم الموزّع: إشعار لصاحبه بالاسم والرقم ليبدأ الاتصال فوراً.
+  // ٤) أرقام جديدة نزلت أو اتوزّعت على سيلز — إشعار فوري حتى لو الموقع مقفول
+  //    • الرقم الموزّع: إشعار لصاحبه بالاسم والرقم واسم الفورم ليبدأ الاتصال فوراً.
   //    • الرقم غير الموزّع: إشعار للإدارة أنه وصل وينتظر التوزيع.
   //    تُجمع أرقام المستلم الواحد في إشعار واحد (دفعة الفورم ٤٠ رقماً لا تتحول ٤٠ إشعاراً).
   //    ولا يُعلَّم الرقم كمُرسَل إلا إذا وصل لجهاز فعلاً — فإن لم توجد أجهزة يُعاد لاحقاً.
+  //
+  //    ملاحظتان مهمتان (كانتا سبب «السيلز مش بيوصله إشعار»):
+  //    ١) العلامة تُكتب لكل «رقم × مستلم» على حدة. قبل ذلك كان إشعار الإدارة عن رقم
+  //       وصل غير موزّع يسجّل الرقم نفسه، فلما يتوزّع بعدها على مندوب ما يوصلهش شيء.
+  //    ٢) التوقيت يُحسب من **لحظة الإسناد** (`assignedAt`) لا من لحظة وصول الرقم:
+  //       رقم وصل امبارح واتوزّع النهاردة لازم يوصل صاحبه إشعار، والعكس صحيح.
   let leadCount = 0;
-  const newLeads = (data.crm_assigned_leads || []).filter((lead) => {
-    if (!lead?.id || state.leads[lead.id]) return false;
-    const createdAt = Date.parse(lead.createdAt || '');
-    return Number.isFinite(createdAt) && now - createdAt <= RECENT_MS;
-  });
-  if (newLeads.length) {
+  const pendingLeads = [];
+  for (const lead of data.crm_assigned_leads || []) {
+    if (!lead?.id) continue;
+    const owner = String(lead.salesId || '').trim();
+    const target = owner || 'managers';
+    if (state.leads[`${lead.id}|${target}`]) continue;
+    const stamp = owner ? lead.assignedAt || lead.createdAt : lead.createdAt;
+    const at = Date.parse(stamp || '');
+    if (!Number.isFinite(at) || now - at > RECENT_MS) continue;
+    pendingLeads.push({ lead, target });
+  }
+  if (pendingLeads.length) {
     const byTarget = new Map();
-    for (const lead of newLeads) {
-      const owner = String(lead.salesId || '').trim();
-      const target = owner || 'managers';
+    for (const { lead, target } of pendingLeads) {
       if (!byTarget.has(target)) byTarget.set(target, []);
       byTarget.get(target).push(lead);
     }
@@ -557,7 +567,12 @@ async function processPushTick({
             : `${leads
                 .slice(0, 3)
                 .map((l) => `${l?.name || 'عميل'} ${l?.phone || ''}`.trim())
-                .join(' • ')}${leads.length > 3 ? ` +${leads.length - 3}` : ''}`,
+                .join(' • ')}${leads.length > 3 ? ` +${leads.length - 3}` : ''}${
+                form ||
+                (leads.find((l) => l?.formName)
+                  ? ` • ${leads.find((l) => l?.formName).formName}`
+                  : '')
+              }`,
         tag: `lead-${one?.id || Date.now()}`,
         url: '/',
       };
@@ -568,7 +583,7 @@ async function processPushTick({
         delivered = await push(target, payload);
       }
       if (!delivered) continue; // لا أجهزة/فشل مؤقت: يُعاد في الدورة القادمة بلا ضياع
-      for (const lead of leads) state.leads[lead.id] = now;
+      for (const lead of leads) state.leads[`${lead.id}|${target}`] = now;
       leadCount += leads.length;
       changed = true;
     }

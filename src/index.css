@@ -1910,6 +1910,24 @@ html[data-mode="light"] .fs-item-en { color: color-mix(in srgb, var(--fs) 85%, #
 html[data-mode="light"] .cc-src { color: color-mix(in srgb, var(--src) 88%, #000); }
 .cc-phone { font-size: 11px; color: var(--text-muted); text-decoration: none; width: fit-content; }
 .cc-phone:hover { color: var(--brand); }
+/* صف الرقم + اسم الفورم: كل رقم يبان جنبه الفورم اللي نزل منه */
+.cc-phone-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cc-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 170px;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  border: 1px dashed color-mix(in srgb, var(--brand) 45%, transparent);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+  color: color-mix(in srgb, var(--brand) 92%, #ffffff);
+  font-size: 9.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.cc-form > span { overflow: hidden; text-overflow: ellipsis; }
+html[data-mode="light"] .cc-form { color: color-mix(in srgb, var(--brand) 88%, #000); }
 .cc-facts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 1px; }
 .cc-fact {
   display: inline-flex;

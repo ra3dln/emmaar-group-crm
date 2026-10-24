@@ -82,6 +82,10 @@ export interface AssignedLead {
   status: 'new' | 'viewed' | 'contacted' | 'closed';
   viewedAt?: string;
   createdAt: string;
+  // وقت توزيع الرقم على المندوب (غير وقت وصوله) — إشعار «رقم جديد نزل» يُحسب منه
+  assignedAt?: string;
+  // اسم الفورم الذي نزل منه الرقم — يُكتب جمب الرقم في كل القوائم
+  formName?: string;
 }
 
 export interface Reminder {
