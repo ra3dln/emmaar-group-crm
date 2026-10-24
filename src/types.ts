@@ -74,6 +74,18 @@ export interface Client {
   activities?: ClientActivity[];
 }
 
+// هدف الاتصال: عميل مسجّل، أو رقم موزَّع لسه مش عميل.
+// الرقم الموزَّع بيتسجَّل بمعرّفه المشتق من الرقم (نفس قاعدة العميل التلقائي)
+// فالسجلات بتتدمج على كل الأجهزة بدل ما تتكرر.
+export interface CallTarget {
+  id: string;
+  name: string;
+  phone: string;
+  stage?: Client['stage'];
+  // الرقم الموزَّع لسه مش عميل مسجّل: المكالمة بتتسجَّل برقمه (مفيش خط زمني لعميل)
+  virtualLead?: boolean;
+}
+
 export interface AssignedLead {
   id: string;
   adminId: string;

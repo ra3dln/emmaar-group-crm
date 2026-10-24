@@ -16,7 +16,7 @@ import {
   Workflow, BellRing, ClipboardList, MessagesSquare, Share2, LineChart,
   Megaphone, Globe, Link2, Facebook, ChevronDown, Palette
 } from 'lucide-react';
-import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, TabType } from './types';
+import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, CallTarget, TabType } from './types';
 import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, syncNow, ownerOfPhoneOnServer, leadOwnerOfPhoneOnServer, clientPhonesOnServer } from './sync';
 import { buildPreview, buildSampleCsv, buildFakeCampaignCsv, decodeText, parseTable, type ImportPreview } from './leadImport';
 import { alarm, loadAlarmSettings, saveAlarmSettings, DEFAULT_ALARM_SETTINGS, type AlarmSettings } from './alarm';
@@ -44,7 +44,7 @@ import {
   type LeadAssignment,
 } from '../shared/autoAssign.js';
 import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount } from '../shared/roles.js';
-import { buildLeadClients, campaignAtFromText, campaignTimeOf } from '../shared/leadClients.js';
+import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor } from '../shared/leadClients.js';
 import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
 import {
   FEEDBACK_STATUS_TO_STAGE,
@@ -114,6 +114,22 @@ const getCallLogs = (): CallLog[] => {
 
 const saveCallLogs = (logs: CallLog[]): void => {
   localStorage.setItem(CALL_LOGS_KEY, JSON.stringify(logs));
+};
+
+// ===== هدف الاتصال لرقم موزَّع (لسه مش عميل مسجّل) =====
+// المعرّف مشتق من الرقم نفسه (crm-lead-<أرقام>) — نفس قاعدة العميل التلقائي
+// بالظبط، فإذا العميل اتحوّل على جهاز آخر السجلات بتتدمج ولا تتكرر.
+// لحد ما يتحوّل عميلاً: المكالمة بتتسجَّل برقمه في سجل المكالمات وبطاقة
+// الفيدباك، فالرقم بينتقل للمرحلة اللي اتفق عليها في «المراحل».
+const leadCallTarget = (lead: any, record?: any): CallTarget => {
+  const phone = String(record?.phone || lead?.phone || '');
+  return {
+    id: leadClientIdFor(phone) || `lead-${String(lead?.id || record?.id || '')}`,
+    name: String(record?.name || lead?.name || 'بدون اسم'),
+    phone,
+    stage: 'new',
+    virtualLead: true,
+  };
 };
 
 // وقت مختصر للرسالة: الساعة لو اليوم، وإلا اليوم والشهر
@@ -1181,8 +1197,10 @@ function App() {
   const [desktopNavHidden, setDesktopNavHidden] = useState(false);
   // مركز الإشعارات (مقسّم: تذكيرات / أرقام جديدة / رسائل / اتصالات الفريق)
   const [showNotifyCenter, setShowNotifyCenter] = useState(false);
-  // العميل الذي تُسجَّل له مكالمة الآن
-  const [callClient, setCallClient] = useState<Client | null>(null);
+  // هدف المكالمة الآن: عميل مسجّل، أو رقم موزَّع لسه مش عميل ( CallTarget )
+  const [callClient, setCallClient] = useState<CallTarget | null>(null);
+  // التذكير اللي اتفتح من زرار ✓: بعد حفظ الاتصال/الفيدباك ينتهي التذكير تلقائياً
+  const [reminderCallId, setReminderCallId] = useState<string | null>(null);
   const [callLogs, setCallLogs] = useState<CallLog[]>([]);
   // الإشعارات التي رآها هذا المستخدم (على هذا الجهاز) — لحساب العدّاد الأحمر
   const [seenNotifIds, setSeenNotifIds] = useState<string[]>([]);
@@ -1344,6 +1362,28 @@ function App() {
     void pushKey('crm_reminders');
     closeActiveAlarm(id);
     loadData();
+  };
+
+  // ===== زرار ✓ في التذكيرات: يسجّل الاتصال (تم الرد / لم يرد) والفيدباك أولاً،
+  // وبمجرد الحفظ ينتهي التذكير. الحفظ نفسه يمر على نفس مسار تسجيل الفيدباك
+  // (خط زمني + بطاقة في الفيدباك اليومي + مكالمة + تحريك المرحلة).
+  const startReminderCall = (reminder: Reminder) => {
+    if (!reminder) return;
+    const norm = (v: any) => String(v || '').replace(/\D/g, '');
+    const client = clients.find((c: Client) => c.id === reminder.clientId)
+      || clients.find((c: Client) => norm(c.phone) && norm(c.phone) === norm(reminder.clientPhone));
+    const target: CallTarget = client
+      ? { ...client, name: reminder.clientName || client.name, phone: reminder.clientPhone || client.phone }
+      : {
+          // التذكير على رقم مش مسجّل كعميل: يتسجّل بمعرّفه من الرقم، فيتدمج ولا يتكرر
+          id: reminder.clientId || leadClientIdFor(reminder.clientPhone) || `reminder-${reminder.id}`,
+          name: reminder.clientName || 'بدون اسم',
+          phone: reminder.clientPhone || '',
+          stage: 'new',
+          virtualLead: true,
+        };
+    setReminderCallId(reminder.id);
+    setCallClient(target);
   };
 
   const snoozeReminder = (id: string, minutes: number) => {
@@ -2669,25 +2709,86 @@ function App() {
       createdAt: new Date().toISOString(),
     };
     saveCallLogs([log, ...getCallLogs()]);
+    // سجل المكالمات كان محلياً فقط — يُرفع الآن حتى يظهر في «كل التعليقات»
+    // وفي أرقام الفيدباك اليومي عند الإدارة.
+    void pushKey('crm_call_logs');
+    void pushKey('crm_clients');
     // سجل هذا الحساب فقط — بنفس نطاقه (الإدارة الكاملة ترى الكل، والحساب المحدود النطاق
     // يبقى على سجله هو؛ كان الاعتماد على الرتبة يرمي كل مكالمات الشركة في ذاكرته
     // فتظهر أرقام وفيدباك الجميع على لوحته).
     setCallLogs(getCallLogs().filter((l: CallLog) => inMyScope(l.salesId)));
 
-    addClientActivity(
-      target.id,
-      'call',
-      payload.result === 'answered' ? 'اتصال: تم الرد ' : 'اتصال: لم يرد ',
-      currentUser.name
-    );
-    if (callComment) {
-      addClientActivity(target.id, 'feedback', `من المكالمة: ${callComment}`, currentUser.name, {
-        authorId: currentUser.id,
+    // ===== رقم موزَّع لسه مش عميل مسجّل =====
+    // مفيش سجل عميل نضيف عليه الخط الزمني، فالمكالمة بتتسجَّل برقمه: سجل
+    // المكالمات (فوق) + بطاقة فيدباك — وبكده الرقم بينتقل للمرحلة اللي اتفق
+    // عليها، لأن لوحة «المراحل» بتقرأ حالة كل رقم من بطاقات الفيدباك.
+    const storeClients: Client[] = (() => {
+      try {
+        const parsed = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    })();
+    const isRegisteredClient = storeClients.some((c) => c.id === target.id);
+
+    if (isRegisteredClient) {
+      addClientActivity(
+        target.id,
+        'call',
+        payload.result === 'answered' ? 'اتصال: تم الرد ' : 'اتصال: لم يرد ',
+        currentUser.name
+      );
+      if (callComment) {
+        addClientActivity(target.id, 'feedback', `من المكالمة: ${callComment}`, currentUser.name, {
+          authorId: currentUser.id,
+          callStatus: payload.result === 'answered' ? 'called' : 'no-answer',
+          cardId: log.id,
+          status: pickedStatus,
+          ...(pickedStatus === 'cancellation' && payload.cancelReason ? { cancelReason: payload.cancelReason } : {}),
+        });
+      }
+    } else {
+      // بطاقة الفيدباك بنفس شكل كارت العميل: تظهر في «الفيدباك اليومي» وبها
+      // رقم العميل — فتبقى الحالة مقروءة من كل الأجهزة (مش جهاز واحد).
+      const card: DailyFeedback = {
+        id: log.id,
+        userId: currentUser.id,
+        clientPhone: target.phone,
+        clientName: target.name,
+        date: log.createdAt,
+        feedback: callComment || (payload.result === 'answered' ? 'اتصال: تم الرد' : NO_ANSWER_COMMENT),
         callStatus: payload.result === 'answered' ? 'called' : 'no-answer',
-        cardId: log.id,
         status: pickedStatus,
-        ...(pickedStatus === 'cancellation' && payload.cancelReason ? { cancelReason: payload.cancelReason } : {}),
-      });
+        createdAt: log.createdAt,
+      };
+      try {
+        const feedbacks: DailyFeedback[] = JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]');
+        localStorage.setItem('crm_daily_feedback', JSON.stringify([card, ...feedbacks.filter((f) => f.id !== card.id)]));
+      } catch {
+        /* لا شيء */
+      }
+      void pushKey('crm_daily_feedback');
+      // وحالة الرقم في قائمة التوزيع تبقى «اتواصل» (مش «نزل جديد»)
+      const phoneKey = String(target.phone || '').replace(/\D/g, '');
+      if (phoneKey) {
+        let hasLead = false;
+        try {
+          const leads: AssignedLead[] = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
+          hasLead = leads.some((l) =>
+            String(l.phone || '').replace(/\D/g, '') === phoneKey && l.status !== 'closed'
+          );
+        } catch {
+          hasLead = false;
+        }
+        if (hasLead) {
+          void writeAssignedLeads((all) => all.map((l) =>
+            String(l.phone || '').replace(/\D/g, '') === phoneKey && l.status !== 'closed'
+              ? { ...l, status: 'contacted' as const, viewedAt: l.viewedAt || new Date().toISOString() }
+              : l
+          ));
+        }
+      }
     }
     // المرحلة تتحرّك تلقائياً مع الحالة المختارة (زي صندوق الفيدباك)
     const pickedMeta = FEEDBACK_STATUS_BY_ID[pickedStatus];
@@ -2714,6 +2815,19 @@ function App() {
       setReminders(currentUser.role === 'sales' ? [...reminders, reminder] : [...reminders, reminder]);
       // يرفع فوراً حتى يُرسل السيرفر إشعاره والموقع مقفول
       void pushKey('crm_reminders');
+    }
+
+    // ===== التذكير اللي اتفتح من ✓: ينتهي بمجرد تسجيل الاتصال والفيدباك =====
+    if (reminderCallId) {
+      markReminderAction(reminderCallId);
+      const nextReminders = readReminders().map((r) =>
+        r.id === reminderCallId ? { ...r, isCompleted: true } : r
+      );
+      localStorage.setItem('crm_reminders', JSON.stringify(nextReminders));
+      void pushKey('crm_reminders');
+      closeActiveAlarm(reminderCallId);
+      setReminderCallId(null);
+      loadData();
     }
 
     setInAppNotification({
@@ -3092,7 +3206,7 @@ function App() {
             setFeedbackPreset({ clientId: client.id, clientName: client.name, clientPhone: client.phone });
             setShowAddFeedback(true);
           }} />}
-          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} onLeadViewed={(id: string) => {
+          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} onCall={(c: any) => setCallClient(c)} onLeadViewed={(id: string) => {
             const target = assignedLeads.find((l: AssignedLead) => l.id === id);
             if (!target || target.status !== 'new') return;
             writeAssignedLeads((all) => all.map((l: AssignedLead) =>
@@ -3100,16 +3214,11 @@ function App() {
             ));
           }} />}
           {activeTab === 'properties' && <PropertiesView properties={filteredProperties} users={users} currentUser={currentUser} searchTerm={propertySearch} onSearch={setPropertySearch} onSelect={setSelectedProperty} onAdd={() => setShowAddProperty(true)} />}
-          {activeTab === 'reminders' && isSalesView && <RemindersView reminders={reminders} onComplete={(id: string) => {
-            markReminderAction(id);
+          {/* زرار ✓ في التذكيرات يفتح تسجيل الاتصال (تم الرد / لم يرد + كومنت)،
+              والسجل ينتهي تلقائياً بعد الحفظ — بدل إغلاق التذكير بلا أي فيدباك. */}
+          {activeTab === 'reminders' && isSalesView && <RemindersView reminders={reminders} onLog={(id: string) => {
             const target = reminders.find((r: Reminder) => r.id === id);
-            if (target?.clientId) addClientActivity(target.clientId, 'reminder', 'تم تنفيذ التذكير', currentUser.name);
-            const updated = reminders.map(r => r.id === id ? { ...r, isCompleted: true } : r);
-            setReminders(updated);
-            const stored = JSON.parse(localStorage.getItem('crm_reminders') || '[]')
-              .map((r: Reminder) => r.id === id ? { ...r, isCompleted: true } : r);
-            localStorage.setItem('crm_reminders', JSON.stringify(stored));
-            void pushKey('crm_reminders');
+            if (target) startReminderCall(target);
           }} onDelay={(id: string, minutes: number) => {
             // «تأجيل» إجراء مقصود — مش تأخير. عدّاد التأخير يزيد فقط عند
             // مرور ٥ دقائق بلا أي إجراء (applyReminderDelays).
@@ -3226,7 +3335,7 @@ function App() {
             onClose={() => setSelectedUserFeedback(null)}
           />}
         {selectedClient && <ClientDetailModal client={selectedClient} onClose={() => setSelectedClient(null)} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
-        {callClient && <CallFlowModal client={callClient} user={currentUser} onClose={() => setCallClient(null)} onSave={handleSaveCall} />}
+        {callClient && <CallFlowModal client={callClient} user={currentUser} fromReminder={!!reminderCallId} onClose={() => { setCallClient(null); setReminderCallId(null); }} onSave={handleSaveCall} />}
         {selectedProperty && <PropertyDetailModal property={selectedProperty} users={users} onClose={() => setSelectedProperty(null)} onSuccess={loadData} />}
         {selectedUser && <UserDetailModal user={selectedUser} currentUser={currentUser} onClose={() => setSelectedUser(null)} onSuccess={loadData} />}
         {selectedTeam && <TeamDetailModal team={selectedTeam} users={users} currentUser={currentUser} onClose={() => setSelectedTeam(null)} onSuccess={loadData} />}
@@ -3303,6 +3412,7 @@ function App() {
             currentUser={currentUser}
             onSetStage={handleUpdateClientStage}
             onRefresh={loadData}
+            onCall={(c: any) => setCallClient(c)}
             onLeadViewed={(id: string) => {
               const target = assignedLeads.find((l: AssignedLead) => l.id === id);
               if (!target || target.status !== 'new') return;
@@ -5017,7 +5127,7 @@ function QuickNoteButton({ active, onToggle }: { active: boolean; onToggle: () =
 // الهاتف + الأزرار)، لأن المراحل كانت تعرض سطرين بلا وسيلة لتسجيل فيدباك.
 // صندوق الفيدباك (حالة + كومنت إلزامي) داخلي هنا، والحفظ يتحرك معه المرحلة تلقائياً،
 // فالسيلز يسجّل الفيدباك من المراحل بلا رجوع لتبويب العملاء.
-function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onSetStage, onRefresh }: any) {
+function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onSetStage, onRefresh, onCall }: any) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState('');
   const [commentText, setCommentText] = useState('');
@@ -5117,7 +5227,10 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
           )}
 
           <div className="cc-phone-row">
-            <a className="cc-phone" dir="ltr" href={`tel:${client?.phone}`} onClick={(e) => e.stopPropagation()}>{client?.phone}</a>
+            {/* الرقم نفسه يفتح نافذة «رد / لم يرد» زي علامة الاتصال — الرقم مايرنّش
+                لوحده (الاتصال الفعلي من جوه النافذة). */}
+            <button type="button" className="cc-phone" dir="ltr"
+              onClick={(e) => { e.stopPropagation(); onCall?.(client); }}>{client?.phone}</button>
             <FormNameChip record={client} />
             <CampaignTimeChip at={campaignTimeOf(client).at} kind={campaignTimeOf(client).kind} />
             {/* إضافة فيدباك من المراحل بنفس صندوق تبويب العملاء: حالة (اختيارية،
@@ -5141,8 +5254,8 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
             <b>{comments}</b>
           </button>
           {/* نفس ترتيب كارت العملاء بعد شيل الزر الأصفر: الأزرار تحت الکارت */}
-          <a href={`tel:${client?.phone}`} title="الاتصال بالعميل"
-            className="icon-btn !w-8 !h-8 text-emerald-300"><PhoneCall className="w-3.5 h-3.5" /></a>
+          <button type="button" onClick={() => onCall?.(client)} title="الاتصال بالعميل (تسجيل: رد / لم يرد)"
+            className="icon-btn !w-8 !h-8 text-emerald-300"><PhoneCall className="w-3.5 h-3.5" /></button>
           <WhatsAppButton name={client?.name} phones={[client?.phone, ...(client?.phones || [])]} />
         </div>
       </motion.article>
@@ -5929,7 +6042,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                       )}
                     </span>
                     <span role="cell" className="ct-phone">
-                      <a href={`tel:${phone}`} dir="ltr" onClick={(e) => e.stopPropagation()}>{phone}</a>
+                      <button type="button" dir="ltr"
+                        onClick={(e) => { e.stopPropagation(); onCall?.(isLead ? leadCallTarget(lead) : client); }}>{phone}</button>
                       <FormNameChip record={isLead ? lead : client} />
                       <CampaignTimeChip
                         at={campaignTimeOf(isLead ? lead : client).at}
@@ -5964,7 +6078,8 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                     <span role="cell" className="ct-acts" onClick={(e) => e.stopPropagation()}>
                       {isLead ? (
                         <>
-                          <a href={`tel:${lead!.phone}`} className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل"><PhoneCall className="w-3.5 h-3.5" /></a>
+                          <button type="button" onClick={() => onCall?.(leadCallTarget(lead!))}
+                            className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل (تسجيل: رد / لم يرد)"><PhoneCall className="w-3.5 h-3.5" /></button>
                         </>
                       ) : (
                         <>
@@ -6005,6 +6120,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                 lead={lead}
                 record={item}
                 onLeadViewed={onLeadViewed}
+                onCall={onCall}
                 cancelled={leadIsCancelled(lead!)}
                 cancelReason={leadCancelReasonOf(lead!)}
               />
@@ -6017,6 +6133,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                 onOpenComments={() => setCommentsClient(client)}
                 onSetStage={onSetStage}
                 onRefresh={onRefresh}
+                onCall={onCall}
               />
             );
           })}
@@ -6140,7 +6257,7 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
 // (مالوش عميل بعد يتحمّل الكومنت)، بس بالشكل نفسه — عشان تبويب «المراحل»
 // وصفحة الحالة (follow up وغيره) يبانوا زي «العملاء» بالحرف، والرقم بيبان
 // بنفس الشكل في كل مكان.
-function LeadFeedCard({ lead, record, onLeadViewed, cancelled = false, cancelReason = '' }: any) {
+function LeadFeedCard({ lead, record, onLeadViewed, onCall, cancelled = false, cancelReason = '' }: any) {
   const src = SOURCE_KINDS[sourceKindOf(String(lead?.description || record?.note || ''))];
   const SrcIcon = src.Icon;
   const sourceText = formatLeadDescription(lead?.description || '') || 'رقم وارد';
@@ -6172,7 +6289,8 @@ function LeadFeedCard({ lead, record, onLeadViewed, cancelled = false, cancelRea
         </div>
 
         <div className="cc-phone-row">
-          <a className="cc-phone" dir="ltr" href={`tel:${phone}`} onClick={(e) => e.stopPropagation()}>{phone}</a>
+          <button type="button" className="cc-phone" dir="ltr"
+            onClick={(e) => { e.stopPropagation(); onCall?.(leadCallTarget(lead, record)); }}>{phone}</button>
           <FormNameChip record={lead || record} />
           <CampaignTimeChip at={time.at} kind={time.kind} />
         </div>
@@ -6187,13 +6305,14 @@ function LeadFeedCard({ lead, record, onLeadViewed, cancelled = false, cancelRea
           <MessageSquare className="w-3.5 h-3.5" />
           <b>0</b>
         </button>
-        <a href={`tel:${phone}`} className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل"><PhoneCall className="w-3.5 h-3.5" /></a>
+        <button type="button" onClick={() => onCall?.(leadCallTarget(lead, record))}
+          className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل (تسجيل: رد / لم يرد)"><PhoneCall className="w-3.5 h-3.5" /></button>
       </div>
     </motion.article>
   );
 }
 
-function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, currentUser, onSelectClient, onRefresh, onLeadViewed }: any) {
+function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, currentUser, onSelectClient, onRefresh, onLeadViewed, onCall }: any) {
   // كل رقم في نطاقي: العميل بحالته، والرقم الموزّع بحالة آخر فيدباك عليه.
   // بدون كده أعمدة المراحل كانت تعرض صفراً رغم وجود أرقام في التوزيع.
   // كل بطاقة عميل تحمل نفس كارت تبويب «العملاء» (بشريط الفيدباك بتسع حالات وصندوق
@@ -6240,6 +6359,7 @@ function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, curren
                       onOpenComments={onSelectClient}
                       onSetStage={onUpdateStage}
                       onRefresh={onRefresh}
+                      onCall={onCall}
                     />
                   ) : (
                     <LeadFeedCard
@@ -6247,6 +6367,7 @@ function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, curren
                       record={record}
                       lead={leadById.get(String(record.leadId))}
                       onLeadViewed={onLeadViewed}
+                      onCall={onCall}
                     />
                   )
                 ))}
@@ -6261,7 +6382,7 @@ function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, curren
 
 // ===== شريط التذكير الرنّان: نفس شكل الإشعار الأصلي + أزرار الإسكات والإتمام والتأجيل =====
 // ===== بند ٤: صفحة حالة واحدة — كل الأرقام اللي عليها الحالة دي =====
-function StatusBoardView({ statusId, numbers = [], leads = [], currentUser, onClose, onSelect, onSetStage, onRefresh, onLeadViewed }: any) {
+function StatusBoardView({ statusId, numbers = [], leads = [], currentUser, onClose, onSelect, onSetStage, onRefresh, onLeadViewed, onCall }: any) {
   const meta = FEEDBACK_STATUS_BY_ID[statusId];
   // نفس قاعدة لوحة الحالات: كل رقم بحالته (عميل مسجّل أو رقم في التوزيع)
   const items: any[] = (numbers || []).filter(
@@ -6301,6 +6422,7 @@ function StatusBoardView({ statusId, numbers = [], leads = [], currentUser, onCl
                   onOpenComments={onSelect}
                   onSetStage={onSetStage}
                   onRefresh={onRefresh}
+                  onCall={onCall}
                 />
               ) : (
                 <LeadFeedCard
@@ -6308,6 +6430,7 @@ function StatusBoardView({ statusId, numbers = [], leads = [], currentUser, onCl
                   record={record}
                   lead={leadById.get(String(record.leadId))}
                   onLeadViewed={onLeadViewed}
+                  onCall={onCall}
                 />
               )
             )}
@@ -6422,10 +6545,11 @@ const toLocalInput = (d: Date): string => {
 };
 
 // ===== الاتصال بالعميل: اتصال ← تم الرد / لم يرد ← كومنت ← موعد الاتصال القادم (تذكير) =====
-function CallFlowModal({ client, user, onClose, onSave }: any) {
+function CallFlowModal({ client, user, onClose, onSave, fromReminder = false }: any) {
   const [result, setResult] = useState<'' | 'answered' | 'no-answer'>('');
   const [comment, setComment] = useState('');
-  const [status, setStatus] = useState('');
+  // الحالة تبدأ بحالة آخر فيدباك على العميل: مش إلزامي يغيّرها مع كل مكالمة
+  const [status, setStatus] = useState(() => latestFeedbackStatusOf(client) || '');
   // سبب الإلغاء — يُطلب فقط عند اختيار حالة «cancellation»
   const [cancelReason, setCancelReason] = useState('');
   const [nextCallAt, setNextCallAt] = useState('');
@@ -6435,24 +6559,30 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
   // الموعد المقترح: بعد ساعتين لو لم يرد، وبعد يوم لو تم الرد
   const pick = (r: 'answered' | 'no-answer') => {
     setResult(r);
-    const base = new Date();
-    base.setMinutes(base.getMinutes() + (r === 'no-answer' ? 120 : 1440));
-    setNextCallAt(toLocalInput(base));
+    // في مسار التذكير لا نقترح موعداً جديداً تلقائياً — التذكير الحالي ينتهي،
+    // ولو عايز متابعة يحددها بنفسه من حقل الموعد.
+    if (!fromReminder) {
+      const base = new Date();
+      base.setMinutes(base.getMinutes() + (r === 'no-answer' ? 120 : 1440));
+      setNextCallAt(toLocalInput(base));
+    }
     // «لم يرد» = لا يوجد رد: تُكتب في الكومنتات تلقائياً حتى لا يحتاج المندوب لكتابتها
     if (r === 'no-answer' && !comment.trim()) setComment(NO_ANSWER_COMMENT);
   };
 
-  // الحفظ يتوقّف حتى يكتمل الثلاثة: النتيجة + الكومنت + حالة الفيدباك
+  // الحفظ يتوقّف على النتيجة + الكومنت. الحالة مش إلزامية: لو ما اتغيرتش
+  // بتتحفظ زي آخر فيدباك على العميل (نفس قاعدة صندوق الفيدباك).
   const save = () => {
     if (!result) return;
+    const statusId = status || latestFeedbackStatusOf(client) || '';
     // إلغاء بلا سبب لا يُحفظ
-    if (status === 'cancellation' && !cancelReason) return;
+    if (statusId === 'cancellation' && !cancelReason) return;
     const text =
       comment.trim() ||
       (result === 'no-answer' ? NO_ANSWER_COMMENT : '') ||
-      (status === 'cancellation' ? cancelReasonLabelOf(cancelReason) : '');
-    if (!text || !status) return;
-    onSave({ result, comment: text, status, cancelReason, nextCallAt });
+      (statusId === 'cancellation' ? cancelReasonLabelOf(cancelReason) : '');
+    if (!text) return;
+    onSave({ result, comment: text, status: statusId, cancelReason, nextCallAt });
     setDone(true);
   };
 
@@ -6481,6 +6611,9 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
               <div className="min-w-0">
                 <h2 className="text-lg font-bold text-[var(--text-strong)] truncate">{client.name}</h2>
                 <p className="text-sm text-[var(--text-muted)]" dir="ltr">{client.phone}</p>
+                {client.virtualLead && (
+                  <p className="text-xs text-[var(--text-muted)] mt-0.5">رقم موزّع — المكالمة هتتسجَّل على الرقم نفسه</p>
+                )}
               </div>
               <button type="button" onClick={onClose} title="إغلاق"
                 className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
@@ -6531,7 +6664,7 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
                 {comment.trim() ? (
                   <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
                     <div>
-                      <label className="block text-xs font-bold text-[var(--text)] mb-1.5">حالة الفيدباك *</label>
+                      <label className="block text-xs font-bold text-[var(--text)] mb-1.5">حالة الفيدباك (اختياري — تفضل زي آخر فيدباك)</label>
                       <StatusMenu
                         value={status}
                         label="اختر الحالة (follow up / done deal …)"
@@ -6576,7 +6709,7 @@ function CallFlowModal({ client, user, onClose, onSave }: any) {
                       </div>
                     </div>
 
-                    <button onClick={save} disabled={!status || (status === 'cancellation' && !cancelReason)} className="btn-primary w-full justify-center py-3.5 disabled:opacity-55">
+                    <button onClick={save} disabled={status === 'cancellation' && !cancelReason} className="btn-primary w-full justify-center py-3.5 disabled:opacity-55">
                       <Send className="w-4 h-4" /> حفظ نتيجة الاتصال
                     </button>
                   </motion.div>
@@ -7603,7 +7736,7 @@ function PropertiesView({ properties, users, currentUser, searchTerm, onSearch, 
 }
 
 // Reminders View
-function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: any) {
+function RemindersView({ reminders, onLog, onDelay, onDelete, onAdd }: any) {
   // الأحدث أولاً: التذكير الأقرب/الأجدد فوق، والأقدم تحت
   const pending = reminders
     .filter((r: Reminder) => !r.isCompleted)
@@ -7639,7 +7772,8 @@ function RemindersView({ reminders, onComplete, onDelay, onDelete, onAdd }: any)
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <button onClick={() => onComplete(reminder.id)} title="إتمام" className="p-2 bg-emerald-500/20 rounded-[var(--r-sm)]">
+                  {/* ✓ = سجّل الاتصال والفيدباك ثم انتهى التذكير (بدل إغلاقه بلا سجل) */}
+                  <button onClick={() => onLog(reminder.id)} title="تسجيل الاتصال (تم الرد / لم يرد) وإنهاء التذكير" className="p-2 bg-emerald-500/20 rounded-[var(--r-sm)]">
                     <Check className="w-4 h-4 text-emerald-400" />
                   </button>
                   <button onClick={() => onDelay(reminder.id, 30)} title="تأجيل نصف ساعة" className="p-2 bg-amber-500/20 rounded-[var(--r-sm)]">
