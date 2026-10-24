@@ -1541,18 +1541,39 @@ function App() {
     (async () => {
       let authorized = false;
       let reachable = true;
-      try {
+      // «مرفوض» تعني 401 فقط: السيرفر رفض الجلسة صراحة. أي خطأ آخر (500/503،
+      // صفحة HTML من الاستضافة، انقطاع شبكة) **لا** يُخرج المستخدم — لأن الخروج
+      // على خطأ عابر هو سبب «سجّل دخول تلقائياً» على بعض الأجهزة.
+      let rejected = false;
+      const checkMe = async () => {
         const res = await fetch(`${AUTH_API}?action=me`, { cache: 'no-store', credentials: 'same-origin' });
+        if (res.status === 401) {
+          rejected = true;
+          return;
+        }
         const data: any = await res.json().catch(() => null);
         if (res.ok && data?.ok) authorized = true;
+      };
+      try {
+        await checkMe();
+        // محاولة ثانية سريعة قبل أي حكم (تغطي تعثّر دالة السيرفر للحظة)
+        if (!authorized && !rejected) {
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+          if (!cancelled) await checkMe();
+        }
       } catch {
         // تعذّر الوصول للسيرفر (انقطاع مؤقت) — لا نُخرج المستخدم، تبقى جلسته على جهازه
         reachable = false;
       }
       if (cancelled) return;
+      if (rejected) {
+        handleLogout();
+        return;
+      }
       if (!reachable) return;
       if (!authorized) {
-        handleLogout();
+        // السيرفر رد بشيء غير مفهوم (خطأ داخلي/صيانة): نُبقي الجلسة المحلية
+        // ونكمل؛ أول 401 حقيقي من المزامنة سيظهر شاشة الدخول.
         return;
       }
       markAuthorized();
@@ -1820,8 +1841,10 @@ function App() {
     );
     setCallLogs(getCallLogs().filter((l: CallLog) => inMyScope(l.salesId)));
     // الحساب لم يعد موجوداً (حُذف، أو أُعيد ضبط النظام وبدأنا من جديد) → خروج تلقائي لشاشة الدخول
+    // بشرط وجود قائمة حسابات فعلاً: قائمة فاضية (تزامن لم يصل بعد) ليست دليلاً على حذف
+    // الحساب، وكانت تُخرج المستخدم بلا سبب على الأجهزة التي تفتح قبل اكتمال المزامنة.
     const me = allUsers.find((u: User) => u.id === currentUser.id);
-    if (!me) {
+    if (allUsers.length > 0 && !me) {
       handleLogout();
       return;
     }

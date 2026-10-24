@@ -16,7 +16,10 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const COOKIE_NAME = 'crm_session';
-export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // ٣٠ يوماً
+// مدة الجلسة ١٨٠ يوماً، وتُجدَّد تلقائياً مع كل فتح للتطبيق (تحديث انزلاقي في
+// /api/auth?action=me وفي قراءة البيانات) — فالجهاز المستخدم لا يُطلب منه
+// تسجيل الدخول من جديد لمجرد مرور الشهر، وهذا كان سبب خروج مفاجئ على الهواتف.
+export const SESSION_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 const MIN_SECRET_LENGTH = 16;
 const HASH_PREFIX = 'sha256:';
 

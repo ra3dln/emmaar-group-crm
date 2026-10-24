@@ -12,9 +12,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   authConfigured,
+  isSecureRequest,
   preserveUserPasswords,
+  sessionCookie,
   sessionFromRequest,
   sessionMatchesUsers,
+  sessionVersionOf,
+  signSession,
   stripUserSecrets,
 } from './auth.js';
 
@@ -215,6 +219,23 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
         if (!auth || !session) return false;
         return !sessionMatchesUsers(session, db?.data);
       };
+
+      // تجديد انزلاقي للجلسة: الجهاز الذي يفتح التطبيق يومياً لا تنتهي جلسته أبداً.
+      // نجدّد مرة واحدة في اليوم (وليس مع كل طلب كل ثانية) حتى لا نضخّم الردود.
+      const maybeRefreshSession = (db) => {
+        if (!auth || !session) return;
+        if (Date.now() - (Number(session.iat) || 0) < 24 * 60 * 60 * 1000) return;
+        const users = Array.isArray(db?.data?.crm_users) ? db.data.crm_users : [];
+        const user = users.find((u) => u && String(u.id) === String(session.u));
+        if (!user) return;
+        const fresh = signSession(auth, {
+          u: user.id,
+          r: user.role,
+          n: user.username,
+          sv: sessionVersionOf(user),
+        });
+        res.setHeader('Set-Cookie', sessionCookie(fresh, { secure: isSecureRequest(req) }));
+      };
       const endStaleSession = () => send(res, 401, { error: 'unauthorized', hint: 'انتهت الجلسة — سجّل الدخول مرة أخرى.' });
 
       // حماية من الإغراق (Brute force / DoS)
@@ -231,6 +252,7 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
         }
         const db = await load();
         if (isStaleSession(db)) return endStaleSession();
+        maybeRefreshSession(db);
         return send(res, 200, {
           version: db.version,
           isEmpty: Object.keys(db.data || {}).length === 0,

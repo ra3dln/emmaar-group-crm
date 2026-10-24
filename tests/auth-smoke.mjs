@@ -208,6 +208,11 @@ try {
   });
   check('تغيير ناجح يُصدر جلسة جديدة', changed.status === 200, JSON.stringify(changed.json));
   const changedCookie = cookieOf(changed);
+  // تغيير كلمة المرور هو الحالة الوحيدة التي تُسقط كل الأجهزة (بخلاف الخروج)
+  check(
+    'تغيير كلمة المرور يُسقط جلسات الأجهزة الأخرى فوراً',
+    (await call('/api/store', { cookie: defaultCookie })).status === 401
+  );
   const unlockedStore = await call('/api/store', { cookie: changedCookie });
   check('وتظل البيانات مفتوحة', unlockedStore.status === 200 && unlockedStore.json.data.crm_clients[0].id === 'c1');
   check('الكلمة القديمة لم تعد تعمل', (await login({ username: 'admin', password: 'admin123', loginType: 'admin' })).status === 401);
@@ -282,15 +287,22 @@ try {
   check('‎/me أيضاً لا يحمل كلمة المرور', !JSON.stringify(me.json).includes('password'));
   check('‎/me بلا كوكي => 401', (await call('/api/auth?action=me')).status === 401);
 
+  // جهاز ثانٍ لنفس الحساب: الخروج من جهاز يجب ألا يُخرج بقية الأجهزة
+  const secondAdmin = await login({ username: 'admin', password: 'EmaarGroup2026', loginType: 'admin' });
+  const secondCookie = cookieOf(secondAdmin);
+  check('دخول نفس الحساب من جهاز آخر يعمل', secondAdmin.status === 200);
+  check('وجهاز آخر لنفس الحساب شغّال قبل الخروج', (await call('/api/store', { cookie: secondCookie })).status === 200);
+  const meRoll = await call('/api/auth?action=me', { cookie: changedCookie });
+  check('‎/me يجدّد مدة الجلسة (Set-Cookie جديد)', meRoll.status === 200 && /crm_session=/.test(meRoll.setCookie || ''));
+
   const out = await call('/api/auth?action=logout', { method: 'POST', cookie: changedCookie });
-  check('الخروج يُبطل الكوكي (Set-Cookie فارغ)', out.status === 200 && /crm_session=;/.test(out.setCookie));
-  // الخروج ليس مسحاً للكوكي في المتصفح فقط: السيرفر يرفع إصدار جلسات الحساب،
-  // فحتى لو احتُفظ بنسخة من الكوكي القديم فهي ميتة من الآن.
-  check('وبعد الخروج يُرفض الكوكي القديم نفسه', (await call('/api/store', { cookie: changedCookie })).status === 401);
-  check('وكذلك نقاط الدخول الأخرى', (await call('/api/auth?action=me', { cookie: changedCookie })).status === 401);
+  check('الخروج يمسح كوكي هذا الجهاز (Set-Cookie فارغ)', out.status === 200 && /crm_session=;/.test(out.setCookie));
+  // الخروج يخص الجهاز الذي ضغط «خروج» فقط: لا يُسقط نفس الحساب على أجهزته الأخرى
+  // (كان ذلك يُظهر «خروج تلقائي» على المكتب بعد خروج الموبايل)
+  check('ولا يُخرج بقية أجهزة نفس الحساب', (await call('/api/store', { cookie: secondCookie })).status === 200);
   check('وجلسة حساب آخر لم تسقط (الخروج يخص صاحبه)', (await call('/api/store', { cookie: salesCookie })).status === 200);
   const salesOut = await call('/api/auth?action=logout', { method: 'POST', cookie: salesCookie });
-  check('وبخروج السيلز تسقط جلسته أيضاً', salesOut.status === 200 && (await call('/api/store', { cookie: salesCookie })).status === 401);
+  check('خروج السيلز يمسح كوكيه', salesOut.status === 200 && /crm_session=;/.test(salesOut.setCookie));
   check('والدخول من جديد بكلمة المرور الحالية يعمل', (await login({ username: 'admin', password: 'EmaarGroup2026', loginType: 'admin' })).status === 200);
 
   // ===== ٨) بلا AUTH_SECRET: فشل مغلق لا انفتاح =====

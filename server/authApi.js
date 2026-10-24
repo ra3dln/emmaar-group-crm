@@ -137,25 +137,11 @@ export function createAuthHandler({ storage, env = process.env }) {
       }
 
       // ===== إنهاء الجلسة =====
-      // لا نكتفي بمسح الكوكي من المتصفح: نرفع إصدار جلسات الحساب فيسقط أي كوكي
-      // سابق للحساب فوراً (فلا تبقى جلسة صالحة بعد أن يظن المستخدم أنه خرج).
+      // الخروج يمسح كوكي **هذا الجهاز وحده**. قبل ذلك كان يرفع إصدار جلسات
+      // الحساب، فأي خروج من الموبايل يسقط جلسة المكتب وتظهر «خروج تلقائي» على
+      // أجهزة أخرى. إسقاط كل الأجهزة يبقى لتغيير كلمة المرور فقط (وهو المقصود).
       if (action === 'logout') {
         if (req.method !== 'POST') return reply(res, 405, { ok: false, error: 'method not allowed' });
-        const session = sessionFromRequest(env, req);
-        if (session) {
-          try {
-            const db = await storage.load();
-            const users = Array.isArray(db.data?.crm_users) ? db.data.crm_users : [];
-            if (users.some((u) => u && String(u.id) === String(session.u))) {
-              await storage.save({
-                version: (Number(db.version) || 0) + 1,
-                data: { ...(db.data || {}), crm_users: bumpSessionVersion(users, session.u) },
-              });
-            }
-          } catch {
-            // تعذّر الوصول للقاعدة: نمسح الكوكي على الأقل
-          }
-        }
         res.setHeader('Set-Cookie', clearSessionCookie(isSecureRequest(req)));
         return reply(res, 200, { ok: true });
       }
@@ -172,6 +158,12 @@ export function createAuthHandler({ storage, env = process.env }) {
           res.setHeader('Set-Cookie', clearSessionCookie(isSecureRequest(req)));
           return reply(res, 401, { ok: false, error: 'الحساب غير موجود أو موقوف أو انتهت الجلسة' });
         }
+        // تجديد انزلاقي: كل فتح للتطبيق يعيد ضبط مدة الجلسة ١٨٠ يوماً من جديد،
+        // فالجهاز الذي يُستخدم لا ينتهي أبداً، ولا يُطلب من صاحبه دخول مفاجئ.
+        res.setHeader('Set-Cookie', sessionCookie(
+          signSession(env, { u: user.id, r: user.role, n: user.username, sv: sessionVersionOf(user) }),
+          { secure: isSecureRequest(req) }
+        ));
         return reply(res, 200, { ok: true, user: publicUser(user) });
       }
 
