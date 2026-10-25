@@ -252,7 +252,7 @@ try {
   const pushSrc = fs.readFileSync('src/push.ts', 'utf8');
   const swSrc = fs.readFileSync('public/sw.js', 'utf8');
   const serverPushSrc = fs.readFileSync('server/push.js', 'utf8');
-  check('ضغط الجرس يعلّم الرسائل مقروءة في السجل المشترك', /openNotifyCenter[\s\S]{0,400}handleMarkRead\(direct\)/.test(app));
+  check('ضغط الجرس يعلّم الرسائل مقروءة في السجل المشترك', /openNotifyCenter[\s\S]{0,800}handleMarkRead\(direct\)/.test(app));
   check('تعليم الرسائل مقروءة يُرفع للسيرفر', /handleMarkRead[\s\S]{0,900}pushKey\('crm_messages'\)/.test(app));
   check('كل جهاز مفتوح يطلب الإرسال المستحق دورياً', app.includes('flushPush()') && app.includes("setInterval(run, 60_000)"));
   // ===== التذكير: إشعار خارجي فقط — مفيش تنبيه داخل البرنامج =====
@@ -412,6 +412,26 @@ try {
       received.length === beforeLate + 2 &&
       (pushState.leads || {})['lead-late|sales-2'] === undefined,
     JSON.stringify(movedRun)
+  );
+
+  // ===== التذكيرات إشعار خارجي فقط — مفيش نسخة داخل البرنامج =====
+  const appSrc = fs.readFileSync('src/App.tsx', 'utf8');
+  const center = appSrc.slice(appSrc.indexOf('function NotificationsCenter'), appSrc.indexOf('function NotificationsPanel'));
+  check(
+    'مركز الإشعارات مبقاش فيه تبويب «تذكيرات»',
+    !center.includes("{ id: 'reminders'") && !center.includes("tab === 'reminders'")
+  );
+  check(
+    'التذكيرات مش بتتحسب في عدّاد الجرس',
+    !appSrc.includes('`rem-${r.id}`') && !appSrc.includes('notifReminders')
+  );
+  check(
+    'شارة «تذكير متأخر» اتشالت من الجرس',
+    !appSrc.includes('delayedRemindersCount')
+  );
+  check(
+    'التذكير بيتعلّم مُرسَلًا مرة واحدة ويمنع التكرار على السيرفر',
+    fs.readFileSync('server/push.js', 'utf8').includes('state.reminders[reminder.id] = now')
   );
 
   console.log(`\n✅ كل اختبارات الإشعارات نجحت (${passed}).`);

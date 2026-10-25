@@ -3,6 +3,8 @@ export type AutoAssignRule = {
   id: string;
   formName: string;
   salesIds: string[];
+  // «كل السيلز»: التوزيع على كل من يستقبل أرقاماً، ومنهم أي حساب جديد
+  allSales?: boolean;
   active: boolean;
   updatedAt: string;
 };
@@ -24,9 +26,11 @@ export declare function phoneKeyOf(value: unknown): string;
 export declare function normalizeRule(raw: any): AutoAssignRule | null;
 export declare function parseRules(raw: any): AutoAssignRule[];
 export declare function activeRuleFor(rules: AutoAssignRule[], formName: string): AutoAssignRule | null;
-export declare function upsertRule(rules: AutoAssignRule[], patch: { formName: string; salesIds: string[]; active?: boolean }, at?: string): AutoAssignRule[];
+export declare function upsertRule(rules: AutoAssignRule[], patch: { formName: string; salesIds: string[]; allSales?: boolean; active?: boolean }, at?: string): AutoAssignRule[];
 export declare function distributeLeads(params: {
   leads?: any[];
+  // أرقام تُحسب منها حصص كل مندوب (الحمل الحقيقي) — بدونها تُحسب من leads
+  loadLeads?: any[];
   salesIds?: string[];
   formName?: string;
   formOf?: (lead: any) => string;
@@ -35,6 +39,7 @@ export declare function distributeLeads(params: {
 }): DistributionResult;
 export declare function applyAutoRules(params: {
   leads?: any[];
+  loadLeads?: any[];
   rules?: AutoAssignRule[];
   activeSalesIds?: string[];
   formOf?: (lead: any) => string;

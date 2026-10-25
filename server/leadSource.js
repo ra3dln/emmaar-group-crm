@@ -900,7 +900,11 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       .map((user) => String(user.id));
     const auto = rules.length
       ? applyAutoRules({
+          // التوزيع على الأرقام الجديدة وحدها، لكن حساب الحصص على **كل** أرقام
+          // كل مندوب (assigned + الجديدة). بدون ذلك كان كل سحب يبدأ من صفر فيروح
+          // الرقم لنفس المندوب الأول دائمًا — والنتيجة ٢٠ رقم مقابل ٤ عند غيره.
           leads: built.added,
+          loadLeads: [...assigned, ...built.added],
           rules,
           activeSalesIds,
           // الأرقام الجديدة تحمل formName صريحاً، وهو مفتاح القاعدة نفسه

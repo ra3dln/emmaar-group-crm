@@ -52,6 +52,9 @@ export function normalizeRule(raw) {
     id: String(raw.id || formName),
     formName,
     salesIds: cleanIds(raw.salesIds),
+    // «كل السيلز»: الأرقام تتوزع على كل من يستقبل أرقاماً بالتساوي (حتى الحسابات
+    // الجديدة)، بدل قائمة أسماء ثابتة لازم تتعدل مع كل حساب جديد.
+    allSales: raw.allSales === true,
     // غياب الحقل يعني «مفعّلة» حتى لا يتوقف توزيع قديم صامتاً
     active: raw.active !== false,
     updatedAt: String(raw.updatedAt || raw.createdAt || ''),
@@ -86,6 +89,7 @@ export function upsertRule(rules, patch, at = new Date().toISOString()) {
     id: formName,
     formName,
     salesIds: cleanIds(patch.salesIds),
+    allSales: patch.allSales === true,
     active: patch.active !== false,
     updatedAt: at,
   };
@@ -99,17 +103,23 @@ export function upsertRule(rules, patch, at = new Date().toISOString()) {
 //   onlyUnassigned = false => كل أرقام الفورم تُعاد وتُقسم من جديد
 //   excludePhones          => أرقام عند أحد بالفعل (مسجّلة كعميل): ما تتوزّع تاني،
 //                            عشان الرقم الواحد ما يبقاش عند أكتر من شخص.
-export function distributeLeads({ leads = [], salesIds = [], formName = '', formOf, onlyUnassigned = true, excludePhones = [] }) {
+export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName = '', formOf, onlyUnassigned = true, excludePhones = [] }) {
   const eligible = cleanIds(salesIds);
   if (!eligible.length) return { assignments: [], loads: {} };
+  // حمل كل مندوب يُحسب على **كل** أرقامه في النظام (loadLeads)، لا على دفعة
+  // واحدة فقط: لما السيرفر يوزع رقمًا واحدًا في كل سحب وكان الحمل يُحسب من
+  // الدفعة وحدها، كان الرقم يروح لنفس المندوب الأول دايمًا (٢٠ رقم مقابل ٤).
+  const loadSource = asList(loadLeads === undefined ? leads : loadLeads);
 
   const nameOf = typeof formOf === 'function' ? formOf : formNameOfLead;
   const target = String(formName || '').trim();
   const excluded = new Set(asList(excludePhones).map((value) => phoneKeyOf(value)).filter(Boolean));
 
   const loads = new Map(eligible.map((id) => [id, 0]));
-  for (const lead of asList(leads)) {
+  for (const lead of loadSource) {
     const owner = String(lead?.salesId || '');
+    // الأرقام الملغاة/المغلقة مش حمل — اتشالت من العهدة فعليًا
+    if (lead?.status === 'closed') continue;
     if (loads.has(owner)) loads.set(owner, loads.get(owner) + 1);
   }
 
@@ -121,7 +131,9 @@ export function distributeLeads({ leads = [], salesIds = [], formName = '', form
       if (phone && excluded.has(phone)) return false;
       const owner = String(lead.salesId || '');
       if (onlyUnassigned) return !owner;
-      return !owner || loads.has(owner);
+      // إعادة توزيع: نعيد أرقام المندوبين المؤهّلين حتى لو كانوا في عهدتهم،
+      // ومش بنلمس رقم حدّ خارج القائمة.
+      return !owner || loads.has(owner) || eligible.includes(owner);
     })
     .filter((lead) => !target || String(nameOf(lead) || '').trim() === target)
     .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
@@ -152,19 +164,24 @@ export function distributeLeads({ leads = [], salesIds = [], formName = '', form
 // تطبيق كل القواعد المفعّلة على قائمة الأرقام كاملة (ترجع نسخة جديدة)
 //   activeSalesIds: الحسابات النشطة فعلاً — قاعدة تشير لحساب محذوف/موقوف لا تعمل
 //   excludePhones: أرقام عند أحد بالفعل (عملاء مسجّلون) — ما تتوزّع تاني
-export function applyAutoRules({ leads = [], rules = [], activeSalesIds = [], formOf, excludePhones = [] } = {}) {
+export function applyAutoRules({ leads = [], loadLeads, rules = [], activeSalesIds = [], formOf, excludePhones = [] } = {}) {
   const active = new Set(cleanIds(activeSalesIds));
   const list = asList(leads).map((lead) => ({ ...lead }));
+  const loadSource = asList(loadLeads === undefined ? leads : loadLeads);
   const assignments = [];
   const byRule = {};
 
   for (const rule of asList(rules)) {
     if (!rule || rule.active === false) continue;
-    const salesIds = cleanIds(rule.salesIds).filter((id) => active.has(id));
+    // «كل السيلز» = كل من يستقبل أرقامًا الآن (وتلقائيًا أي حساب جديد بعد كده)،
+    // وإلا فالمختارون في القاعدة فقط.
+    const salesIds = rule.allSales
+      ? [...active]
+      : cleanIds(rule.salesIds).filter((id) => active.has(id));
     if (!salesIds.length) continue;
     const formName = String(rule.formName || rule.id || '').trim();
     if (!formName) continue;
-    const result = distributeLeads({ leads: list, salesIds, formName, formOf, onlyUnassigned: true, excludePhones });
+    const result = distributeLeads({ leads: list, loadLeads: loadSource, salesIds, formName, formOf, onlyUnassigned: true, excludePhones });
     if (!result.assignments.length) continue;
     const ownerOf = new Map(result.assignments.map((item) => [item.id, item.salesId]));
     for (const lead of list) {

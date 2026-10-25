@@ -67,6 +67,10 @@ html[data-mode="dark"] {
   --danger: #f0564c;
   --warn: #f0b429;
   --violet: #9b7bf7;
+  /* لون «follow up» — مش أصفر: الأصفر بقى لون «مطلوب إجراء» (تذكير فات موعده) */
+  --followup: #e4548c;
+  /* لون مصدر «خارجي» — مش أصفر عشان ما يتلخبطش مع تنبيه التذكير */
+  --external: #8fa3bd;
   --on-success: #07271b;
   --on-warn: #2a1b02;
 
@@ -159,6 +163,8 @@ html[data-mode="light"] {
   --danger: #b3261e;
   --warn: #8a5a10;
   --violet: #4a38a8;
+  --followup: #c02b66;
+  --external: #5d6d85;
   --on-success: #ffffff;
   --on-warn: #ffffff;
 
@@ -1410,7 +1416,7 @@ html[data-mode="light"] .login-error { color: #8f1b15; }
 }
 .ct-row.src-facebook { --src: var(--info); }
 .ct-row.src-campaign { --src: var(--violet); }
-.ct-row.src-external { --src: var(--warn); }
+.ct-row.src-external { --src: var(--external); }
 .ct-row.src-other { --src: var(--text-dim); }
 .ct-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ct-name b {
@@ -1552,7 +1558,7 @@ html[data-mode="light"] .login-error { color: #8f1b15; }
   font-weight: 700;
 }
 html[data-mode="light"] .fs-btn.on { color: color-mix(in srgb, var(--fs) 85%, #000); }
-.fs-follow { --fs: var(--warn); }
+.fs-follow { --fs: var(--followup); }
 .fs-meeting { --fs: #29aec7; }
 .fs-after { --fs: var(--violet); }
 .fs-reschedule { --fs: #5b74e8; }
@@ -1561,6 +1567,49 @@ html[data-mode="light"] .fs-btn.on { color: color-mix(in srgb, var(--fs) 85%, #0
 .fs-done { --fs: var(--success); }
 .fs-reservation { --fs: #22b392; }
 .fs-fresh { --fs: var(--info); }
+
+/* ================================================================
+   «محتاج إجراء» (تذكير فات موعده والمندوب مخدش خطوة)
+   اللون الأصفر هنا = طلب إجراء. أول ما المندوب يتصرف (مكالمة أو
+   كومنت) الكارت يرجع لونه الأصلي (لون المرحلة) زي ما كان.
+   ================================================================ */
+.fs-alert { --fs: var(--warn); }
+
+.client-card.cc-alert {
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 6%, var(--surface));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 22%, transparent);
+}
+.client-card.cc-alert::before { background: var(--warn); }
+.client-card.cc-alert:hover {
+  border-color: color-mix(in srgb, var(--warn) 75%, transparent);
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
+}
+
+.cc-alert-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  font-size: 9.5px;
+  font-weight: 800;
+  color: var(--on-warn);
+  background: var(--warn);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.cc-alert-badge svg { width: 11px; height: 11px; }
+
+/* نبضة خفيفة على الشارة عشان تنتبه من أول نظرة */
+@keyframes cc-alert-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 45%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 0%, transparent); }
+}
+.cc-alert-badge { animation: cc-alert-pulse 2.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .cc-alert-badge { animation: none; }
+}
 
 .fs-chip {
   --fs: var(--text-dim);
@@ -1877,7 +1926,7 @@ html[data-mode="light"] .fs-item-en { color: color-mix(in srgb, var(--fs) 85%, #
 }
 .client-card.src-facebook { --src: var(--info); }
 .client-card.src-campaign { --src: var(--violet); }
-.client-card.src-external { --src: var(--warn); }
+.client-card.src-external { --src: var(--external); }
 .client-card.src-other { --src: var(--text-dim); }
 
 .cc-avatar {
@@ -2172,7 +2221,7 @@ html[data-mode="light"] .qs-btn.on.qs-closed { color: #084f36; }
 }
 .pipe-client.src-facebook { --src: var(--info); }
 .pipe-client.src-campaign { --src: var(--violet); }
-.pipe-client.src-external { --src: var(--warn); }
+.pipe-client.src-external { --src: var(--external); }
 .pipe-client.src-other { --src: var(--text-dim); }
 .pipe-client-main {
   flex: 1;
@@ -3599,6 +3648,29 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
   transition: transform 0.15s ease, border-color 0.15s ease;
 }
 .eg-card:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+/* «محتاج إجراء»: التذكير فات موعده — الكارت كله أصفر لحد ما المندوب يتصرف */
+.eg-card.cc-alert {
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 6%, var(--surface));
+}
+.eg-card.cc-alert:hover {
+  border-color: color-mix(in srgb, var(--warn) 75%, transparent);
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
+}
+.eg-chip.cc-alert { --fs: var(--warn); }
+.eg-alert-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--on-warn);
+  background: var(--warn);
+  white-space: nowrap;
+}
+.eg-alert-badge svg { width: 11px; height: 11px; }
 .eg-card-top {
   grid-column: 1 / -1;
   display: flex;
@@ -3619,6 +3691,7 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
   border: 1px solid color-mix(in srgb, var(--fs, var(--text-muted)) 38%, transparent);
   white-space: nowrap;
 }
+.eg-chip-wrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .eg-dot {
   width: 7px;
   height: 7px;

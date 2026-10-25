@@ -269,4 +269,115 @@ check(
   sync.includes('lastServerData = null') && sync.includes('lastServerData = store.data')
 );
 
+// ===== ١٠) العدل الحقيقي: الحصص على كل أرقام كل مندوب، ومش من الدفعة وحدها =====
+// العطل المُبلَّغ عنه: «ناس معاها ٢٠ رقم وناس ٤ وناس ٨» — لأن السيرفر كان يوزّع
+// رقمًا واحدًا في كل سحب ويحسب الحمل من الدفعة (دائمًا صفر) فيروح لنفس المندوب الأول.
+const imbalance = [
+  ...Array.from({ length: 20 }, (_, i) => ({ id: `a${i}`, phone: `0100000${i}`, formName: FORM, salesId: ahmed })),
+  ...Array.from({ length: 8 }, (_, i) => ({ id: `b${i}`, phone: `0110000${i}`, formName: FORM, salesId: saif })),
+  ...Array.from({ length: 4 }, (_, i) => ({ id: `c${i}`, phone: `0120000${i}`, formName: FORM, salesId: abdo })),
+];
+const oneNew = [{ id: 'new-1', phone: '0155555555', formName: FORM }];
+const fairOne = distributeLeads({
+  leads: oneNew,
+  loadLeads: [...imbalance, ...oneNew],
+  salesIds: [ahmed, saif, abdo],
+  formName: FORM,
+});
+check(
+  'الرقم الجديد يروح لأقل مندوب حملًا (مش للمندوب الأول في القائمة)',
+  fairOne.assignments[0]?.salesId === abdo,
+  JSON.stringify(fairOne.assignments)
+);
+
+// سحب متتابع: كل رقم في دفعة لوحده — لازم يتوزع بالتساوي مش كله على واحد
+let pool = [...imbalance];
+const added = [];
+for (let i = 0; i < 30; i += 1) {
+  const single = [{ id: `seq-${i}`, phone: `01600000${i}0`, formName: FORM }];
+  const res = distributeLeads({
+    leads: single,
+    loadLeads: [...pool, ...single],
+    salesIds: [ahmed, saif, abdo],
+    formName: FORM,
+  });
+  const owner = res.assignments[0]?.salesId;
+  added.push(owner);
+  pool = [...pool, { ...single[0], salesId: owner }];
+}
+const finalLoads = [ahmed, saif, abdo].map((id) => pool.filter((l) => l.salesId === id).length);
+check(
+  '٣٠ عملية سحب متتالية تنتهي بحمل متساوٍ (فرق رقم واحد كأقصى) بدل تكدّس على واحد',
+  Math.max(...finalLoads) - Math.min(...finalLoads) <= 1,
+  JSON.stringify(finalLoads)
+);
+check('مفيش رقم اتوزّع على مندوب خارج القائمة', added.every((id) => [ahmed, saif, abdo].includes(id)));
+
+// ===== ١١) «كل السيلز»: القاعدة تشمل أي حساب مؤهّل (حتى الجديد) =====
+const ruleAll = parseRules([{ formName: FORM, salesIds: [], allSales: true, active: true }])[0];
+check('القاعدة بتتقري بخيار «كل السيلز»', ruleAll?.allSales === true);
+const allRes = applyAutoRules({
+  leads: [{ id: 'z1', phone: '0170000001', formName: FORM }, { id: 'z2', phone: '0170000002', formName: FORM }],
+  rules: [ruleAll],
+  activeSalesIds: [ahmed, saif, abdo, mohamed],
+});
+const owners = allRes.assignments.map((a) => a.salesId).sort();
+check(
+  '«كل السيلز» توزّع على المندوبين المؤهلين كلهم مش على قائمة مختارين',
+  owners.length === 2 && owners.every((id) => [ahmed, saif, abdo, mohamed].includes(id)),
+  JSON.stringify(owners)
+);
+check(
+  'حفظ القاعدة يحتفظ بخيار «كل السيلز»',
+  upsertRule([], { formName: FORM, salesIds: [], allSales: true }).some((r) => r.allSales === true)
+);
+check(
+  'السيرفر بيحسب الحصص على كل الأرقام الحالية (loadLeads)',
+  server.includes('loadLeads: [...assigned, ...built.added]')
+);
+check(
+  'الواجهة بتحسب الحصص على كل أرقام السيلز (loadLeads)',
+  app.includes('loadLeads: fullLeads') && app.includes('loadLeads: assignedLeads')
+);
+check(
+  'اللوحة فيها خيار «كل السيلز (بالتساوي)»',
+  app.includes('كل السيلز (بالتساوي)') && app.includes('setAutoAll')
+);
+
+// ===== ١٢) إعادة توزيع التكدّس القديم (٢٠ / ٨ / ٤) بالتساوي =====
+const pile = [
+  ...Array.from({ length: 20 }, (_, i) => ({ id: `pa${i}`, phone: `0108000${i}`, formName: FORM, salesId: ahmed })),
+  ...Array.from({ length: 8 }, (_, i) => ({ id: `pb${i}`, phone: `0118000${i}`, formName: FORM, salesId: saif })),
+  ...Array.from({ length: 4 }, (_, i) => ({ id: `pc${i}`, phone: `0128000${i}`, formName: FORM, salesId: abdo })),
+  ...Array.from({ length: 6 }, (_, i) => ({ id: `pd${i}`, phone: `0138000${i}`, formName: OTHER_FORM, salesId: ahmed })),
+];
+const pilePending = pile.filter((l) => l.formName === FORM);
+const pileIds = new Set(pilePending.map((l) => l.id));
+const otherLoads = pile.filter((l) => !pileIds.has(l.id));
+const rebalance = distributeLeads({
+  leads: pilePending,
+  loadLeads: otherLoads,
+  salesIds: [ahmed, saif, abdo],
+  formName: FORM,
+  onlyUnassigned: false,
+});
+const afterRebalance = pile.map((l) => {
+  const hit = rebalance.assignments.find((a) => a.id === l.id);
+  return hit ? { ...l, salesId: hit.salesId } : l;
+});
+const rebalancedLoads = [ahmed, saif, abdo].map((id) => afterRebalance.filter((l) => l.salesId === id).length);
+check(
+  'إعادة التوزيع بتسوّي التكدّس القديم (فرق رقم واحد كأقصى)',
+  Math.max(...rebalancedLoads) - Math.min(...rebalancedLoads) <= 1,
+  JSON.stringify(rebalancedLoads)
+);
+check(
+  'إعادة التوزيع مش بتلمس أرقام خارج قائمة السيلز المؤهّلين',
+  afterRebalance.filter((l) => l.formName === OTHER_FORM).every((l) => l.salesId === ahmed)
+);
+check(
+  'الواجهة فيها زرار «إعادة توزيع بالتساوي» بينادي على المعالج',
+  app.includes('إعادة توزيع بالتساوي') && app.includes('onRebalanceForm')
+);
+
 console.log(`\n✅ نجحت ${passed} فحوصات للتوزيع التلقائي`);

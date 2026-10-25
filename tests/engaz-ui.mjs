@@ -162,13 +162,18 @@ check(
 check('الرقم اليدوي بيتسجّل بعلامة manual', /manual: true/.test(app) && /manual\?: boolean/.test(types));
 
 // ===== ٧) التذكيرات: شارة برتقالية بدل التبويب =====
-check('شارة التذكيرات المتأخرة برتقالية على الجرس', /topbar-badge is-delay/.test(app) && /delayedRemindersCount/.test(app));
-check('العدّاد = التذكيرات المتأخرة أو المستحقة', /!r\.isCompleted && \(r\.isDelayed \|\| isReminderDue\(r\)\)/.test(app));
+check(
+  'التذكيرات إشعار خارجي فقط: مفيش شارة تذكير على الجرس ولا نسخة داخل البرنامج',
+  !/delayedRemindersCount/.test(app) && !/topbar-badge is-delay/.test(app)
+);
 check(
   'التذكير لسه إشعار خارجي (مفيش بطاقة تنبيه داخل البرنامج)',
   /function RemindersView/.test(app) && !/function AlarmBar/.test(app) && !/<AlarmBar/.test(app)
 );
-check('مركز الإشعارات لسه فيه تبويب التذكيرات', /id: 'reminders', label: 'التذكيرات'/.test(app));
+check(
+  'مركز الإشعارات مبقاش فيه تبويب تذكيرات (الخارجي هو الوحيد)',
+  !/\{ id: 'reminders', label: 'التذكيرات'/.test(app)
+);
 
 // ===== ٨) شريط التنقل السفلي =====
 check(

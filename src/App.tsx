@@ -14,7 +14,7 @@ import {
   Rows, LayoutList, List, ShieldAlert, MapPinOff, Navigation,
   ChevronRight, ChevronLeft, Filter, KeyRound,
   Workflow, BellRing, ClipboardList, MessagesSquare, Share2, LineChart,
-  Megaphone, Globe, Link2, Facebook, ChevronDown, Palette
+  Megaphone, Globe, Link2, Facebook, ChevronDown, Palette, Scale
 } from 'lucide-react';
 import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, CallTarget, TabType } from './types';
 import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, syncNow, ownerOfPhoneOnServer, leadOwnerOfPhoneOnServer, clientPhonesOnServer } from './sync';
@@ -66,6 +66,7 @@ import {
   latestFeedbackStatusOf,
 } from './feedbackBuckets';
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
+import { alertMapOf, clientActionState, leadAlertState } from './reminders';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import {
   ATTENDANCE_END_DEFAULT,
@@ -1387,6 +1388,13 @@ function App() {
   
   const [clients, setClients] = useState<Client[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
+  // ===== نبضة كل ٣٠ ثانية: عشان الكارت يتحوّل لأصفر في وقته بالظبط =====
+  // (لما التذكير يعدي وقت الاتصال والسيلز مخدش خطوة، الكارت يطلب إجراء).
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [properties, setProperties] = useState<Property[]>([]);
   const [dailyFeedbacks, setDailyFeedbacks] = useState<DailyFeedback[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -2354,14 +2362,15 @@ function App() {
   // ===== حفظ قاعدة «التوزيع التلقائي» لفورم =====
   // القاعدة تسافر مع باقي البيانات، فتصبح سياسة النظام لا إعداداً على جهاز واحد.
   // عند التفعيل نوزّع فوراً الأرقام الموجودة غير المخصصة، والباقي يلحقه تلقائياً.
-  const handleSaveAutoRule = (formName: string, salesIds: string[], active: boolean) => {
+  const handleSaveAutoRule = (formName: string, salesIds: string[], active: boolean, allSales = false) => {
     const name = String(formName || '').trim();
     if (!name) return 0;
-    // الحساب غير المؤهّل (مثل حساب المطوّر: إداري في القاعدة، سيلز في الشغل)
-    // ما يستقبلش أرقاماً تلقائياً — نشيله من قائمة المختارين قبل الحفظ.
+    // كل من يستقبل أرقاماً فعلاً (سيلز/مشرف/حساب مطوّر/إداري مختار أنه يسيلز)
     const assignableIds = new Set(users.filter(isAssignableSales).map((u: User) => String(u.id)));
-    const targets = (salesIds || []).map((id) => String(id)).filter((id) => assignableIds.has(id));
-    const next = upsertRule(autoAssignRules, { formName: name, salesIds: targets, active });
+    const targets = allSales
+      ? [...assignableIds]
+      : (salesIds || []).map((id) => String(id)).filter((id) => assignableIds.has(id));
+    const next = upsertRule(autoAssignRules, { formName: name, salesIds: targets, allSales, active });
     setAutoAssignRules(next);
     localStorage.setItem(AUTO_ASSIGN_KEY, JSON.stringify(next));
     void pushKey(AUTO_ASSIGN_KEY);
@@ -2369,6 +2378,8 @@ function App() {
 
     const { assignments } = distributeLeads({
       leads: fullLeads,
+      // الحمل الحقيقي: كل الأرقام الحالية لكل مندوب (وليس أرقام هذا الفورم فقط)
+      loadLeads: fullLeads,
       salesIds: targets,
       formName: name,
       formOf: formKeyOf,
@@ -2381,12 +2392,43 @@ function App() {
     return assignments.length;
   };
 
+  // ===== إعادة توزيع أرقام فورم بالتساوي على كل السيلز =====
+  // يحلّ تكدّس قديم (٢٠ رقم عند واحد و٤ عند غيره): كل أرقام الفورم المفتوحة
+  // تُعاد على كل من يستقبل أرقاماً — بما فيهم حساب محمد وفريدة — بالحمل الحقيقي
+  // (أرقام الفورمات التانية محسوبة)، والعميل يروح مع صاحب رقمه الجديد.
+  const handleRebalanceForm = (formName: string) => {
+    const name = String(formName || '').trim();
+    if (!name) return 0;
+    const targets = users.filter(isAssignableSales).map((u: User) => String(u.id));
+    if (!targets.length) return 0;
+    const pending = fullLeads.filter(
+      (l: AssignedLead) => formKeyOf(l) === name && l.status !== 'closed'
+    );
+    if (!pending.length) return 0;
+    const pendingIds = new Set(pending.map((l: AssignedLead) => String(l.id)));
+    // الحمل اللي يبدأ منه التوزيع = أرقام الفورمات الأخرى فقط (أرقام هذا الفورم
+    // هي اللي بتتوزع، فما ينفعش تتحسب مرتين).
+    const otherLoads = fullLeads.filter((l: AssignedLead) => !pendingIds.has(String(l.id)));
+    const { assignments } = distributeLeads({
+      leads: pending,
+      loadLeads: otherLoads,
+      salesIds: targets,
+      formName: name,
+      formOf: formKeyOf,
+      onlyUnassigned: false,
+    });
+    if (!assignments.length) return 0;
+    applyLeadOwners(new Map(assignments.map((item: LeadAssignment) => [item.id, item.salesId])));
+    return assignments.length;
+  };
+
   // ===== تطبيق القواعد على أي رقم جديد يصل =====
   // أول ما يوصل رقم من فورم له قاعدة (سحب تلقائي أو استيراد)، يتوزّع على مختاريه وحدهم
   // بالتساوي بلا أي ضغطة — ومن ليس في قائمة الفورم لا يصله منه شيء.
   useEffect(() => {
-    if (!currentUser || currentUser.role === 'sales') return;
-    if (!autoAssignRules.some((rule) => rule.active !== false && rule.salesIds.length)) return;
+    if (!currentUser || effectiveRoleOf(currentUser) === 'sales') return;
+    // قاعدة مفعّلة إما بقائمة أسماء أو بـ«كل السيلز»
+    if (!autoAssignRules.some((rule) => rule.active !== false && (rule.allSales || rule.salesIds.length))) return;
     // لا رقم غير مخصّص = لا عمل (المزامنة تنادي هذا الفحص كل ثانية تقريباً)
     if (!fullLeads.some((lead: AssignedLead) => !lead.salesId)) return;
     const activeSalesIds = users
@@ -2780,6 +2822,22 @@ function App() {
     return buildWorkNumbers(scopedClients, myLeads, snapshots, { includeUnassigned: false });
   })();
 
+  // ===== «محتاج إجراء»: التذكير فات موعده والمندوب مخدش خطوة =====
+  // الكارت بيتلوّن أصفر (في كل المراحل — مش الـ follow up بس) لحد ما المندوب
+  // يتصرف، وبعدها يرجع لونه الأصلي. المفتاح = أرقام الرقم عشان يتطابق مع
+  // كارت العميل وكارت الرقم في كل الشاشات.
+  const alertMap = (() => {
+    const map = alertMapOf(scopedClients, scopedReminders, scopedCallLogs, nowTick);
+    // أرقام موزّعة (مش عملاء مسجّلين) — التذكير بيبقى عليها برقمها
+    for (const lead of scopedLeads || []) {
+      const state = leadAlertState(lead, scopedReminders, scopedCallLogs, nowTick);
+      if (!state.needsAction) continue;
+      const key = digitsOfPhone(lead?.phone);
+      if (key && !map.has(key)) map.set(key, String(state.dueAt || ''));
+    }
+    return map;
+  })();
+
   // المستحق الآن — الأحدث أولاً (نفس ترتيب تبويب التذكيرات)
   const dueReminders = reminders
     .filter((r) => isReminderDue(r) && (currentUser.role !== 'admin' || r.userId === currentUser.id))
@@ -2802,13 +2860,9 @@ function App() {
     totalProperties: properties.length,
   };
 
-  // ===== بيانات مركز الإشعارات (مقسَّمة: تذكيرات / رسائل / اتصالات الفريق) =====
+  // ===== بيانات مركز الإشعارات (أرقام جديدة / رسائل / اتصالات الفريق) =====
+  // التذكيرات اتشالت من هنا: بقت إشعارًا خارجيًّا على الجهاز في وقتها فقط.
   // الأجدد أولاً في القائمة أيضاً.
-  // الإدارة لا تستقبل إشعارات تذكيرات السيلز — تذكيراتها هي فقط.
-  const notifReminders = reminders
-    .filter((r) => !r.isCompleted && (currentUser.role !== 'admin' || r.userId === currentUser.id))
-    .slice()
-    .sort((a, b) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
 
   // ===== أرقام جديدة نزلت على السيلز =====
   // السيلز كان ما يوصلهوش أي إشعار برقم اتوزّع عليه (لا في الجرس ولا عدّاد) — الأرقام
@@ -2835,7 +2889,6 @@ function App() {
   // في العدّاد، وإلا ظهرت له إشعارات مش ليه.
   const unseenNotifIds = [
     ...notifLeads.filter((l) => l.status === 'new').map((l) => `lead-${l.id}`),
-    ...notifReminders.filter((r) => isReminderDue(r)).map((r) => `rem-${r.id}`),
     ...notifMessages.filter((m) => !isMessageReadBy(m, currentUser.id)).map((m) => `msg-${m.id}`),
     ...(effectiveRoleOf(currentUser) !== 'sales' ? notifCalls.slice(0, 30).map((c) => `call-${c.id}`) : []),
   ];
@@ -2845,12 +2898,6 @@ function App() {
   const newCampaignLeadsCount = isSalesView
     ? assignedLeads.filter((l) => l.salesId === currentUser.id && l.status === 'new' && isCampaignRecord(l)).length
     : 0;
-
-  // ===== التذكيرات المتأخرة: ما بقاش لها تبويب، بقت شارة برتقانية على الجرس =====
-  // أي حساب عنده تذكير اتأخر (ولا مستحقّ لسه) بيشوف العدد ده فوق الجرس فوراً.
-  const delayedRemindersCount = (reminders || []).filter(
-    (r: Reminder) => !r.isCompleted && (r.isDelayed || isReminderDue(r))
-  ).length;
 
   // فتح جرس الإشعارات = قراءة كل الإشعارات دفعة واحدة (كل التبويبات)،
   // لا التبويب المعروض فقط — وإلا يظل العدّاد الأحمر عالقاً بعد الإغلاق.
@@ -3218,14 +3265,12 @@ function App() {
               className="icon-btn relative"
             >
               <Bell className="w-4 h-4" />
-              {delayedRemindersCount > 0 ? (
-                <span className="topbar-badge is-delay" title={`${delayedRemindersCount} تذكير متأخر`}>
-                  {delayedRemindersCount > 9 ? '9+' : delayedRemindersCount}
-                </span>
-              ) : unseenNotifCount > 0 ? (
+              {/* التذكيرات ما بقتش إشعار داخلي: بتوصل إشعارًا خارجيًّا على الجهاز
+                  مرة واحدة في وقتها. الجرس بيفضل للأرقام الجديدة والرسائل. */}
+              {unseenNotifCount > 0 ? (
                 <span className="topbar-badge">{unseenNotifCount > 9 ? '9+' : unseenNotifCount}</span>
               ) : null}
-              {notifState !== 'subscribed' && unseenNotifCount === 0 && delayedRemindersCount === 0 && (
+              {notifState !== 'subscribed' && unseenNotifCount === 0 && (
                 <span className="topbar-badge is-warn" />
               )}
             </motion.button>
@@ -3371,6 +3416,7 @@ function App() {
               numbers={workNumbers}
               leads={assignedLeads}
               callLogs={callLogs}
+              alertMap={alertMap}
               filter={leadsFilter}
               onFilter={setLeadsFilter}
               onBack={() => setLeadsOpen(false)}
@@ -3390,6 +3436,7 @@ function App() {
             leads={manualLeads}
             callLogs={callLogs.filter((l: CallLog) => l.salesId === currentUser.id)}
             feedbacks={dailyFeedbacks}
+            alertMap={alertMap}
             searchTerm={searchTerm}
             onSearch={setSearchTerm}
             onSelect={setSelectedClient}
@@ -3413,7 +3460,7 @@ function App() {
             setFeedbackPreset({ clientId: client.id, clientName: client.name, clientPhone: client.phone });
             setShowAddFeedback(true);
           }} />}
-          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} onCall={(c: any) => setCallClient(c)} onLeadViewed={(id: string) => {
+          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} alertMap={alertMap} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} onCall={(c: any) => setCallClient(c)} onLeadViewed={(id: string) => {
             const target = assignedLeads.find((l: AssignedLead) => l.id === id);
             if (!target || target.status !== 'new') return;
             writeAssignedLeads((all) => all.map((l: AssignedLead) =>
@@ -3475,6 +3522,8 @@ function App() {
             })}
             dailyFeedbacks={currentUser.role === 'admin' ? fullFeedbacks : scopedFeedbacks}
             clients={currentUser.role === 'admin' ? fullClients : scopedClients}
+            // الأرقام الموزّعة اللي لسه ما اتحولتش لعميل تتحسب برضه في «أرقامه»
+            leads={currentUser.role === 'admin' ? fullLeads : assignedLeads}
             callLogs={currentUser.role === 'admin' ? fullCallLogs : scopedCallLogs}
             onSelect={setSelectedUserFeedback}
           />}
@@ -3518,7 +3567,7 @@ function App() {
           }} onDeleteMany={(ids: string[]) => {
             const target = new Set(ids);
             writeAssignedLeads((all) => all.filter((l: AssignedLead) => !target.has(l.id)));
-          }} onAssign={handleAssignLeads} autoRules={autoAssignRules} onSaveAutoRule={handleSaveAutoRule} />}
+          }} onAssign={handleAssignLeads} autoRules={autoAssignRules} onSaveAutoRule={handleSaveAutoRule} onRebalanceForm={handleRebalanceForm} />}
           {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={scopedUsers} />}
           {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
           {activeTab === 'chat' && isSalesView && <SalesChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} readOnly={!!impersonator} />}
@@ -3598,12 +3647,12 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* مركز الإشعارات — مقسَّم على تبويبات (تذكيرات / أرقام جديدة / رسائل / اتصالات الفريق) */}
+      {/* مركز الإشعارات — مقسَّم على تبويبات (أرقام جديدة / رسائل / اتصالات الفريق).
+          التذكيرات مش هنا: بتوصل إشعارًا خارجيًّا على الجهاز في وقتها مرة واحدة. */}
       <AnimatePresence>
         {showNotifyCenter && (
           <NotificationsCenter
             user={currentUser}
-            reminders={notifReminders}
             leads={notifLeads}
             showLeads={isSalesView}
             messages={notifMessages}
@@ -3642,6 +3691,7 @@ function App() {
             statusId={statusBoard}
             numbers={workNumbers}
             leads={assignedLeads}
+            alertMap={alertMap}
             currentUser={currentUser}
             onSetStage={handleUpdateClientStage}
             onRefresh={loadData}
@@ -3945,7 +3995,9 @@ function AdminChatView({ currentUser, users, messages, onSend, onRead, onGroupRe
   // غرفة المدراء مفتوحة افتراضياً في أول القائمة
   const [groupOpen, setGroupOpen] = useState(false);
 
-  const people = (users || []).filter((u: User) => u.role !== 'admin');
+  // «إداري» بالمعنى السلوكي: حساب المطوّر (إداري في القاعدة، سيلز في الشغل)
+  // يُعامل سيلزاً فيظهر في المحادثات مع بقية الفريق.
+  const people = (users || []).filter((u: User) => effectiveRoleOf(u) !== 'admin');
   const searchQuery = normalizeArabicText(query).trim();
   const filtered = people.filter((u: User) => !searchQuery || normalizeArabicText(u.name).includes(searchQuery));
 
@@ -5369,7 +5421,7 @@ function QuickNoteButton({ active, onToggle }: { active: boolean; onToggle: () =
 // الهاتف + الأزرار)، لأن المراحل كانت تعرض سطرين بلا وسيلة لتسجيل فيدباك.
 // صندوق الفيدباك (حالة + كومنت إلزامي) داخلي هنا، والحفظ يتحرك معه المرحلة تلقائياً،
 // فالسيلز يسجّل الفيدباك من المراحل بلا رجوع لتبويب العملاء.
-function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onSetStage, onRefresh, onCall }: any) {
+function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onSetStage, onRefresh, onCall, alertMap }: any) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState('');
   const [commentText, setCommentText] = useState('');
@@ -5381,6 +5433,11 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
   const sourceText = sourceLabelOf(client);
   const comments = commentCountOf(client);
   const last = lastCommentOf(client);
+  // ===== «محتاج إجراء»: التذكير فات موعده والمندوب مخدش خطوة بعده =====
+  // الكارت بيتلوّن أصفر (في كل المراحل) لحد ما المندوب يتصرف، وبعدها يرجع
+  // لونه الأصلي (لون المرحلة) زي ما كان.
+  const alertDue = String(alertMap?.get(digitsOfPhone(client?.phone)) || '');
+  const needsAction = !!alertDue;
   const facts = ([
     client?.budget ? { k: 'الميزانية', v: displayPrice(client.budget) } : null,
     client?.property ? { k: 'العقار', v: client.property } : null,
@@ -5447,7 +5504,7 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
         animate={{ opacity: 1, y: 0 }}
         whileHover={{ y: -1 }}
         onClick={() => onSelect?.(client)}
-        className={`client-card ${src.cls}`}
+        className={`client-card ${src.cls} ${needsAction ? 'cc-alert' : ''}`}
       >
         <div className="cc-avatar">{client?.name?.[0] || '#'}</div>
 
@@ -5458,6 +5515,12 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
               <SrcIcon className="w-3 h-3" />
               {sourceText}
             </span>
+            {needsAction && (
+              <span className="cc-alert-badge" title={`فات وقت التذكير — ${formatDateTime(alertDue)}`}>
+                <AlertTriangle className="w-3 h-3" />
+                اتأخر
+              </span>
+            )}
             {client?.stage === 'lost' && <span className="st-chip st-lost">ضائع</span>}
             {hasContactedClient(client) && (
               <FeedbackBar client={client} onPick={(statusId: string) => openComposer(statusId)} />
@@ -5465,7 +5528,7 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
           </div>
 
           {last?.text && (
-            <p className="cc-lastfb"><FeedbackChip status={last.status} /> {last.text}</p>
+            <p className="cc-lastfb"><FeedbackChip status={last.status} alert={needsAction} /> {last.text}</p>
           )}
 
           <div className="cc-phone-row">
@@ -5586,10 +5649,11 @@ function CancelReasonPicker({ value, onChange, className = '' }:
 }
 
 // حالة فيدباك صغيرة تُعرض بجوار الكومنت (في الخط الزمني وفي تبويب الفيدباك)
-function FeedbackChip({ status }: { status?: string }) {
+function FeedbackChip({ status, alert = false }: { status?: string; alert?: boolean }) {
   const meta = status ? FEEDBACK_STATUS_BY_ID[status] : null;
   if (!meta) return null;
-  return <b className={`fs-chip ${meta.cls}`} title={meta.ar}>{meta.label}</b>;
+  // «محتاج إجراء» = التذكير فات موعده → الشارة أصفر (أهم من لون المرحلة)
+  return <b className={`fs-chip ${alert ? 'fs-alert' : meta.cls}`} title={meta.ar}>{meta.label}</b>;
 }
 
 // ===== لوحة كل التعليقات + الملخص (للـ CEO ولفريق العمل) =====
@@ -5870,7 +5934,7 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
 // قائمة العملاء للمندوب: الأرقام الواردة من الإدارة + عملاؤه في **قائمة واحدة** بلا أي تقسيم،
 // وكل كارت يحمل شريطاً لونياً وشارة توضح مصدر العميل (Facebook / Campaign / External…)
 // مع صندوق اختيارات سريع جمب الاسم: new / follow up / closed deal.
-function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedbacks = [], searchTerm, onSearch, onSelect, onAdd, onAddNumber, onCall, onLeadViewed, onSetStage, onRefresh }: any) {
+function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedbacks = [], alertMap, searchTerm, onSearch, onSelect, onAdd, onAddNumber, onCall, onLeadViewed, onSetStage, onRefresh }: any) {
   const [view, setView] = useState<'cards' | 'table'>(() => (localStorage.getItem('crm_clients_view') === 'table' ? 'table' : 'cards'));
   const [showComments, setShowComments] = useState(false);
   const [commentsClient, setCommentsClient] = useState<Client | null>(null);
@@ -6342,6 +6406,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                 key={`client-${client!.id}`}
                 client={client}
                 currentUser={currentUser}
+                alertMap={alertMap}
                 onSelect={onSelect}
                 onOpenComments={() => setCommentsClient(client)}
                 onSetStage={onSetStage}
@@ -6372,7 +6437,7 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
     { id: 'closed', label: 'closed deal', cls: 'qs-closed' },
   ];
   const stageOfQuick = (q: string) => (q === 'closed' ? 'closed' : q === 'followup' ? 'contacted' : 'new');
-  const salesUsers = users.filter((u: User) => u.role === 'sales' || u.role === 'supervisor');
+  const salesUsers = users.filter((u: User) => ['sales', 'supervisor'].includes(effectiveRoleOf(u)));
   const [openUser, setOpenUser] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const q = normalizeArabicText(query).trim();
@@ -6602,6 +6667,8 @@ type LeadRow = {
   isLead: boolean;
   // رقم جديد ما اتصلناش فيه خالص (يدخل في فلتر «Cold Calls»)
   cold?: boolean;
+  // التذكير فات موعده والمندوب مخدش خطوة → الكارت أصفر (مطلوب إجراء)
+  alertDue?: string;
   client?: any;
   lead?: any;
 };
@@ -6610,12 +6677,21 @@ type LeadRow = {
 // الحالة بنقطة ملوّنة + وقت التسجيل + الاسم + الرقم + اسم الفورم (زي ما هو)
 // + الملاحظة + زرار الاتصال والواتساب. الضغط على الكارت يفتح نافذة الإجراء.
 function EngazLeadCard({ row, onOpen, onCall }: { row: LeadRow; onOpen: () => void; onCall: () => void }) {
+  const alert = !!row.alertDue;
   return (
-    <article className="eg-card" onClick={onOpen}>
+    <article className={`eg-card ${alert ? 'cc-alert' : ''}`} onClick={onOpen}>
       <div className="eg-card-top">
-        <span className={`eg-chip ${row.statusCls}`}>
-          <i className="eg-dot" />
-          {row.statusLabel}
+        <span className="eg-chip-wrap">
+          <span className={`eg-chip ${alert ? 'cc-alert' : row.statusCls}`}>
+            <i className="eg-dot" />
+            {row.statusLabel}
+          </span>
+          {alert && (
+            <span className="eg-alert-badge" title={`فات وقت التذكير — ${formatDateTime(row.alertDue || '')}`}>
+              <AlertTriangle className="w-3 h-3" />
+              اتأخر
+            </span>
+          )}
         </span>
         <span className="eg-date" dir="ltr">{row.dateLabel}</span>
       </div>
@@ -6653,7 +6729,7 @@ function EngazLeadCard({ row, onOpen, onCall }: { row: LeadRow; onOpen: () => vo
 // الحالة (زي ENGAZ)، وضغط أي حالة بيصفّي الأرقام، والضغط على رقم بيفتح نافذة
 // الإجراء (الحالة + الكومنت + التذكير + آخر التعليقات).
 function LeadsView({
-  currentUser, numbers = [], leads = [], callLogs = [], filter = '', onFilter, onOpen, onBack,
+  currentUser, numbers = [], leads = [], callLogs = [], alertMap, filter = '', onFilter, onOpen, onBack,
 }: any) {
   const [query, setQuery] = useState('');
   const [field, setField] = useState<'all' | 'name' | 'phone' | 'form'>('all');
@@ -6681,6 +6757,8 @@ function LeadsView({
       // والاتنين منفصلين: الرقم الواحد ما بيحسبش في الاتنين.
       const cold = isColdNumber({ ...n, phone: n?.phone || record?.phone, bucket }, calledKeys);
       const time = campaignTimeOf(record);
+      // التذكير فات موعده والمندوب مخدش خطوة → الرقم «محتاج إجراء» (أصفر)
+      const alertDue = String(alertMap?.get(digitsOfPhone(n?.phone || record?.phone)) || '');
       out.push({
         key: String(n?.key || key || ''),
         name: String(n?.name || record?.name || 'بدون اسم'),
@@ -6693,12 +6771,13 @@ function LeadsView({
         note: String(n?.salesNote || '') || leadNoteOf(lead || client || {}),
         isLead: !client,
         cold,
+        alertDue,
         client,
         lead,
       });
     }
     return out;
-  }, [numbers, leads, callLogs]);
+  }, [numbers, leads, callLogs, alertMap]);
 
   // العدّادات: كل الأرقام + كل حالة (الباردة اتفتحت وما اتصلناش — منفصلة عن الجديدة)
   const counts = useMemo(() => {
@@ -6789,7 +6868,7 @@ function LeadsView({
   );
 }
 
-function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, currentUser, onSelectClient, onRefresh, onLeadViewed, onCall }: any) {
+function PipelineView({ clients, numbers = [], leads = [], alertMap, onUpdateStage, currentUser, onSelectClient, onRefresh, onLeadViewed, onCall }: any) {
   // كل رقم في نطاقي: العميل بحالته، والرقم الموزّع بحالة آخر فيدباك عليه.
   // بدون كده أعمدة المراحل كانت تعرض صفراً رغم وجود أرقام في التوزيع.
   // كل بطاقة عميل تحمل نفس كارت تبويب «العملاء» (بشريط الفيدباك بتسع حالات وصندوق
@@ -6832,6 +6911,7 @@ function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, curren
                       key={`client-${record.client.id}`}
                       client={record.client}
                       currentUser={currentUser}
+                      alertMap={alertMap}
                       onSelect={onSelectClient}
                       onOpenComments={onSelectClient}
                       onSetStage={onUpdateStage}
@@ -6859,7 +6939,7 @@ function PipelineView({ clients, numbers = [], leads = [], onUpdateStage, curren
 
 // ===== شريط التذكير الرنّان: نفس شكل الإشعار الأصلي + أزرار الإسكات والإتمام والتأجيل =====
 // ===== بند ٤: صفحة حالة واحدة — كل الأرقام اللي عليها الحالة دي =====
-function StatusBoardView({ statusId, numbers = [], leads = [], currentUser, onClose, onSelect, onSetStage, onRefresh, onLeadViewed, onCall }: any) {
+function StatusBoardView({ statusId, numbers = [], leads = [], alertMap, currentUser, onClose, onSelect, onSetStage, onRefresh, onLeadViewed, onCall }: any) {
   const meta = FEEDBACK_STATUS_BY_ID[statusId];
   // نفس قاعدة لوحة الحالات: كل رقم بحالته (عميل مسجّل أو رقم في التوزيع)
   const items: any[] = (numbers || []).filter(
@@ -6895,6 +6975,7 @@ function StatusBoardView({ statusId, numbers = [], leads = [], currentUser, onCl
                   key={`client-${record.client.id}`}
                   client={record.client}
                   currentUser={currentUser}
+                  alertMap={alertMap}
                   onSelect={onSelect}
                   onOpenComments={onSelect}
                   onSetStage={onSetStage}
@@ -7208,25 +7289,22 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
 }
 
 // ===== مركز الإشعارات: كل ما يخصك مقسَّماً على تبويبات =====
-function NotificationsCenter({ user, reminders, leads, messages, callLogs, unseenIds, showLeads, onSeen, onClose, onOpenAlarm, onGo }: any) {
-  const isSales = user.role === 'sales';
+function NotificationsCenter({ user, leads, messages, callLogs, unseenIds, showLeads, onSeen, onClose, onOpenAlarm, onGo }: any) {
+  const isSales = effectiveRoleOf(user) === 'sales';
   // تبويب «أرقام جديدة» للحسابات اللي بتستقبل أرقاماً (سيلز/حساب المطوّر السيلز)
   const leadsTab = showLeads === undefined ? isSales : !!showLeads;
+  // مفيش تبويب «تذكيرات»: إشعار التذكير خارجي على الجهاز مرة واحدة في وقته،
+  // ومفيش أي نسخة داخل البرنامج.
   const tabs = leadsTab
     ? [
         { id: 'leads', label: 'أرقام جديدة', icon: UserPlus },
-        { id: 'reminders', label: 'التذكيرات', icon: Bell },
         { id: 'messages', label: 'الرسائل', icon: MessageCircle },
         ...(isSales ? [] : [{ id: 'calls', label: 'اتصالات الفريق', icon: PhoneCall }]),
       ]
     : isSales
-    ? [
-        { id: 'reminders', label: 'التذكيرات', icon: Bell },
-        { id: 'messages', label: 'الرسائل', icon: MessageCircle },
-      ]
+    ? [{ id: 'messages', label: 'الرسائل', icon: MessageCircle }]
     : [
         { id: 'calls', label: 'اتصالات الفريق', icon: PhoneCall },
-        { id: 'reminders', label: 'التذكيرات', icon: Bell },
         { id: 'messages', label: 'الرسائل', icon: MessageCircle },
       ];
 
@@ -7278,13 +7356,11 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
     allSeen
       ? 0
       : unseenIds.filter((x: string) =>
-          x.startsWith(id === 'calls' ? 'call-' : id === 'reminders' ? 'rem-' : id === 'leads' ? 'lead-' : 'msg-')
+          x.startsWith(id === 'calls' ? 'call-' : id === 'leads' ? 'lead-' : 'msg-')
         ).length;
 
   const goTarget =
     tab === 'leads'
-      ? 'leads'
-      : tab === 'reminders'
       ? 'leads'
       : tab === 'calls'
       ? (isSales ? 'daily-feedback' : 'admin-feedback')
@@ -7366,22 +7442,6 @@ function NotificationsCenter({ user, reminders, leads, messages, callLogs, unsee
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-2 min-h-[180px]">
-          {tab === 'reminders' && (reminders.length === 0 ? empty('لا توجد تذكيرات') : reminders.map((r: Reminder) => {
-            const due = new Date(r.dateTime).getTime() <= now;
-            return (
-              <div key={r.id} className={`rounded-[var(--r-md)] border p-3 ${r.isDelayed ? 'bg-[var(--tint-1)] border-[var(--warn)]' : due ? 'bg-red-500/10 border-red-500/30' : 'bg-[var(--tint-1)] border-[var(--border)]'}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-bold text-[var(--text-strong)] text-sm truncate">{r.clientName}</p>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.isDelayed ? 'bg-[color-mix(in_srgb,var(--warn)_20%,transparent)] text-[var(--warn)]' : due ? 'bg-red-500/20 text-red-300' : 'bg-[var(--brand-primary-softer)] text-[var(--text-muted)]'}`}>
-                    {r.isDelayed ? `متأخر${r.delayCount > 1 ? ` ×${r.delayCount}` : ''}` : due ? 'مستحق الآن' : formatDateTime(r.dateTime)}
-                  </span>
-                </div>
-                <p className="text-xs text-[var(--text-muted)] mt-1" dir="ltr">{r.clientPhone}</p>
-                {r.note && <p className="text-xs text-[var(--text)] mt-1">{r.note}</p>}
-              </div>
-            );
-          }))}
-
           {tab === 'leads' && (leads.length === 0 ? empty('لا توجد أرقام جديدة') : leads.map((l: AssignedLead) => (
             <div key={l.id} className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3">
               <div className="flex items-center justify-between gap-2">
@@ -7848,7 +7908,7 @@ function AttendanceMonthlyReport({ users }: any) {
   const records = getAttendance().filter((rec) => String(rec.date || '').startsWith(month));
 
   const rows = (users as User[])
-    .filter((user) => user.role !== 'admin')
+    .filter((user) => effectiveRoleOf(user) !== 'admin')
     .map((user) => {
       const mine = records.filter((rec) => rec.userId === user.id);
       const days = new Set(mine.map((rec) => rec.date));
@@ -8440,8 +8500,8 @@ function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }
   });
   const topTypes = Array.from(types.entries()).sort((a: [string, number], b: [string, number]) => b[1] - a[1]).slice(0, 6);
 
-  // أداء كل سيلز
-  const salesUsers = (users || []).filter((u: User) => u.role === 'sales' || u.role === 'supervisor');
+  // أداء كل سيلز — بما فيهم حساب المطوّر (إداري في القاعدة، سيلز في الشغل)
+  const salesUsers = (users || []).filter((u: User) => ['sales', 'supervisor'].includes(effectiveRoleOf(u)));
   const rows = salesUsers
     .map((u: User) => {
       const mine = clients.filter((c: Client) => c.userId === u.id || c.assignedTo === u.id);
@@ -8692,7 +8752,7 @@ function ReportsView({ clients, feedbacks, reminders }: any) {
 }
 
 // Admin Feedback View - Show feedback for each sales person
-function AdminFeedbackView({ users, dailyFeedbacks, clients, callLogs = [], onSelect }: any) {
+function AdminFeedbackView({ users, dailyFeedbacks, clients, leads = [], callLogs = [], onSelect }: any) {
   // كل من يعمل «سيلز» فعلياً — بما فيهم حساب المطوّر (role في القاعدة admin لكن
   // سلوكه سيلز)، وإلا كان حسابه غايباً عن لوحة الفيدباك اليومي وكومنتاته كمان.
   const salesUsers = users.filter((u: User) => {
@@ -8728,7 +8788,7 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, callLogs = [], onSe
           // نفس مصدر صفحة التفاصيل بالأسفل (بما فيها بطاقات «الفيدباك اليومي»)
           // حتى تتطابق الأرقام مع ما يفتح بالضغط
           const nums = mergeDailyFeedbackCards(
-            salesFeedbackByNumber(user.id, clients, [], callLogs, user.name),
+            salesFeedbackByNumber(user.id, clients, leads, callLogs, user.name),
             user.id,
             dailyFeedbacks
           );
@@ -9750,7 +9810,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, active
   );
 }
 
-function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onDeleteMany, onImport, onAssign, activeForms = [], autoRules = [], onSaveAutoRule }: any) {
+function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onDeleteMany, onImport, onAssign, activeForms = [], autoRules = [], onSaveAutoRule, onRebalanceForm }: any) {
   // نفس قاعدة السيرفر حرفياً (isAssignableSales): سيلز/قائد فريق + حساب «مطوّر»
   // إداري يعمل سيلزاً أيضاً. والاشتراط بـ u.isActive كان يُخفي أي حساب قديم
   // لم يُكتب له الحقل أصلاً، فلا يظهر في توزيع الأرقام ولا يقبل رقمأ.
@@ -9817,36 +9877,52 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
   const ruleOf = (autoRules as AutoAssignRule[]).find(
     (rule) => String(rule.formName || '') === activeForm
   ) || null;
-  const ruleActive = !!(ruleOf && ruleOf.active !== false && (ruleOf.salesIds || []).length);
+  // ===== «كل السيلز» (الوضع الافتراضي) =====
+  // التوزيع على كل من يستقبل أرقاماً بالتساوي — بما فيهم أي حساب جديد بعد كده —
+  // بدل قائمة أسماء تُنسى فتخلي الأرقام تتكدس عند واحد.
+  const [autoAll, setAutoAll] = useState(true);
+  const ruleActive = !!(ruleOf && ruleOf.active !== false && (ruleOf.allSales || (ruleOf.salesIds || []).length));
   const [autoIds, setAutoIds] = useState<string[]>([]);
-  const savedIdsKey = ruleOf ? (ruleOf.salesIds || []).join(',') : '';
+  const savedIdsKey = ruleOf ? `${ruleOf.allSales ? 'all' : ''}|${(ruleOf.salesIds || []).join(',')}` : '';
   useEffect(() => {
-    // عند تغيير الفورم نعرض مختاري هذا الفورم بدل مختاري الفورم السابق
-    setAutoIds((savedIdsKey ? savedIdsKey.split(',') : []).filter((id: string) => salesUsers.some((u: User) => u.id === id)));
+    // عند تغيير الفورم نعرض مختاري هذا الفورم بدل مختاري الفورم السابق،
+    // و«كل السيلز» تبقى مفعّلة افتراضياً لو مفيش قاعدة محفوظة للفورم.
+    setAutoAll(ruleOf ? ruleOf.allSales === true : true);
+    setAutoIds((savedIdsKey.split('|')[1] ? savedIdsKey.split('|')[1].split(',') : []).filter((id: string) => salesUsers.some((u: User) => u.id === id)));
   }, [activeForm, savedIdsKey]);
+  // المندوبون الفعليون للتوزيع: «كل السيلز» أو المختارون
+  const effectiveAutoIds = autoAll ? salesUsers.map((u: User) => String(u.id)) : autoIds;
 
   const toggleAuto = (id: string) =>
     setAutoIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
 
   // عدد الأرقام غير المخصصة في هذا الفورم — هي التي ستتوزع الآن
   const autoPending = activeForm === 'all' ? 0 : formLeads.filter((l: AssignedLead) => !l.salesId).length;
-  const autoNow = activeForm !== 'all' && autoIds.length
-    ? distributeLeads({ leads: formLeads, salesIds: autoIds, formName: activeForm, formOf: formKeyOf, onlyUnassigned: true }).assignments.length
+  const autoNow = activeForm !== 'all' && effectiveAutoIds.length
+    ? distributeLeads({
+        leads: formLeads,
+        // الحصص على كل أرقام السيلز (وليس هذا الفورم فقط) → توزيع متوازن فعلاً
+        loadLeads: assignedLeads,
+        salesIds: effectiveAutoIds,
+        formName: activeForm,
+        formOf: formKeyOf,
+        onlyUnassigned: true,
+      }).assignments.length
     : 0;
 
   const startAuto = () => {
-    if (activeForm === 'all' || !autoIds.length) return;
-    const done = Number(onSaveAutoRule?.(activeForm, autoIds, true)) || 0;
-    const names = autoIds.map((id) => nameOf(id)).join(' و');
+    if (activeForm === 'all' || !effectiveAutoIds.length) return;
+    const done = Number(onSaveAutoRule?.(activeForm, effectiveAutoIds, true, autoAll)) || 0;
+    const names = autoAll ? 'كل السيلز' : autoIds.map((id) => nameOf(id)).join(' و');
     setFlash(
       done > 0
-        ? `تم توزيع ${done} رقم بالتساوي على ${names} ✓ — وأي رقم جديد من «${activeForm}» هيتوزع عليهم أوتوماتيك، وغيرهم مايصلهوش.`
+        ? `تم توزيع ${done} رقم بالتساوي على ${names} ✓ — وأي رقم جديد من «${activeForm}» هيتوزع عليهم أوتوماتيك بالتساوي.`
         : `التوزيع التلقائي شغّال على «${activeForm}» ← ${names} ✓ — أول ما يوصل رقم جديد هيوصله واحد منهم بالتساوي.`
     );
   };
   const stopAuto = () => {
     if (activeForm === 'all') return;
-    onSaveAutoRule?.(activeForm, autoIds, false);
+    onSaveAutoRule?.(activeForm, effectiveAutoIds, false, autoAll);
     setFlash(`تم إيقاف التوزيع التلقائي لفورم «${activeForm}» — الأرقام الجديدة هتستنى التوزيع اليدوي.`);
   };
 
@@ -9967,6 +10043,23 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
             </div>
           ) : (
             <>
+              {/* ===== كل السيلز (الافتراضي): توزيع بالتساوي على الجميع ===== */}
+              <label className="mt-3 flex items-start gap-2.5 rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoAll}
+                  onChange={(e) => setAutoAll(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 accent-[var(--brand)]"
+                />
+                <span className="min-w-0">
+                  <b className="block text-xs text-[var(--text-strong)]">كل السيلز (بالتساوي)</b>
+                  <span className="block text-[11px] text-[var(--text-dim)] mt-0.5 leading-relaxed">
+                    التوزيع على كل من يستقبل أرقاماً — {salesUsers.length} حساب، ومنهم أي حساب جديد —
+                    بالتساوي حسب عدد الأرقام اللي مع كل واحد، مش على أسماء مختارة بس.
+                  </span>
+                </span>
+              </label>
+
               {/* قائمة مسندلة: اختار اسم من هنا ينضم لقائمة المختارين (والضغط عليه تحت يشيله) */}
               <div className="mt-3">
                 <label htmlFor="auto-sales-select" className="block text-[11px] font-bold text-[var(--text-dim)] mb-1">
@@ -10022,24 +10115,38 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
                   onClick={startAuto}
-                  disabled={!autoIds.length}
+                  disabled={!effectiveAutoIds.length}
                   className="gradient-primary text-[var(--text-strong)] px-4 py-2 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
                 >
                   <Zap className="w-3.5 h-3.5" /> {ruleActive ? 'تحديث التوزيع التلقائي' : 'تشغيل التوزيع التلقائي'}
                 </button>
                 <button
-                  onClick={() => setAutoIds(salesUsers.map((u: User) => u.id))}
+                  onClick={() => { setAutoAll(false); setAutoIds(salesUsers.map((u: User) => u.id)); }}
                   className="bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text-muted)] px-3 py-2 rounded-[var(--r-md)] font-bold text-xs hover:text-[var(--text)] transition-colors"
                 >
                   تحديد الكل
                 </button>
                 <button
-                  onClick={() => setAutoIds([])}
+                  onClick={() => { setAutoAll(false); setAutoIds([]); }}
                   disabled={!autoIds.length}
                   className="bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text-muted)] px-3 py-2 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-40 hover:text-[var(--text)] transition-colors"
                 >
                   مسح الاختيار
                 </button>
+                {/* إصلاح تكدّس قديم: توزيع كل أرقام الفورم الحالية بالتساوي من جديد */}
+                {onRebalanceForm && activeForm !== 'all' && formLeads.length > 0 && (
+                  <button
+                    onClick={() => {
+                      if (!window.confirm(`إعادة توزيع ${formLeads.length} رقم من «${activeForm}» بالتساوي على كل السيلز؟ سيتم نقل الأرقام من المندوبين المحمّلين زيادة.`)) return;
+                      const moved = Number(onRebalanceForm(activeForm)) || 0;
+                      setFlash(moved > 0 ? `تم إعادة توزيع ${moved} رقم بالتساوي على كل السيلز ✓` : 'كل الأرقام متساوية بالفعل — مفيش حاجة تتحرك');
+                    }}
+                    className="bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-md)] font-bold text-xs hover:border-[var(--brand-primary-soft)] transition-colors"
+                    title="إعادة توزيع أرقام الفورم كلها بالتساوي على كل من يستقبل أرقاماً"
+                  >
+                    <Scale className="w-3.5 h-3.5 inline-block ml-1" /> إعادة توزيع بالتساوي
+                  </button>
+                )}
                 {ruleActive && (
                   <button
                     onClick={stopAuto}
@@ -10051,8 +10158,10 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
               </div>
 
               <p className="text-[11px] text-[var(--text-dim)] mt-2 leading-relaxed">
-                {!autoIds.length
+                {!effectiveAutoIds.length
                   ? 'مفيش سيلز مختار — اختار اسم واحد على الأقل من فوق.'
+                  : autoAll
+                  ? `كل السيلز (${effectiveAutoIds.length}) — الأرقام الجديدة بتتوزع عليهم بالتساوي حسب الحمل الحالي لكل واحد.`
                   : `المختارون: ${autoIds.map((id) => nameOf(id)).join(' • ')} — عندهم ${autoIds.reduce((sum, id) => sum + formLeads.filter((l: AssignedLead) => l.salesId === id).length, 0)} رقم من هذا الفورم.`}
                 {autoNow > 0 && (
                   <span className="block text-emerald-300 mt-1">
@@ -10061,7 +10170,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                 )}
                 {ruleActive && (
                   <span className="block text-[var(--brand)] mt-1">
-                    شغّال بالفعل على: {(ruleOf!.salesIds || []).map((id: string) => nameOf(id)).join(' • ')} — أي رقم جديد من «{activeForm}» يتوزع عليهم وحدهم.
+                    شغّال بالفعل على: {ruleOf!.allSales ? 'كل السيلز' : (ruleOf!.salesIds || []).map((id: string) => nameOf(id)).join(' • ')} — أي رقم جديد من «{activeForm}» يتوزع عليهم بالتساوي.
                   </span>
                 )}
               </p>
@@ -10280,9 +10389,11 @@ function AdminAttendanceView({ users }: any) {
 
   const searchQuery = normalizeArabicText(query).trim();
 
-  // حسابات المديرين لا تسجّل حضوراً ولا تظهر في القائمة — الحضور للسيلز والمشرفين فقط
+  // حسابات المديرين لا تسجّل حضوراً ولا تظهر في القائمة — الحضور للسيلز والمشرفين فقط.
+  // الحكم بالرتبة السلوكية: حساب المطوّر/الإداري-السيلز (محمد وفريدة) يسجّل حضوراً
+  // ويظهر مع الفريق، وإلا كان غايباً عن شاشة الحضور رغم أنه يشتغل سيلزاً.
   const persons = users
-    .filter((u: User) => u.role !== 'admin')
+    .filter((u: User) => effectiveRoleOf(u) !== 'admin')
     .filter((u: User) => !searchQuery || normalizeArabicText(u.name).includes(searchQuery))
     .map((u: User) => ({
       user: u,
@@ -11489,7 +11600,7 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
   // بلا قائمة اختيار مندوب (كانت تطلب منه اختيار سيلز قبل الحفظ).
   const isAdmin = currentUser?.role !== 'sales' && !isDeveloperAccount(currentUser);
   // المدير يضيف العميل لمندوب بعينه حتى يظهر للفريق (الإدارة مالها تبويب عملاء خاص)
-  const reps = (users || []).filter((u: User) => u.role === 'sales' || u.role === 'supervisor');
+  const reps = (users || []).filter((u: User) => ['sales', 'supervisor'].includes(effectiveRoleOf(u)));
   const [form, setForm] = useState({
     name: '', phone: '', phones: [] as string[], property: '', budget: '', monthlyInstallment: '', deliveryPeriod: '',
     status: 'campaign', stage: 'new', feedback: '', feedbackStatus: 'follow-up', cancelReason: '',
@@ -13125,7 +13236,7 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
     onClose();
   };
   
-  const salesUsers = users.filter((u: User) => u.role === 'sales' || u.role === 'supervisor');
+  const salesUsers = users.filter((u: User) => ['sales', 'supervisor'].includes(effectiveRoleOf(u)));
   
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
@@ -13255,13 +13366,16 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
     entry.items = dedupeComments(entry.items).sort((a, b) => String(b.at).localeCompare(String(a.at)));
   }
 
-  // الأرقام اللي مالها كلام مندوب ما بتتعرضش في لوحة الفيدباك اليومي
-  const withItems = Array.from(map.values()).filter((entry) => entry.items.length > 0);
-  return withItems.sort((a, b) => {
+  // **كل** أرقام المندوب تتعرض — حتى اللي عليها كلام ولا لسه. الحساب اللي عنده
+  // أرقام كثيرة وما كتبش عليها فيدباك كان يظهر «0 رقم» في لوحة الإدارة، فيبدو
+  // كأنه بلا شغل أصلاً. الأرقام اللي عليها كومنت تفضل الأول (الأحدث)، والباقي بعدها.
+  const all = Array.from(map.values());
+  return all.sort((a, b) => {
     if (!!a.items.length !== !!b.items.length) return a.items.length ? -1 : 1;
     const ta = Date.parse(a.items[0]?.at || '') || 0;
     const tb = Date.parse(b.items[0]?.at || '') || 0;
-    return tb - ta;
+    if (ta !== tb) return tb - ta;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'ar');
   });
 }
 

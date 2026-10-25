@@ -180,7 +180,7 @@ check(
   'فيدباك مندوب مكتوب على عميل باسم حساب تاني يُنسب لكاتبه وتظهر رقمه',
   /normName\(a\.by\) === myName/.test(app) &&
     /a\.authorId && String\(a\.authorId\) === String\(userId\)/.test(app) &&
-    /salesFeedbackByNumber\(user\.id, clients, \[\], callLogs, user\.name\)/.test(app)
+    /salesFeedbackByNumber\(user\.id, clients, leads, callLogs, user\.name\)/.test(app)
 );
 
 // ===== ٥) حساب المطوّر يظهر مع السيلز (كان role=admin فيختفي من اللوحة) =====

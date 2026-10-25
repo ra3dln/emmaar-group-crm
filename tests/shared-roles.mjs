@@ -7,6 +7,7 @@
 // التشغيل: node tests/shared-roles.mjs
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {
   dataScopeOf,
   effectiveRoleOf,
@@ -70,5 +71,28 @@ check('الإداري الذي اختار «يعمل سيلزاً» يستقبل
 check('الإداري العادي ما يستقبلش', isAssignableSales(ceo) === false);
 check('حساب المطوّر يستقبل أرقاماً ويظهر في التوزيع', isAssignableSales(dev) === true);
 check('الحساب الموقوف ما يستقبلش', isAssignableSales({ ...sales, isActive: false }) === false);
+
+// ===== ٥) شاشات الحضور والفيدباك والمحادثات بتستخدم الرتبة السلوكية =====
+// العطل المُبلَّغ عنه: «حساب محمد مش ظاهر في خانة الحضور» — لأنه إداري في القاعدة
+// وكانت الشاشة تستثني `role !== admin` فيسقط من القائمة مع المدراء.
+const app = fs.readFileSync('src/App.tsx', 'utf8');
+check(
+  'شاشة الحضور (اليومي والشهري) تعرض الإداري الذي يعمل سيلزاً',
+  /function AdminAttendanceView[\s\S]{0,4000}effectiveRoleOf\(u\) !== 'admin'/.test(app) &&
+    /AttendanceMonthlyReport[\s\S]{0,4000}effectiveRoleOf\(user\) !== 'admin'/.test(app)
+);
+check(
+  'قوائم السيلز في المراحل والتقارير والإضافة بتشمل حساب المطوّر',
+  (app.match(/\['sales', 'supervisor'\]\.includes\(effectiveRoleOf\(/g) || []).length >= 4
+);
+check(
+  'قائمة المحادثات بتعرض حساب المطوّر مع الفريق',
+  /const people = \(users \|\| \[\]\)\.filter\(\(u: User\) => effectiveRoleOf\(u\) !== 'admin'\)/.test(app)
+);
+check(
+  'لوحة الفيدباك اليومي تعرض أرقام المندوب حتى اللي مالها كومنت',
+  !/filter\(\(entry\) => entry\.items\.length > 0\)/.test(app) &&
+    /const all = Array\.from\(map\.values\(\)\)/.test(app)
+);
 
 console.log(`\n✅ نجحت ${passed} فحوصات لحساب المطوّر`);
