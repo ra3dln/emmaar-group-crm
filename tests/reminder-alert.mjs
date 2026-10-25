@@ -90,6 +90,41 @@ check(
   ).needsAction === true
 );
 
+// ===== ٢ب) أكثر من تذكير فات على نفس العميل: الأحدث هو الحكم =====
+// كان يُختار الأقدم، فأي إجراء بعد التذكير الأول يلغي كل التذكيرات اللي بعده —
+// فلا يظهر «اتأخر» أبداً في حساب فيه متابعات متكررة (شكوى حساب mohamed).
+const repeated = [
+  { id: 'old', clientId: 'c1', clientPhone: '01001234567', dateTime: iso(NOW - 2 * HOUR), createdAt: iso(NOW - 4 * HOUR), isCompleted: false },
+  { id: 'new', clientId: 'c1', clientPhone: '01001234567', dateTime: iso(NOW - HOUR), createdAt: iso(NOW - 30 * 60 * 1000), isCompleted: false },
+];
+check(
+  'إجراء بعد التذكير القديم لا يلغي التذكير الأحدث → محتاج إجراء',
+  clientActionState(
+    client({ activities: [{ id: 'a1', type: 'feedback', text: 'كلمني', at: iso(NOW - 3 * HOUR) }] }),
+    repeated,
+    [{ id: 'l1', clientPhone: '01001234567', createdAt: iso(NOW - 3 * HOUR) }],
+    NOW
+  ).needsAction === true
+);
+check(
+  'إجراء بعد أحدث تذكير → رجع للوضع الطبيعي',
+  clientActionState(
+    client({ activities: [{ id: 'a1', type: 'feedback', text: 'كلمني', at: iso(NOW - 10 * 60 * 1000) }] }),
+    repeated,
+    [],
+    NOW
+  ).needsAction === false
+);
+check(
+  'الرقم الموزّع بنفس القاعدة (الأحدث هو الحكم)',
+  leadAlertState(
+    { id: 'l1', phone: '01001234567' },
+    repeated,
+    [{ id: 'lg', clientPhone: '01001234567', createdAt: iso(NOW - 3 * HOUR) }],
+    NOW
+  ).needsAction === true
+);
+
 // ===== ٣) المطابقة بالرقم (التذكير على رقم، والعميل بمعرّف مختلف) =====
 check(
   'التذكير بيتطابق بالرقم كمان (الرقم واحد في مكان واحد)',

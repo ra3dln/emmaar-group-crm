@@ -61,7 +61,11 @@ export const clientActionState = (
     })
     .sort((a: any, b: any) => timeOf(a?.dateTime) - timeOf(b?.dateTime));
   if (!due.length) return { needsAction: false };
-  const target = due[0];
+  // ===== أحدث تذكير فات، لا الأقدم =====
+  // لو العميل عليه أكتر من متابعة، اختيار الأقدم كان يضيّع التذكيرات الجديدة:
+  // أي مكالمة/كومنت بعد التذكير الأول تلغي كل اللي بعده، فلا يظهر «اتأخر» أبداً
+  // (وهو سبب عدم ظهور التنبيه في حسابات فيها متابعات متكررة لنفس العميل).
+  const target = due[due.length - 1];
   // اتعمل إجراء بعد التذكير (مكالمة أو كومنت)؟ → رجعنا للوضع الطبيعي
   const since = timeOf(target?.createdAt) || timeOf(target?.dateTime);
   if (actedAfter(client, callLogs, since)) return { needsAction: false };
@@ -111,7 +115,8 @@ export const leadAlertState = (
     })
     .sort((a: any, b: any) => timeOf(a?.dateTime) - timeOf(b?.dateTime));
   if (!due.length) return { needsAction: false };
-  const target = due[0];
+  // أحدث تذكير فات (نفس قاعدة العميل) فلا يضيع تذكير جديد بسبب إجراء قديم
+  const target = due[due.length - 1];
   const since = timeOf(target?.createdAt) || timeOf(target?.dateTime);
   const called = (callLogs || []).some(
     (l: any) => digitsOfPhone(l?.clientPhone) === phone && timeOf(l?.createdAt) > since
