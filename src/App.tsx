@@ -6372,7 +6372,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                   {open && !isLead && <FeedbackComposer />}
                   {!open && !isLead && last?.text && (
                     <div className="ct-lastnote" onClick={() => onSelect(client)}>
-                      <FeedbackChip status={last.status} />
+                      <FeedbackChip status={last.status} alert={!!alertMap?.get(digitsOfPhone(client?.phone))} />
                       {' '}آخر ملاحظة: {last.text}
                     </div>
                   )}
