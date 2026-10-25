@@ -8813,7 +8813,8 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, leads = [], callLog
                 </div>
                 <div>
                   <h4 className="font-bold text-[var(--text-strong)]">{user.name}</h4>
-                  <p className="text-sm text-[var(--text-muted)]">{user.role === 'sales' ? 'سيلز' : 'مشرف'}</p>
+                  {/* الرتبة السلوكية: الإداري الذي يعمل سيلزاً (محمد/فريدة) يظهر «سيلز» */}
+                  <p className="text-sm text-[var(--text-muted)]">{effectiveRoleOf(user) === 'supervisor' ? 'مشرف' : 'سيلز'}</p>
                 </div>
               </div>
               
