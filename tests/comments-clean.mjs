@@ -12,6 +12,7 @@ const {
   cleanCommentText,
   commentActivitiesOf,
   dedupeComments,
+  isCallResultText,
   isCommentActivity,
   isSystemOnlyText,
   sanitizeClientRecord,
@@ -79,6 +80,17 @@ check(
   })[0].text === 'المش مجمع هكلمه تاني'
 );
 check('نص النظام الآلي مش كلام مندوب', isSystemOnlyText('No answer') && isSystemOnlyText('اتصال: تم الرد'));
+// لكن نتيجة الاتصال نفسها هي الكومنت اللي بيتسجّل مع الإجراء، فلازم تتعرض
+// في «آخر التعليقات» (كانت بتختفي فيبقى الإجراء شكله ما اتحفظش).
+check('نص نتيجة الاتصال يتعرف عليه', isCallResultText('No answer') && isCallResultText('لم يرد'));
+check(
+  'نص نتيجة الاتصال مع الحالة يتحفظ للعرض',
+  isCallResultText('اتصال: تم الرد') && isCallResultText(' busy ')
+);
+check(
+  'لوجات التذكير/الواتساب مش نتيجة اتصال',
+  !isCallResultText('تم فتح واتساب') && !isCallResultText('تم إنشاء تذكير: معاينة')
+);
 check(
   'نص البطاقة التلقائية («عميل جديد») مش كلام مندوب',
   isSystemOnlyText('عميل جديد — لم يتم التواصل معه بعد')

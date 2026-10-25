@@ -33,6 +33,7 @@ export declare const LOG_TYPES: string[];
 export declare function cleanCommentText(value: any): string;
 export declare function isSystemOnlyText(value: any): boolean;
 export declare function isPureLogText(value: any): boolean;
+export declare function isCallResultText(value: any): boolean;
 export declare function isCommentActivity(activity: any): boolean;
 export declare function commentSignature(text: any, at: any): string;
 export declare function dedupeComments(items: any[]): any[];

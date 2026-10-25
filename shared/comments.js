@@ -18,6 +18,11 @@ const SYSTEM_LINE_RE = /^\s*(?:no\s*answer|not\s*called|busy|تم\s*الرد|ل�
 const SYSTEM_TEXT_RE =
   /^(?:no\s*answer|not\s*called|busy|تم\s*الرد|لم\s*يرد|مشغول|بusy|اتصال\s*[:\-].*|تم\s+إنشاء\s+تذكير.*|تم\s+فتح\s+واتساب.*)$/i;
 
+// نص نتيجة الاتصال وحده («No answer» / «تم الرد» …): ده مش لوج نظام،
+// ده الكومنت اللي بيتسجّل مع المكالمة — فبيتعرض في «آخر التعليقات»
+// في نافذة الإجراء (Add Action) حتى لو المستخدم ما كتبش كلام إضافي.
+const CALL_RESULT_RE = /^(?:no\s*answer|not\s*called|busy|تم\s*الرد|لم\s*يرد|مشغول)$/i;
+
 // نص لوج خالص (مفيش فيه كلام مندوب) — بيتشال من البيانات نفسها
 // (بعكس «No answer» لأنها بتضع الحالة والنتيجة، فبتفضل محفوظة)
 const PURE_LOG_TEXT_RE =
@@ -37,6 +42,9 @@ export const isSystemOnlyText = (value) => {
   if (AUTO_CLIENT_TEXT_RE.test(clean)) return true;
   return SYSTEM_TEXT_RE.test(clean);
 };
+
+// نص نتيجة اتصال فقط (بيتحفظ ككومنت ويظهر في «آخر التعليقات»)
+export const isCallResultText = (value) => CALL_RESULT_RE.test(cleanCommentText(value));
 
 // لوج خالص (اتصال/تذكير/واتساب) — يتشال من البيانات
 export const isPureLogText = (value) => {

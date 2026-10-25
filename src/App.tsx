@@ -50,6 +50,8 @@ import {
   commentActivitiesOf,
   commentSignature,
   dedupeComments,
+  isCallResultText,
+  isCommentActivity,
   isSystemOnlyText,
 } from '../shared/comments.js';
 import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
@@ -165,13 +167,21 @@ const commentsOfTarget = (
   const out: Array<{ id: string; by: string; at: string; text: string; status?: string; result?: string; nextAt?: string }> = [];
 
   const client = (clients || []).find((c: any) => String(c?.id) === String(target?.id));
-  // كومنتات العميل: بلا لوجات وبلا تكرار (shared/comments.js)
-  for (const a of commentActivitiesOf(client)) {
+  // كومنتات العميل: بلا لوجات وبلا تكرار (shared/comments.js) — ما عدا نص نتيجة
+  // الاتصال نفسه («No answer» / «تم الرد»)، فهو الكومنت اللي بيسجّله المندوب
+  // مع الإجراء فلازم يظهر في «آخر التعليقات».
+  const keepText = (text: string) =>
+    !!text && (!isSystemOnlyText(text) || isCallResultText(text));
+  const clientActs = Array.isArray((client as any)?.activities) ? (client as any).activities : [];
+  for (const a of clientActs) {
+    if (!isCommentActivity(a)) continue;
+    const text = cleanCommentText(a?.text);
+    if (!keepText(text)) continue;
     out.push({
       id: String(a?.id || ''),
       by: String(a?.by || nameOf(a?.authorId)),
       at: String(a?.at || ''),
-      text: String(a?.text || ''),
+      text,
       status: String(a?.status || ''),
     });
   }
@@ -180,7 +190,7 @@ const commentsOfTarget = (
   for (const f of (feedbacks || [])) {
     if (digitsOfPhone(f?.clientPhone) !== phone) continue;
     const text = cleanCommentText(f?.feedback);
-    if (!text || isSystemOnlyText(text)) continue;
+    if (!keepText(text)) continue;
     out.push({
       id: String(f?.id || ''),
       by: nameOf(f?.userId),
@@ -196,7 +206,7 @@ const commentsOfTarget = (
   for (const l of (callLogs || [])) {
     if (digitsOfPhone(l?.clientPhone) !== phone) continue;
     const text = cleanCommentText(l?.comment);
-    if (!text || isSystemOnlyText(text)) continue;
+    if (!keepText(text)) continue;
     out.push({
       id: String(l?.id || ''),
       by: nameOf(l?.salesId),
