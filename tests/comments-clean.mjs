@@ -161,6 +161,11 @@ check(
     /id: `log-\$\{log\?\.id\}`/.test(app)
 );
 check(
+  'تبويب الفيدباك للمندوب: كلام المكالمات رجع + نفس الكومنت مرة واحدة بس',
+  /commentSignature\(text, f\?\.date \|\| f\?\.createdAt\)/.test(app) &&
+    /userId: currentUser\?\.id,/.test(app)
+);
+check(
   'الفيدباك اليومي بيستعمل قواعد التكرار',
   /dedupeComments\(entry\.items\)/.test(app)
 );

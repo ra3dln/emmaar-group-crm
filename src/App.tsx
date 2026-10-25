@@ -48,6 +48,7 @@ import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor, 
 import {
   cleanCommentText,
   commentActivitiesOf,
+  commentSignature,
   dedupeComments,
   isSystemOnlyText,
 } from '../shared/comments.js';
@@ -8385,6 +8386,38 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, callLogs = [] }: a
   for (const f of mine) {
     const key = norm(f.clientPhone) || `name:${normalizeArabicText(f.clientName || '')}`;
     byPhone.set(key, [...(byPhone.get(key) || []), f]);
+  }
+  // كلام المندوب من سجل المكالمات (نص المكالمة) — مصدر الكومنتات القديمة.
+  // اللوج الآلي لوحده (من غير كلام) ما بيظهرش.
+  for (const l of callLogs || []) {
+    const text = cleanCommentText(l?.comment);
+    if (!text || isSystemOnlyText(text)) continue;
+    const key = norm(l?.clientPhone) || `name:${normalizeArabicText(l?.clientName || '')}`;
+    const entry: any = {
+      id: `log-${l?.id}`,
+      clientPhone: l?.clientPhone,
+      clientName: l?.clientName,
+      status: '',
+      feedback: text,
+      date: String(l?.createdAt || ''),
+      createdAt: String(l?.createdAt || ''),
+      userId: currentUser?.id,
+    };
+    byPhone.set(key, [...(byPhone.get(key) || []), entry]);
+  }
+  // نفس الكومنت اتكتب في كارت الفيدباك اليومي وكمان في سجل المكالمات = نسخة واحدة
+  for (const [key, list] of byPhone) {
+    const seen = new Set<string>();
+    const unique: any[] = [];
+    for (const f of list) {
+      const text = cleanCommentText(f?.feedback);
+      if (!text || isSystemOnlyText(text)) continue;
+      const sig = commentSignature(text, f?.date || f?.createdAt);
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      unique.push(f);
+    }
+    byPhone.set(key, unique);
   }
   // التبويب يعرض **عملاءك** لا قائمة كومنتات: كارت لكل عميل، والضغط عليه يفتح
   // كل الفيدباك بتاعه في الخط الزمني — عرض فقط، لا كتابة ولا حذف من هنا.
