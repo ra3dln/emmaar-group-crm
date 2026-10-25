@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 
-const { feedbackBucketOf, latestFeedbackStatusOf, buildWorkNumbers, feedbackByPhone, isColdNumber } =
+const { feedbackBucketOf, latestFeedbackStatusOf, buildWorkNumbers, feedbackByPhone, isColdNumber, isFreshNumber } =
   await import('../src/feedbackBuckets.ts');
 
 let passed = 0;
@@ -131,23 +131,29 @@ check(
 );
 
 // ===== ٥) «Fresh Leads» ≠ «Cold Calls» =====
-// الطلب: «الفريش ليدز مش هيا ال cold calls» — فلازم كل رقم يبقى في واحد منهم بس.
-// Fresh = رقم جديد ما اتفتحش · Cold = اتفتح (عميل مسجّل / رقم اتفتح من التوزيع) وما اتصلناش.
+// الطلب: «الأرقام الجديدة تنزل في Fresh Leads مش Cold Calls» — فلازم كل رقم يبقى
+// في واحد منهم بس. Fresh = رقم نزل حالاً (آخر ٢٤ ساعة) · Cold = نزل من زمان وما اتصلناش.
+// (فتح السيلز للرقم ما بيخلّيه بارد — الأرقام الجديدة فضلت في Fresh.)
+const HOUR = 60 * 60 * 1000;
+const OLD = new Date(Date.now() - 5 * 24 * HOUR).toISOString();
+const NEW = new Date(Date.now() - 2 * HOUR).toISOString();
 const split = buildWorkNumbers(
   [
-    { id: 'c1', name: 'عميل مسجّل من غير فيدباك', phone: '01000000001', stage: 'new', activities: [] },
+    { id: 'c1', name: 'عميل مسجّل من غير فيدباك', phone: '01000000001', stage: 'new', createdAt: OLD, activities: [] },
     {
       id: 'c2',
       name: 'عميل عليه فيدباك',
       phone: '01000000002',
       stage: 'contacted',
+      createdAt: OLD,
       activities: [{ id: 'a1', type: 'feedback', text: 'طلب معاينة', status: 'follow-up', at: AT }],
     },
   ],
   [
-    { id: 'l1', name: 'رقم جديد ما اتفتحش', phone: '01000000003', status: 'new', salesId: 'u1' },
-    { id: 'l2', name: 'رقم اتفتح من التوزيع', phone: '01000000004', status: 'viewed', salesId: 'u1' },
-    { id: 'l3', name: 'رقم اتفتح واتصلنا بيه', phone: '01000000005', status: 'viewed', salesId: 'u1' },
+    { id: 'l1', name: 'رقم جديد نزل حالاً', phone: '01000000003', status: 'new', salesId: 'u1', assignedAt: NEW },
+    { id: 'l2', name: 'رقم قديم اتفتح من التوزيع', phone: '01000000004', status: 'viewed', salesId: 'u1', assignedAt: OLD },
+    { id: 'l3', name: 'رقم اتفتح واتصلنا بيه', phone: '01000000005', status: 'viewed', salesId: 'u1', assignedAt: OLD },
+    { id: 'l6', name: 'رقم نزل حالاً واتفتح', phone: '01000000006', status: 'viewed', salesId: 'u1', assignedAt: NEW },
   ],
   feedbackByPhone(
     [],
@@ -165,9 +171,9 @@ const split = buildWorkNumbers(
 );
 const calledPhones = new Set(['01000000005']);
 const cold = split.filter((n) => isColdNumber(n, calledPhones));
-const fresh = split.filter((n) => n.bucket === 'fresh-stage' && !isColdNumber(n, calledPhones));
-check('«Cold Calls» = العميل المسجّل + الرقم اللي اتفتح (٢)', cold.length === 2, `وجد ${cold.length}`);
-check('«Fresh Leads» = الرقم الجديد اللي ما اتفتحش (١)', fresh.length === 1, `وجد ${fresh.length}`);
+const fresh = split.filter((n) => isFreshNumber(n, calledPhones));
+check('«Cold Calls» = القديم اللي ما اتصلناش بيه (٢)', cold.length === 2, `وجد ${cold.length}`);
+check('«Fresh Leads» = الجديد اللي نزل حالاً (٢)', fresh.length === 2, `وجد ${fresh.length}`);
 check(
   'الرقم الواحد ما بيحسبش في الاتنين',
   cold.every((n) => !fresh.some((f) => f.key === n.key))
@@ -175,6 +181,10 @@ check(
 check(
   'الرقم اللي اتصلنا بيه مش بارد ومش جديد',
   !cold.some((n) => n.phone === '01000000005') && !fresh.some((n) => n.phone === '01000000005')
+);
+check(
+  'الرقم اللي اتفتح من التوزيع نزل حالاً يبقى Fresh (مش بارد)',
+  fresh.some((n) => n.phone === '01000000006') && !cold.some((n) => n.phone === '01000000006')
 );
 check(
   'العميل اللي عليه فيدباك حالته follow-up (مش بارد ولا جديد)',

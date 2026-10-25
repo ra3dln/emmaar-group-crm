@@ -63,10 +63,11 @@ import {
   feedbackBucketOf,
   feedbackByPhone,
   isColdNumber,
+  isFreshNumber,
   latestFeedbackStatusOf,
 } from './feedbackBuckets';
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
-import { alertMapOf, clientActionState, leadAlertState } from './reminders';
+import { alertMapOf, clientActionState, leadAlertState, actedAfterReminder } from './reminders';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import {
   ATTENDANCE_END_DEFAULT,
@@ -2882,10 +2883,18 @@ function App() {
   })();
 
   // المستحق الآن — الأحدث أولاً (نفس ترتيب تبويب التذكيرات)
+  // التذكير اللي اتعمل عليه إجراء (مكالمة أو كومنت) بيخرج من القائمة فوراً،
+  // والشارة «اتأخر» بتروح معاه — يعني الشارة ما بتروحش غير لما يتاخد إجراء فعلاً.
   const dueReminders = reminders
     .filter((r) => isReminderDue(r) && (currentUser.role !== 'admin' || r.userId === currentUser.id))
+    .filter((r) => !actedAfterReminder(r, scopedClients, scopedCallLogs))
     .slice()
     .sort((a, b) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
+  // الأرقام المتأخرة كلها — مش الأحدث بس (الشارة تتبان على كل رقم اتأخر)
+  const lateReminders = dueReminders.filter((r) => !!r.isDelayed);
+  const lateNames = lateReminders
+    .map((r) => String(r.clientName || '').trim())
+    .filter(Boolean);
   
   const stats = {
     totalClients: clients.length,
@@ -3359,8 +3368,12 @@ function App() {
             <div className="rs-body">
               <b>{dueReminders.length} تذكير مستحق الآن</b>
               <small>
-                الأحدث: {dueReminders[0].clientName} — {formatDateTime(dueReminders[0].dateTime)}
-                {dueReminders[0].isDelayed ? ' (متأخر)' : ''}
+                {lateNames.length ? (
+                  // كل الأرقام المتأخرة — مش الأحدث بس
+                  <>متأخر: {lateNames.slice(0, 3).join('، ')}{lateNames.length > 3 ? ` (+${lateNames.length - 3})` : ''}</>
+                ) : (
+                  <>الأحدث: {dueReminders[0].clientName} — {formatDateTime(dueReminders[0].dateTime)}</>
+                )}
               </small>
             </div>
             <div className="rs-actions">
@@ -4765,10 +4778,24 @@ function MobileTabBar({ activeTab, onTab, onMore, badge = 0 }: any) {
 
 // Dashboard View
 function DashboardView({ stats, clients, numbers = [], reminders, properties, currentUser, impersonating, onOpenStatus, onCompleteReminder, onActed, callLogs = [] }: any) {
+  // المستحق الآن — الأحدث أولاً. والتذكير اللي اتعمل عليه إجراء (مكالمة أو كومنت)
+  // بيخرج من القائمة فوراً — عشان الشارة «اتأخر» ما تروحش غير لما يتاخد إجراء.
   const dueReminders = reminders
     .filter((r: Reminder) => isReminderDue(r) && !r.isCompleted)
+    .filter((r: Reminder) => !actedAfterReminder(r, clients, callLogs))
     .slice()
     .sort((a: Reminder, b: Reminder) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
+  // عدد التذكيرات المتأخرة لكل رقم — «متأخر ×N» يعني كل المتأخرات للرقم ده
+  const lateCountByPhone = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of dueReminders as Reminder[]) {
+      if (!r.isDelayed) continue;
+      const k = digitsOfPhone(r.clientPhone);
+      if (!k) continue;
+      map.set(k, (map.get(k) || 0) + 1);
+    }
+    return map;
+  }, [dueReminders]);
   // عدّادات الحالات تحسب الأرقام المعروضة في هذه الصفحة نفسها.
   // البيانات محصورة أصلاً في loadData (السيلز يرى عملاءه، والأدمن/المطوّر يرون الكل)،
   // وكانت التصفية الثانية هنا تُفرّغ العدّادات لصفر لكل رقم ليس باسم صاحب الحساب
@@ -4776,17 +4803,14 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
   const myClients = (clients || []) as Client[];
   // لوحة الحالات تعدّ كل رقم في نطاقي (عميل مسجّل أو رقم في التوزيع) — لا العملاء وحدهم
   const scopeNumbers: any[] = numbers.length ? numbers : myClients;
-  // «مكالمات باردة» (زي ENGAZ): أرقام اتفتحت بس ما اتصلنا بيها — منفصلة عن «Fresh Leads»
-  // (الجديدة اللي ما اتفتحتش). والاتنين مش نفس الأرقام.
+  // «مكالمات باردة» (زي ENGAZ): أرقام نازلة من زمان وما اتصلناش بيها — منفصلة عن
+  // «Fresh Leads» (الأرقام الجديدة اللي نازلة حالاً). والاتنين مش نفس الأرقام.
   const calledPhones = new Set<string>(
     (callLogs || []).map((l: any) => digitsOfPhone(l?.clientPhone)).filter(Boolean)
   );
   const coldCalls = scopeNumbers.filter((record: any) => isColdNumber(record, calledPhones)).length;
-  const freshLeads = scopeNumbers.filter(
-    (record: any) =>
-      (record.bucket || feedbackBucketOf(record)) === 'fresh-stage' &&
-      !isColdNumber(record, calledPhones)
-  ).length;
+  // «Fresh Leads» = الأرقام الجديدة (نازلة حالاً) اللي ما اتصلناش بيها
+  const freshLeads = scopeNumbers.filter((record: any) => isFreshNumber(record, calledPhones)).length;
   const [todayRecord, setTodayRecord] = useState<Attendance | undefined>(() => getTodayCheckIn(currentUser.id));
   const myHistory = getAttendance().filter((a: Attendance) => a.userId === currentUser.id).sort((a: Attendance, b: Attendance) => b.checkInAt.localeCompare(a.checkInAt)).slice(0, 7);
   
@@ -4858,13 +4882,16 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
                   <span dir="ltr">{reminder.clientPhone}</span>
                 </div>
                 {reminder.isDelayed && (
-                  <span className="due-late">متأخر{reminder.delayCount > 1 ? ` ×${reminder.delayCount}` : ''}</span>
+                  <span className="due-late">متأخر{(lateCountByPhone.get(digitsOfPhone(reminder.clientPhone)) || 1) > 1
+                    ? ` ×${lateCountByPhone.get(digitsOfPhone(reminder.clientPhone))}`
+                    : ''}</span>
                 )}
                 <div className="due-acts">
+                  {/* «تم» اتشال من القائمة: إنهاء التذكير بلا إجراء حقيقي كان بيخلي
+                      شارة «اتأخر» تروح على طول. الإجراء الحقيقي = مكالمة مسجّلة أو
+                      كلام على الرقم، وهو اللي بيخرج التذكير من القائمة. */}
                   <a href={`tel:${reminder.clientPhone}`} className="rc-action" dir="ltr"
                     onClick={() => onActed?.(reminder.id)}>اتصال</a>
-                  <button type="button" className="rc-action is-done"
-                    onClick={() => onCompleteReminder?.(reminder.id)}>تم</button>
                 </div>
               </div>
             ))}
@@ -6701,6 +6728,8 @@ type LeadRow = {
   isLead: boolean;
   // رقم جديد ما اتصلناش فيه خالص (يدخل في فلتر «Cold Calls»)
   cold?: boolean;
+  // رقم جديد نازل حالاً (يدخل في فلتر «Fresh Leads»)
+  fresh?: boolean;
   // التذكير فات موعده والمندوب مخدش خطوة → الكارت أصفر (مطلوب إجراء)
   alertDue?: string;
   client?: any;
@@ -6787,9 +6816,11 @@ function LeadsView({
         : leadByKey.get(key);
       const record = client || lead || {};
       const bucket = String(n?.bucket || 'fresh-stage');
-      // «Cold Calls» = اتفتح وما اتصلناش. «Fresh Leads» = لسه ما اتفتحش.
+      // «Fresh Leads» = رقم نزل حالاً · «Cold Calls» = رقم نزل من زمان وما اتصلناش.
       // والاتنين منفصلين: الرقم الواحد ما بيحسبش في الاتنين.
       const cold = isColdNumber({ ...n, phone: n?.phone || record?.phone, bucket }, calledKeys);
+      // «Fresh Leads» = رقم نزل حالاً (مش بارد) · «Cold Calls» = نزل من زمان (مش جديد)
+      const fresh = isFreshNumber({ ...n, phone: n?.phone || record?.phone, bucket }, calledKeys);
       const time = campaignTimeOf(record);
       // التذكير فات موعده والمندوب مخدش خطوة → الرقم «محتاج إجراء» (أصفر)
       const alertDue = String(alertMap?.get(digitsOfPhone(n?.phone || record?.phone)) || '');
@@ -6805,6 +6836,7 @@ function LeadsView({
         note: String(n?.salesNote || '') || leadNoteOf(lead || client || {}),
         isLead: !client,
         cold,
+        fresh,
         alertDue,
         client,
         lead,
@@ -6825,8 +6857,10 @@ function LeadsView({
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     let list = rows;
-    // «Cold Calls» فلتر خاص: الأرقام الجديدة اللي ما اتصلناش فيها
+    // «Cold Calls» فلتر خاص: الأرقام القديمة اللي ما اتصلناش فيها
+    // «Fresh Leads» فلتر تاني: الأرقام الجديدة اللي نازلة حالاً
     if (filter === COLD_CALL_ID) list = list.filter((row) => row.cold);
+    else if (filter === 'fresh-stage') list = list.filter((row) => row.fresh);
     else if (filter) list = list.filter((row) => row.status === filter);
     if (!q) return list;
     return list.filter((row) => {

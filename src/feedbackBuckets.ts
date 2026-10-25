@@ -134,17 +134,55 @@ export const feedbackByPhone = (
 };
 
 // ===== «Cold Calls» vs «Fresh Leads» =====
-//Fresh Leads = الأرقام الجديدة اللي ما اتفتحتش لسه (ما اتحركتش خالص).
-// Cold Calls = الأرقام اللي اتفتحت (عميل مسجّل، أو رقم اتفتح من التوزيع) بس ما اتصلنا بيها.
+// Fresh Leads = الأرقام الجديدة: اللي نازلة على السيلز حالاً (آخر ٢٤ ساعة) وما
+//   اتصلنا بيها بعد — دي الشغل الجديد اللي نزل دلوقتي.
+// Cold Calls = باقي الأرقام اللي ما اتصلنا بيها: نازلة من أيام ولسه في المسبح.
 // والاتنين مبنيين على نفس البيانات، بسهم **مش نفس الأرقام** — والفرق واضح في العدّادات.
-export const isColdNumber = (record: any, calledPhones: Set<string>): boolean => {
+//
+// ملاحظة: فتح تبويب «أرقام جديدة» بيعلّم الأرقام «تم العرض» (والعرض ده بيتمّ
+// على كل الأرقام مرة واحدة)، فكان العرض كافي إن الرقم يطلع من Fresh Leads
+// ويفوت Cold Calls — والأرقام الجديدة بتقعد في البارد. فالفرق بقى بالوقت
+// (نزل امبارح = بارد) مش بالعرض.
+
+// نافذة «الجديد»: رقم نزل خلال آخر ٢٤ ساعة = رقم جديد
+export const FRESH_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// وقت نزول الرقم: وقت توزيعه على المندوب، وإلا وقت استيراده
+const arrivedAtOf = (record: any): number => {
+  const raw = record?.arrivedAt || record?.assignedAt || record?.createdAt || '';
+  const at = Date.parse(String(raw));
+  return Number.isFinite(at) ? at : 0;
+};
+
+// الرقم نزل حالاً؟
+export const isFreshArrival = (record: any, now: number = Date.now()): boolean => {
+  const at = arrivedAtOf(record);
+  if (!at) return false;
+  return now - at <= FRESH_WINDOW_MS;
+};
+
+// «Fresh Leads»: رقم جديد ما اتصلناش بيه
+export const isFreshNumber = (
+  record: any,
+  calledPhones: Set<string>,
+  now: number = Date.now()
+): boolean => {
   const bucket = String(record?.bucket || feedbackBucketOf(record));
   if (bucket !== 'fresh-stage') return false;
   if (calledPhones.has(digitsOfPhone(record?.phone))) return false;
-  // «مفتوح» = حدّ فتح الرقم أو سجّله: عميل مسجّل أو رقم اتفتح من التوزيع
-  if (typeof record?.opened === 'boolean') return record.opened;
-  if (record?.client || Array.isArray(record?.activities)) return true;
-  return false;
+  return isFreshArrival(record, now);
+};
+
+// «Cold Calls»: رقم ما اتصلناش بيه ونزل من زمان
+export const isColdNumber = (
+  record: any,
+  calledPhones: Set<string>,
+  now: number = Date.now()
+): boolean => {
+  const bucket = String(record?.bucket || feedbackBucketOf(record));
+  if (bucket !== 'fresh-stage') return false;
+  if (calledPhones.has(digitsOfPhone(record?.phone))) return false;
+  return !isFreshArrival(record, now);
 };
 
 export type WorkNumber = {
@@ -160,9 +198,11 @@ export type WorkNumber = {
   salesNote?: string;
   leadId?: string;
   client?: any;
-  // الرقم اتفتح فعلاً (مندوب فتحه من التوزيع / العميل عليه نشاط) بس ما اتصلناش فيه.
-  // ده اللي بيفصل «Cold Calls» عن «Fresh Leads» — الاتنين مش نفس الأرقام.
+  // الرقم اتفتح فعلاً (مندوب فتحه من التوزيع / العميل عليه نشاط) — للمعلومات فقط:
+  // الفصل بين «Cold Calls» و«Fresh Leads» بقى بالوقت (نزل امبارح = بارد).
   opened?: boolean;
+  // وقت نزول الرقم (توزيعه على المندوب) — بيفصل «الجديد» عن «القديم» في الفريش/البارد
+  arrivedAt?: string;
 };
 
 // ===== كل رقم يشتغل عليه المستخدم: عملاء مسجّلون + أرقام التوزيع =====
@@ -226,6 +266,8 @@ export const buildWorkNumbers = (
       salesNote: String(lastActivity?.text || ''),
       client,
       opened: openedBySales || commentActs.length > 0 || !lead,
+      // وقت نزول الرقم: توزيعه على المندوب (وإلا وقت استيراده)
+      arrivedAt: String(lead?.assignedAt || lead?.createdAt || client?.createdAt || ''),
     });
     if (key) seen.add(key);
   }
@@ -255,6 +297,8 @@ export const buildWorkNumbers = (
       // الرقم الموزَّع اتفتح = المندوب فتحه من شاشة التوزيع (status = viewed)
       opened:
         lead?.status === 'viewed' || lead?.status === 'contacted' || !!lead?.viewedAt,
+      // وقت نزول الرقم: توزيعه على المندوب (وإلا وقت استيراده) — «الجديد» vs «القديم»
+      arrivedAt: String(lead?.assignedAt || lead?.createdAt || ''),
     });
     seen.add(key);
   }

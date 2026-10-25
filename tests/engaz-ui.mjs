@@ -88,27 +88,35 @@ check(
 check(
   '«Fresh Leads» و«Cold Calls» عدّادين منفصلين في لوحة الأرقام',
   /const coldCalls = scopeNumbers\.filter\(\(record: any\) => isColdNumber\(record, calledPhones\)\)\.length/.test(dash) &&
-    /const freshLeads = scopeNumbers\.filter\(/.test(dash) &&
+    /const freshLeads = scopeNumbers\.filter\(\(record: any\) => isFreshNumber\(record, calledPhones\)\)\.length/.test(dash) &&
     /card\.id === 'fresh-stage'\s*\n\s*\? freshLeads/.test(dash)
 );
 check(
-  '«Cold Calls» = اتفتح وما اتصلناش · «Fresh Leads» = لسه ما اتفتحش',
-  /export const isColdNumber = \(record: any, calledPhones: Set<string>\): boolean =>/.test(buckets) &&
+  '«Cold Calls» = نزل من زمان وما اتصلناش · «Fresh Leads» = نزل حالاً',
+  /export const isColdNumber = \(/.test(buckets) &&
+    /export const isFreshNumber = \(/.test(buckets) &&
     /if \(bucket !== 'fresh-stage'\) return false;/.test(buckets) &&
     /if \(calledPhones\.has\(digitsOfPhone\(record\?\.phone\)\)\) return false;/.test(buckets) &&
-    /if \(typeof record\?\.opened === 'boolean'\) return record\.opened;/.test(buckets)
+    /return !isFreshArrival\(record, now\);/.test(buckets) &&
+    /return isFreshArrival\(record, now\);/.test(buckets)
 );
 check(
-  'الرقم اللي اتفتح من التوزيع (= viewed) يبقى مكالمة باردة',
+  '«الجديد» = نزل في آخر ٢٤ ساعة (مش بس اتفتح)',
+  /export const FRESH_WINDOW_MS = 24 \* 60 \* 60 \* 1000;/.test(buckets) &&
+    /record\?\.assignedAt \|\| record\?\.createdAt/.test(buckets)
+);
+check(
+  'الرقم اللي اتفتح من التوزيع (= viewed) بيفضل جديد لو نزل حالاً',
   /lead\?\.status === 'viewed' \|\| lead\?\.status === 'contacted' \|\| !!lead\?\.viewedAt/.test(buckets)
 );
 check(
-  'العميل اللي رقمه اتفتح (viewed) أو عليه كلام يبقى مكالمة باردة',
-  /opened: openedBySales \|\| commentActs\.length > 0 \|\| !lead/.test(buckets)
+  'وقت نزول الرقم (توزيعه) بيتحسب مع الرقم',
+  /arrivedAt: String\(lead\?\.assignedAt \|\| lead\?\.createdAt/.test(buckets)
 );
 check(
   'الرقم الواحد ما بيحسبش في الاتنين',
-  /!isColdNumber\(record, calledPhones\)/.test(dash)
+  /isFreshNumber\(record, calledPhones\)/.test(dash) &&
+    /list = list\.filter\(\(row\) => row\.fresh\)/.test(leadsView)
 );
 check(
   'نافذة الإجراء بالإنجليزي زي الصور',

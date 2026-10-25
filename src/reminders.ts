@@ -44,6 +44,42 @@ const actedAfter = (client: any, callLogs: any[], since: number): boolean => {
   );
 };
 
+// ===== كل التذكيرات اللي فات موعدها — مش الأحدث وحده =====
+// الرقم يبقى «محتاج إجراء» لو **أي** تذكير فات عليه ومفيش أي خطوة بعده.
+// (اختيار الأحدث وحده كان يخلّي التذكيرات الأقدم مختفية، فالتأخير ما كانش
+//  بيبان على كل الأرقام المتأخرة — بيبان على رقم واحد بس.)
+const dueRemindersOf = (reminders: any[], now: number): any[] =>
+  (reminders || [])
+    .filter((r: any) => {
+      if (!r || r.isCompleted) return false;
+      const at = timeOf(r?.dateTime);
+      return at > 0 && at <= now;
+    })
+    .sort((a: any, b: any) => timeOf(a?.dateTime) - timeOf(b?.dateTime));
+
+// وقت التذكير (وقت إنشائه هو الأساس)
+const sinceOf = (reminder: any): number =>
+  timeOf(reminder?.createdAt) || timeOf(reminder?.dateTime);
+
+// ===== اتعمل إجراء على الرقم بعد هذا التذكير؟ =====
+// (مكالمة مسجّلة أو كلام على خط العميل) — نفس قاعدة «محتاج إجراء»:
+// التذكير يخرج من قائمة «مستحقة الآن» لما يتاخد إجراء، والشارة بتروح معاه.
+export const actedAfterReminder = (
+  reminder: any,
+  clients: any[] = [],
+  callLogs: any[] = []
+): boolean => {
+  const since = sinceOf(reminder);
+  if (!since) return false;
+  const phone = digitsOfPhone(reminder?.clientPhone);
+  const client = (clients || []).find((c: any) => digitsOfPhone(c?.phone) === phone);
+  if (client && actedAfter(client, callLogs, since)) return true;
+  if (!phone) return false;
+  return (callLogs || []).some(
+    (l: any) => digitsOfPhone(l?.clientPhone) === phone && timeOf(l?.createdAt) > since
+  );
+};
+
 // حالة العميل: محتاج إجراء ولا لا
 export const clientActionState = (
   client: any,
@@ -53,22 +89,14 @@ export const clientActionState = (
 ): ActionState => {
   const open = openRemindersOf(client, reminders);
   if (!open.length) return { needsAction: false };
-  // اللي فات موعده بس
-  const due = open
-    .filter((r: any) => {
-      const at = timeOf(r?.dateTime);
-      return at > 0 && at <= now;
-    })
-    .sort((a: any, b: any) => timeOf(a?.dateTime) - timeOf(b?.dateTime));
+  // كل التذكيرات اللي فات موعدها
+  const due = dueRemindersOf(open, now);
   if (!due.length) return { needsAction: false };
-  // ===== أحدث تذكير فات، لا الأقدم =====
-  // لو العميل عليه أكتر من متابعة، اختيار الأقدم كان يضيّع التذكيرات الجديدة:
-  // أي مكالمة/كومنت بعد التذكير الأول تلغي كل اللي بعده، فلا يظهر «اتأخر» أبداً
-  // (وهو سبب عدم ظهور التنبيه في حسابات فيها متابعات متكررة لنفس العميل).
-  const target = due[due.length - 1];
-  // اتعمل إجراء بعد التذكير (مكالمة أو كومنت)؟ → رجعنا للوضع الطبيعي
-  const since = timeOf(target?.createdAt) || timeOf(target?.dateTime);
-  if (actedAfter(client, callLogs, since)) return { needsAction: false };
+  // ===== كل التذكيرات المتأخرة، مش الأحدث وحده =====
+  // الرقم محتاج إجراء لو **أي** تذكير فات عليه ومفيش خطوة (مكالمة/كومنت) بعده.
+  const pending = due.filter((r: any) => !actedAfter(client, callLogs, sinceOf(r)));
+  if (!pending.length) return { needsAction: false };
+  const target = pending[0];
   return {
     needsAction: true,
     dueAt: String(target?.dateTime || ''),
@@ -108,20 +136,17 @@ export const leadAlertState = (
   const open = (reminders || []).filter(
     (r: any) => r && !r.isCompleted && digitsOfPhone(r?.clientPhone) === phone
   );
-  const due = open
-    .filter((r: any) => {
-      const at = timeOf(r?.dateTime);
-      return at > 0 && at <= now;
-    })
-    .sort((a: any, b: any) => timeOf(a?.dateTime) - timeOf(b?.dateTime));
+  const due = dueRemindersOf(open, now);
   if (!due.length) return { needsAction: false };
-  // أحدث تذكير فات (نفس قاعدة العميل) فلا يضيع تذكير جديد بسبب إجراء قديم
-  const target = due[due.length - 1];
-  const since = timeOf(target?.createdAt) || timeOf(target?.dateTime);
-  const called = (callLogs || []).some(
-    (l: any) => digitsOfPhone(l?.clientPhone) === phone && timeOf(l?.createdAt) > since
-  );
-  if (called) return { needsAction: false };
+  // كل تذكير فات عليه ومحدش اتصل بالرقم بعده = لسه محتاج إجراء
+  const pending = due.filter((r: any) => {
+    const since = sinceOf(r);
+    return !(callLogs || []).some(
+      (l: any) => digitsOfPhone(l?.clientPhone) === phone && timeOf(l?.createdAt) > since
+    );
+  });
+  if (!pending.length) return { needsAction: false };
+  const target = pending[0];
   return {
     needsAction: true,
     dueAt: String(target?.dateTime || ''),
