@@ -4,6 +4,8 @@
 // المرحلة من تبويب «المراحل») بلا أي فيدباك — فكانت البطاقة تظهر في القائمة
 // والعداد يبقى صفراً. لذلك عند غياب حالة فيدباك نسقط على المرحلة الحالية.
 
+import { cleanCommentText, commentActivitiesOf, isSystemOnlyText } from '../shared/comments.js';
+
 export const STAGE_TO_FEEDBACK_STATUS: Record<string, string> = {
   new: 'fresh-stage',
   contacted: 'follow-up',
@@ -49,7 +51,11 @@ export const feedbackBucketOf = (record: any): string => {
 // ===== فهرس الفيدباك بالرقم =====
 // أرقام التوزيع ليست عملاء مسجّلين، فحالتها محفوظة في بطاقات «الفيدباك اليومي»
 // وفي سجل المكالمات — وكلاهما مربوط بالهاتف. الفهرس يجمع أحدهما بالآخر بالأحدث.
-export const digitsOfPhone = (value: any): string => String(value ?? '').replace(/[^\d]/g, '');
+export const digitsOfPhone = (value: any): string =>
+  String(value ?? '')
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[^\d]/g, '');
 
 export type PhoneSnapshot = {
   status: string;
@@ -63,6 +69,21 @@ export const feedbackByPhone = (
   callLogs: any[] = []
 ): Map<string, PhoneSnapshot> => {
   const map = new Map<string, PhoneSnapshot>();
+  // آخر كلام كتبه المندوب على كل رقم — منفصل عن الحالة، لأن لوج النظام
+  // (زي «No answer») مالوش كلام، ومن حقّه ما يمسحش كلام المندوب اللي قبله.
+  const notes = new Map<string, { note: string; at: string }>();
+
+  const putNote = (phone: any, raw: any, at: string) => {
+    const key = digitsOfPhone(phone);
+    if (!key) return;
+    const text = cleanCommentText(raw);
+    // نص آلي لوحده (لوج) مش كلام مندوب — ما يتكتبش كملاحظة
+    if (!text || isSystemOnlyText(text)) return;
+    const prev = notes.get(key);
+    if (prev && String(prev.at) > String(at)) return;
+    notes.set(key, { note: text, at });
+  };
+
   const put = (phone: any, snapshot: PhoneSnapshot) => {
     const key = digitsOfPhone(phone);
     if (!key) return;
@@ -86,21 +107,44 @@ export const feedbackByPhone = (
     put(log?.clientPhone, {
       status: log?.result === 'no-answer' ? 'no-answer' : 'follow-up',
       cancelReason: '',
-      note: String(log?.comment || ''),
+      note: '',
       at: String(log?.createdAt || ''),
     });
+    putNote(log?.clientPhone, log?.comment, String(log?.createdAt || ''));
   }
 
   for (const feedback of feedbacks || []) {
+    const at = String(feedback?.createdAt || feedback?.date || '');
     put(feedback?.clientPhone, {
       status: String(feedback?.status || ''),
       cancelReason: String(feedback?.cancelReason || ''),
-      note: String(feedback?.feedback || ''),
-      at: String(feedback?.createdAt || feedback?.date || ''),
+      note: '',
+      at,
     });
+    putNote(feedback?.clientPhone, feedback?.feedback, at);
+  }
+
+  // الملاحظة = آخر كلام مندوب على الرقم (وليس آخر لوج)
+  for (const [key, entry] of map) {
+    const note = notes.get(key);
+    if (note) entry.note = note.note;
   }
 
   return map;
+};
+
+// ===== «Cold Calls» vs «Fresh Leads» =====
+//Fresh Leads = الأرقام الجديدة اللي ما اتفتحتش لسه (ما اتحركتش خالص).
+// Cold Calls = الأرقام اللي اتفتحت (عميل مسجّل، أو رقم اتفتح من التوزيع) بس ما اتصلنا بيها.
+// والاتنين مبنيين على نفس البيانات، بسهم **مش نفس الأرقام** — والفرق واضح في العدّادات.
+export const isColdNumber = (record: any, calledPhones: Set<string>): boolean => {
+  const bucket = String(record?.bucket || feedbackBucketOf(record));
+  if (bucket !== 'fresh-stage') return false;
+  if (calledPhones.has(digitsOfPhone(record?.phone))) return false;
+  // «مفتوح» = حدّ فتح الرقم أو سجّله: عميل مسجّل أو رقم اتفتح من التوزيع
+  if (typeof record?.opened === 'boolean') return record.opened;
+  if (record?.client || Array.isArray(record?.activities)) return true;
+  return false;
 };
 
 export type WorkNumber = {
@@ -111,8 +155,14 @@ export type WorkNumber = {
   stage: string;
   cancelReason: string;
   note: string;
+  // آخر كلامكتبه المندوب على الرقم (من الفيدباك أو من المكالمة) — كلام صافي
+  // من غير لوجات. بيظهر على كارت الرقم في صفحة «الأرقام».
+  salesNote?: string;
   leadId?: string;
   client?: any;
+  // الرقم اتفتح فعلاً (مندوب فتحه من التوزيع / العميل عليه نشاط) بس ما اتصلناش فيه.
+  // ده اللي بيفصل «Cold Calls» عن «Fresh Leads» — الاتنين مش نفس الأرقام.
+  opened?: boolean;
 };
 
 // ===== كل رقم يشتغل عليه المستخدم: عملاء مسجّلون + أرقام التوزيع =====
@@ -129,24 +179,53 @@ export const buildWorkNumbers = (
   const out: WorkNumber[] = [];
   const seen = new Set<string>();
 
+  // خريطة الرقم الموزَّع بالهاتف: نعرف منه مين فتح رقمه (viewed) ومن اتصلنا بيه
+  const leadByPhone = new Map<string, any>();
+  for (const lead of leads || []) {
+    // زي ما في اللوب اللي تحته: الرقم غير الموزّع مش شغل حدّ
+    if (!includeUnassigned && !String(lead?.salesId || '').trim()) continue;
+    const k = digitsOfPhone(lead?.phone);
+    if (k && !leadByPhone.has(k)) leadByPhone.set(k, lead);
+  }
+
   for (const client of clients || []) {
     const phone = String(client?.phone || '');
     const key = digitsOfPhone(phone) || `client:${client?.id}`;
     const activities: any[] = Array.isArray(client?.activities) ? client.activities : [];
-    const lastActivity = activities.find((a) => !!String(a?.text || '').trim());
+    // كلام المندوب فقط (لا لوجات) — هو اللي يتعرض كملاحظة على الرقم
+    const commentActs = commentActivitiesOf(client);
+    const lastActivity = commentActs.find((a: any) => !!String(a?.text || '').trim());
+    const snapshot = snapshots.get(key);
+    // حالة العميل: الصريحة في خطّه الزمني، وإلا آخر فيدباك/مكالمة على نفس الرقم
+    // (مكالمة من جهاز تاني أو رقم اتحوّل لعميل بعد ما اتصلنا بيه).
+    const actStatus = latestFeedbackStatusOf(client);
+    const actAt = String(activities.find((a: any) => !!a?.status)?.at || '');
+    const snapStatus = String(snapshot?.status || '');
+    const snapAt = String(snapshot?.at || '');
+    const bucket =
+      snapStatus && (!actAt || snapAt >= actAt)
+        ? snapStatus
+        : actStatus || STAGE_TO_FEEDBACK_STATUS[String(client?.stage || '')] || '';
+    // «مفتوح» = المندوب فتح الرقم من التوزيع (viewed) أو كتب عليه كلام.
+    // وعميل مش من التوزيع (أضافه بنفسه) = مفتوح برضه.
+    const lead = leadByPhone.get(key);
+    const openedBySales =
+      !!lead && (lead?.status === 'viewed' || lead?.status === 'contacted' || !!lead?.viewedAt);
     out.push({
       key,
       name: String(client?.name || 'بدون اسم'),
       phone,
-      bucket: feedbackBucketOf(client),
+      bucket,
       stage: String(client?.stage || ''),
       cancelReason: String(
         client?.cancelReason ||
-          activities.find((a) => !!String(a?.cancelReason || '').trim())?.cancelReason ||
+          activities.find((a: any) => !!String(a?.cancelReason || '').trim())?.cancelReason ||
           ''
       ),
       note: String(lastActivity?.text || client?.feedback || ''),
+      salesNote: String(lastActivity?.text || ''),
       client,
+      opened: openedBySales || commentActs.length > 0 || !lead,
     });
     if (key) seen.add(key);
   }
@@ -171,7 +250,11 @@ export const buildWorkNumbers = (
       stage: FEEDBACK_STATUS_TO_STAGE[bucket] || 'new',
       cancelReason: String(snapshot?.cancelReason || ''),
       note: String(snapshot?.note || lead?.description || ''),
+      salesNote: String(snapshot?.note || ''),
       leadId: String(lead?.id || ''),
+      // الرقم الموزَّع اتفتح = المندوب فتحه من شاشة التوزيع (status = viewed)
+      opened:
+        lead?.status === 'viewed' || lead?.status === 'contacted' || !!lead?.viewedAt,
     });
     seen.add(key);
   }

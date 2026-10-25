@@ -177,10 +177,12 @@ check(
   app.includes('فيدباك العميل وكومنتاته') && app.includes('feedbackEntries')
 );
 check(
-  'نفس الفيدباك مكتوب مرة واحدة في الكومنتات (دمج الحدث + بطاقة الفيدباك، بلا لوجات)',
+  'نفس الفيدباك مكتوب مرة واحدة في الكومنتات (دمج الحدث + بطاقة الفيدباك + كلام السيلز من المكالمة)',
   app.includes('dedupeComments(list)') &&
     app.includes('commentActivitiesOf(client)') &&
-    !app.includes("kind: 'call'")
+    // كلام المندوب من سجل المكالمات رجع (مع فلترة اللوجات الآلية)
+    app.includes('isSystemOnlyText') &&
+    app.includes('for (const l of (callLogs || []))')
 );
 
 console.log(`\n✅ نجحت ${passed} فحوصات لواجهة الهاتف`);

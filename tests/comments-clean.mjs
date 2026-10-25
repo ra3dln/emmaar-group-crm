@@ -79,6 +79,10 @@ check(
   })[0].text === 'المش مجمع هكلمه تاني'
 );
 check('نص النظام الآلي مش كلام مندوب', isSystemOnlyText('No answer') && isSystemOnlyText('اتصال: تم الرد'));
+check(
+  'نص البطاقة التلقائية («عميل جديد») مش كلام مندوب',
+  isSystemOnlyText('عميل جديد — لم يتم التواصل معه بعد')
+);
 check('كلام المندوب مش نظام', !isSystemOnlyText('طلب معاينة العقار Saturday'));
 check('نشاط الكومنت يتعرف عليه', isCommentActivity({ type: 'feedback' }) && !isCommentActivity({ type: 'call' }));
 
@@ -131,7 +135,9 @@ check(
 );
 check(
   'تفاصيل العميل بتعرض الكومنتات الحقيقية بس',
-  /const feedbackEntries = commentActivitiesOf\(client\)\.slice\(0, 12\)/.test(app)
+  /const feedbackEntries = useMemo\(\(\) => \{/.test(app) &&
+    /commentActivitiesOf\(client\)/.test(app) &&
+    /for \(const log of callLogs \|\| \[\]\)/.test(app)
 );
 check(
   'مفيش كتابة لوج «اتصال» في خط العميل',
@@ -146,8 +152,13 @@ check(
   !/`من المكالمة: \$\{callComment\}`/.test(app)
 );
 check(
-  'الفيدباك اليومي عند الإدارة: من غير بند «مكالمة»',
-  !/kind: 'مكالمة'/.test(app)
+  'الفيدباك اليومي عند الإدارة: كومنتات سجل المكالمات رجعت (كلام السيلز)',
+  /for \(const l of callLogs \|\| \[\]\)/.test(app) && /kind: 'مكالمة'/.test(app)
+);
+check(
+  'لوحة تعليقات العميل بتقرأ سجل المكالمات (كلام السيلز اللي كتبوه بإيدهم)',
+  /for \(const log of callLogs \|\| \[\]\)/.test(app) &&
+    /id: `log-\$\{log\?\.id\}`/.test(app)
 );
 check(
   'الفيدباك اليومي بيستعمل قواعد التكرار',

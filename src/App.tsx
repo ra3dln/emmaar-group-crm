@@ -59,6 +59,7 @@ import {
   digitsOfPhone,
   feedbackBucketOf,
   feedbackByPhone,
+  isColdNumber,
   latestFeedbackStatusOf,
 } from './feedbackBuckets';
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
@@ -189,7 +190,20 @@ const commentsOfTarget = (
     });
   }
 
-  // سجل المكالمات (لوج) ما بيظهرش هنا — الكومنت بيوصل في بطاقات الفيدباك والخط الزمني.
+  // سجل المكالمات: فيه كلام المندوب نفسه (نص المكالمة) — وده مصدر الكومنتات
+  // القديمة. بنجيبه، بس **النص الآلي** (لوج) بيتشال، ونفس الكومنت بيتدمج مرة واحدة.
+  for (const l of (callLogs || [])) {
+    if (digitsOfPhone(l?.clientPhone) !== phone) continue;
+    const text = cleanCommentText(l?.comment);
+    if (!text || isSystemOnlyText(text)) continue;
+    out.push({
+      id: String(l?.id || ''),
+      by: nameOf(l?.salesId),
+      at: String(l?.createdAt || ''),
+      text,
+      result: l?.result === 'no-answer' ? 'no-answer' : 'answered',
+    });
+  }
 
   out.sort((a, b) => String(b.at).localeCompare(String(a.at)));
   // نفس الكومنت ممكن يتكتب في أكتر من مكان — نخليه مرة واحدة بس
@@ -3578,7 +3592,7 @@ function App() {
             dailyFeedbacks={currentUser.role === 'admin' ? fullFeedbacks : dailyFeedbacks}
             onClose={() => setSelectedUserFeedback(null)}
           />}
-        {selectedClient && <ClientDetailModal client={selectedClient} onClose={() => setSelectedClient(null)} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
+        {selectedClient && <ClientDetailModal client={selectedClient} callLogs={currentUser.role === 'admin' ? fullCallLogs : callLogs} onClose={() => setSelectedClient(null)} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
         {callClient && <CallFlowModal
           client={callClient}
           user={currentUser}
@@ -4732,14 +4746,17 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
   const myClients = (clients || []) as Client[];
   // لوحة الحالات تعدّ كل رقم في نطاقي (عميل مسجّل أو رقم في التوزيع) — لا العملاء وحدهم
   const scopeNumbers: any[] = numbers.length ? numbers : myClients;
-  // «مكالمات باردة» (زي ENGAZ): أرقام ما اتصلنا بيها خالص — بلا أي مكالمة مسجّلة
-  const calledPhones = new Set(
+  // «مكالمات باردة» (زي ENGAZ): أرقام اتفتحت بس ما اتصلنا بيها — منفصلة عن «Fresh Leads»
+  // (الجديدة اللي ما اتفتحتش). والاتنين مش نفس الأرقام.
+  const calledPhones = new Set<string>(
     (callLogs || []).map((l: any) => digitsOfPhone(l?.clientPhone)).filter(Boolean)
   );
-  const coldCalls = scopeNumbers.filter((record: any) => {
-    const bucket = record.bucket || feedbackBucketOf(record);
-    return bucket === 'fresh-stage' && !calledPhones.has(digitsOfPhone(record.phone));
-  }).length;
+  const coldCalls = scopeNumbers.filter((record: any) => isColdNumber(record, calledPhones)).length;
+  const freshLeads = scopeNumbers.filter(
+    (record: any) =>
+      (record.bucket || feedbackBucketOf(record)) === 'fresh-stage' &&
+      !isColdNumber(record, calledPhones)
+  ).length;
   const [todayRecord, setTodayRecord] = useState<Attendance | undefined>(() => getTodayCheckIn(currentUser.id));
   const myHistory = getAttendance().filter((a: Attendance) => a.userId === currentUser.id).sort((a: Attendance, b: Attendance) => b.checkInAt.localeCompare(a.checkInAt)).slice(0, 7);
   
@@ -4780,6 +4797,8 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
               ? scopeNumbers.length
               : card.id === COLD_CALL_ID
               ? coldCalls
+              : card.id === 'fresh-stage'
+              ? freshLeads
               : scopeNumbers.filter((record: any) => (record.bucket || feedbackBucketOf(record)) === card.id).length;
             const pct = scopeNumbers.length ? Math.min(100, Math.round((n / scopeNumbers.length) * 100)) : 0;
             return (
@@ -5644,17 +5663,18 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
       }
     }
     for (const log of callLogs) {
-      if (log.comment) {
-        out.push({
-          id: log.id,
-          client: log.clientName || '',
-          sales: log.salesName || '',
-          text: log.comment,
-          at: log.createdAt,
-          kind: log.result === 'answered' ? 'مكالمة: تم الرد' : 'مكالمة: لم يرد',
-          status: log.result === 'answered' ? 'follow-up' : 'no-answer',
-        });
-      }
+      // كلام المندوب بس — اللوج الآلي (من غير كلام) ما بيظهرش
+      const logText = cleanCommentText(log?.comment);
+      if (!logText || isSystemOnlyText(logText)) continue;
+      out.push({
+        id: log.id,
+        client: log.clientName || '',
+        sales: log.salesName || '',
+        text: logText,
+        at: log.createdAt,
+        kind: log.result === 'answered' ? 'مكالمة: تم الرد' : 'مكالمة: لم يرد',
+        status: log.result === 'answered' ? 'follow-up' : 'no-answer',
+      });
     }
     return out.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
   }, [clients, callLogs]);
@@ -5781,13 +5801,28 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
       });
     }
 
-    // سجل المكالمات (لوج) ما بيظهرش هنا — الكومنت بيوصل في بطاقات الفيدباك والخط الزمني.
+    // سجل المكالمات: فيه كلام المندوب بنفسه (نص المكالمة) — وده مصدر الكومنتات
+    // القديمة. النص الآلي (لوج) بيتشال، ونفس الكومنت بيتدمج مرة واحدة.
+    for (const log of callLogs || []) {
+      const logPhone = normalizeDigits(String(log?.clientPhone || '')).replace(/\D/g, '');
+      if (!digits || logPhone !== digits) continue;
+      const logText = cleanCommentText(log?.comment);
+      if (!logText || isSystemOnlyText(logText)) continue;
+      list.push({
+        id: `log-${log?.id}`,
+        at: String(log?.createdAt || ''),
+        text: logText,
+        by: String(log?.salesName || ''),
+        kind: 'call',
+        result: log?.result,
+      });
+    }
 
     // ===== كل كومنت يظهر مرة واحدة فقط =====
     // نفس الكلام بينكتب في أكتر من مكان (حدث على العميل + بطاقة فيدباك في «الفيدباك
     // اليومي»)، فكان نفس الكومنت بيتكرّر مرتين أو ثلاث. هنا ندمجهم في سطر واحد.
     return dedupeComments(list).sort((a, b) => String(b.at).localeCompare(String(a.at)));
-  }, [client, feedbacks]);
+  }, [client, feedbacks, callLogs]);
 
   const days = useMemo(() => {
     const map = new Map<string, typeof entries>();
@@ -6686,7 +6721,7 @@ function LeadsView({
       const key = digitsOfPhone(lead?.phone);
       if (key && !leadByKey.has(key)) leadByKey.set(key, lead);
     }
-    const calledKeys = new Set(
+    const calledKeys = new Set<string>(
       (callLogs || []).map((l: any) => digitsOfPhone(l?.clientPhone)).filter(Boolean)
     );
     const out: LeadRow[] = [];
@@ -6698,19 +6733,20 @@ function LeadsView({
         : leadByKey.get(key);
       const record = client || lead || {};
       const bucket = String(n?.bucket || 'fresh-stage');
-      // «Cold Calls» مش حالة: هو الرقم الجديد اللي ما اتصلناش فيه خالص
-      const cold = bucket === 'fresh-stage' && !calledKeys.has(key);
+      // «Cold Calls» = اتفتح وما اتصلناش. «Fresh Leads» = لسه ما اتفتحش.
+      // والاتنين منفصلين: الرقم الواحد ما بيحسبش في الاتنين.
+      const cold = isColdNumber({ ...n, phone: n?.phone || record?.phone, bucket }, calledKeys);
       const time = campaignTimeOf(record);
       out.push({
         key: String(n?.key || key || ''),
         name: String(n?.name || record?.name || 'بدون اسم'),
         phone: String(n?.phone || record?.phone || ''),
-        status: bucket,
-        statusLabel: LEAD_STATUS_LABELS[bucket] || LEAD_STATUS_LABELS['fresh-stage'],
-        statusCls: FEEDBACK_STATUS_BY_ID[bucket]?.cls || 'fs-fresh',
+        status: cold ? COLD_CALL_ID : bucket,
+        statusLabel: cold ? LEAD_STATUS_LABELS[COLD_CALL_ID] : (LEAD_STATUS_LABELS[bucket] || LEAD_STATUS_LABELS['fresh-stage']),
+        statusCls: cold ? 'fs-cold' : (FEEDBACK_STATUS_BY_ID[bucket]?.cls || 'fs-fresh'),
         dateLabel: campaignStamp(time.at),
         formName: formNameOf(record),
-        note: leadNoteOf(lead || client || {}),
+        note: String(n?.salesNote || '') || leadNoteOf(lead || client || {}),
         isLead: !client,
         cold,
         client,
@@ -6720,12 +6756,11 @@ function LeadsView({
     return out;
   }, [numbers, leads, callLogs]);
 
-  // العدّادات: كل الأرقام + كل حالة (الباردة = لسه ما اتصلنا بيه)
+  // العدّادات: كل الأرقام + كل حالة (الباردة اتفتحت وما اتصلناش — منفصلة عن الجديدة)
   const counts = useMemo(() => {
     const map: Record<string, number> = {};
     for (const row of rows) {
       map[row.status] = (map[row.status] || 0) + 1;
-      if (row.cold) map[COLD_CALL_ID] = (map[COLD_CALL_ID] || 0) + 1;
     }
     return map;
   }, [rows]);
@@ -13235,8 +13270,30 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
     if (!map.has(key)) ensure(key, { name: l.name, phone: l.phone, source: 'رقم وارد من الإدارة', incoming: true });
   }
 
-  // سجل المكالمات (لوج) ما بيظهرش في الفيدباك اليومي — كلام السيلز بس.
-  // لو المكالمة كانت مندوب ما عندوش عميل مسجّل، الكومنت بيوصل ببطاقة الفيدباك (تحت).
+  // سجل المكالمات: فيه كلام المندوب بنفسه (نص المكالمة) — وده مصدر الكومنتات
+  // القديمة. لوج بس (من غير كلام) ما بيظهرش؛ ونفس الكومنت بيتدمج مرة واحدة.
+  for (const l of callLogs || []) {
+    const mine =
+      String(l?.salesId || '') === String(userId || '') ||
+      (!!userName && String(l?.salesName || '').trim() === String(userName).trim());
+    if (!mine) continue;
+    const text = cleanCommentText(l?.comment);
+    if (!text || isSystemOnlyText(text)) continue;
+    const key = norm(l?.clientPhone) || `log:${l?.id}`;
+    const entry = ensure(key, {
+      name: l?.clientName,
+      phone: l?.clientPhone,
+      source: 'مكالمة',
+      incoming: false,
+    });
+    entry.items.push({
+      id: `log-${l?.id}`,
+      text,
+      at: String(l?.createdAt || ''),
+      kind: 'مكالمة',
+      status: l?.result === 'answered' ? 'follow-up' : 'no-answer',
+    });
+  }
 
   // إزالة التكرار (نفس النص في نفس الدقيقة) + الترتيب من الأحدث
   for (const entry of map.values()) {
@@ -13451,11 +13508,43 @@ const ACTIVITY_ICONS: Record<string, string> = {
   whatsapp: '', call: '', public: '🔗', note: '',
 };
 
-function ClientDetailModal({ client, onClose, onSuccess, onCall }: any) {
+function ClientDetailModal({ client, onClose, onSuccess, onCall, callLogs = [] }: any) {
   const activities: ClientActivity[] = client.activities || [];
   // فيدباك العميل وكومنتاته — تظهر هنا لحظة الضغط على الكارت (بدل ما تفضل مخفية)
   // كلام المندوب فقط: لا لوجات (اتصال/واتساب/تذكير) ولا كومنت مكرر.
-  const feedbackEntries = commentActivitiesOf(client).slice(0, 12);
+  const feedbackEntries = useMemo(() => {
+    const digits = normalizeDigits(String(client?.phone || '')).replace(/\D/g, '');
+    const list: Array<{ id: string; text: string; type: string; by?: string; at: string; status?: string }> = [];
+    for (const a of commentActivitiesOf(client)) {
+      list.push({
+        id: `act-${a.id}`,
+        text: a.text,
+        type: String(a.type || 'comment'),
+        by: a.by,
+        at: a.at,
+        status: a.status,
+      });
+    }
+    // سجل المكالمات: كلام المندوب عن العميل (نص المكالمة) — اللوج بس ما بيظهرش
+    for (const log of callLogs || []) {
+      const logPhone = normalizeDigits(String(log?.clientPhone || '')).replace(/\D/g, '');
+      if (!digits || logPhone !== digits) continue;
+      const text = cleanCommentText(log?.comment);
+      if (!text || isSystemOnlyText(text)) continue;
+      list.push({
+        id: `log-${log?.id}`,
+        text,
+        type: 'call',
+        by: String(log?.salesName || ''),
+        at: String(log?.createdAt || ''),
+        status: log?.result === 'answered' ? 'follow-up' : 'no-answer',
+      });
+    }
+    // الأحدث أولاً — ونفس الكومنت مرة واحدة بس
+    return dedupeComments(list)
+      .sort((a: any, b: any) => String(b.at).localeCompare(String(a.at)))
+      .slice(0, 12);
+  }, [client, callLogs]);
   const logActivity = (type: string, text: string) => {
     addClientActivity(client.id, type, text);
     onSuccess?.();

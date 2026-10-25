@@ -75,12 +75,40 @@ check(
 check(
   'ألوان الحالات هي ألوان المراحل نفسها (fs-*)',
   /FEEDBACK_STATUS_BY_ID\[bucket\]\?\.cls/.test(leadsView) &&
-    /statusCls: FEEDBACK_STATUS_BY_ID\[bucket\]\?\.cls \|\| 'fs-fresh'/.test(leadsView)
+    /statusCls: cold \? 'fs-cold' : \(FEEDBACK_STATUS_BY_ID\[bucket\]\?\.cls \|\| 'fs-fresh'\)/.test(leadsView)
 );
 check(
-  '«Cold Calls» فلتر خاص (رقم جديد ما اتصلناش فيه) والعدّاد زي اللوحة',
+  '«Cold Calls» فلتر خاص (رقم اتفتح وما اتصلناش فيه) والعدّاد زي اللوحة',
   /if \(filter === COLD_CALL_ID\) list = list\.filter\(\(row\) => row\.cold\)/.test(leadsView) &&
-    /if \(row\.cold\) map\[COLD_CALL_ID\]/.test(leadsView)
+    /status: cold \? COLD_CALL_ID : bucket/.test(leadsView) &&
+    /const cold = isColdNumber\(/.test(leadsView)
+);
+
+// ===== ٣‑ب) «Fresh Leads» و«Cold Calls» مبادلينش الأرقام =====
+check(
+  '«Fresh Leads» و«Cold Calls» عدّادين منفصلين في لوحة الأرقام',
+  /const coldCalls = scopeNumbers\.filter\(\(record: any\) => isColdNumber\(record, calledPhones\)\)\.length/.test(dash) &&
+    /const freshLeads = scopeNumbers\.filter\(/.test(dash) &&
+    /card\.id === 'fresh-stage'\s*\n\s*\? freshLeads/.test(dash)
+);
+check(
+  '«Cold Calls» = اتفتح وما اتصلناش · «Fresh Leads» = لسه ما اتفتحش',
+  /export const isColdNumber = \(record: any, calledPhones: Set<string>\): boolean =>/.test(buckets) &&
+    /if \(bucket !== 'fresh-stage'\) return false;/.test(buckets) &&
+    /if \(calledPhones\.has\(digitsOfPhone\(record\?\.phone\)\)\) return false;/.test(buckets) &&
+    /if \(typeof record\?\.opened === 'boolean'\) return record\.opened;/.test(buckets)
+);
+check(
+  'الرقم اللي اتفتح من التوزيع (= viewed) يبقى مكالمة باردة',
+  /lead\?\.status === 'viewed' \|\| lead\?\.status === 'contacted' \|\| !!lead\?\.viewedAt/.test(buckets)
+);
+check(
+  'العميل اللي رقمه اتفتح (viewed) أو عليه كلام يبقى مكالمة باردة',
+  /opened: openedBySales \|\| commentActs\.length > 0 \|\| !lead/.test(buckets)
+);
+check(
+  'الرقم الواحد ما بيحسبش في الاتنين',
+  /!isColdNumber\(record, calledPhones\)/.test(dash)
 );
 check(
   'نافذة الإجراء بالإنجليزي زي الصور',
@@ -115,11 +143,11 @@ check('نافذة الإجراء: خانة الكومنت', /eg-textarea/.test(s
 check('نافذة الإجراء: آخر التعليقات بعدّاد', /Last comments/.test(sheet) && /eg-comment/.test(sheet) && /comments\.length/.test(sheet));
 check('نافذة الإجراء: زر Add Action', /eg-submit/.test(sheet) && /Add Action/.test(sheet));
 check(
-  'التعليقات بتتبني من خط العميل + بطاقات الفيدباك (سجل المكالمات لوج — مش داخل)',
+  'التعليقات بتتبني من خط العميل + بطاقات الفيدباك + سجل المكالمات (كلام السيلز)',
   /const commentsOfTarget =/.test(app) &&
     /commentActivitiesOf\(client\)/.test(app) &&
     /digitsOfPhone\(f\?\.clientPhone\)/.test(app) &&
-    !/for \(const l of \(callLogs \|\| \[\]\)\)/.test(app)
+    /for \(const l of \(callLogs \|\| \[\]\)\)/.test(app)
 );
 
 // ===== ٦) تبويب «عملائي»: الأرقام اليدوية فقط =====

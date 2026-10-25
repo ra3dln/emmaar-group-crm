@@ -23,6 +23,9 @@ const SYSTEM_TEXT_RE =
 const PURE_LOG_TEXT_RE =
   /^(?:اتصال|تم\s*الرد|لم\s*يرد|مشغول|تم\s+إنشاء\s+تذكير.*|تم\s+فتح\s+واتساب.*)[:\-]?\s*$/i;
 
+// نص البطاقة التلقائية (عميل جديد من غير كومنت) — مش كلام مندوب، فمخفي من العرض
+const AUTO_CLIENT_TEXT_RE = /^عميل\s+جديد/;
+
 // نص الكومنت بعد شيل البادئات
 export const cleanCommentText = (value) =>
   String(value || '').replace(PREFIX_RE, '').replace(SYSTEM_LINE_RE, '').trim();
@@ -31,6 +34,7 @@ export const cleanCommentText = (value) =>
 export const isSystemOnlyText = (value) => {
   const clean = cleanCommentText(value);
   if (!clean) return true;
+  if (AUTO_CLIENT_TEXT_RE.test(clean)) return true;
   return SYSTEM_TEXT_RE.test(clean);
 };
 

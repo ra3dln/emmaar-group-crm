@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 
-const { feedbackBucketOf, latestFeedbackStatusOf, buildWorkNumbers, feedbackByPhone } =
+const { feedbackBucketOf, latestFeedbackStatusOf, buildWorkNumbers, feedbackByPhone, isColdNumber } =
   await import('../src/feedbackBuckets.ts');
 
 let passed = 0;
@@ -128,6 +128,101 @@ check(
     [{ id: 'l9', name: 'رقم جديد', phone: PHONE, status: 'new', salesId: 'u1' }],
     feedbackByPhone([feedback('meeting')], [callLog('answered')])
   )[0].bucket === 'meeting'
+);
+
+// ===== ٥) «Fresh Leads» ≠ «Cold Calls» =====
+// الطلب: «الفريش ليدز مش هيا ال cold calls» — فلازم كل رقم يبقى في واحد منهم بس.
+// Fresh = رقم جديد ما اتفتحش · Cold = اتفتح (عميل مسجّل / رقم اتفتح من التوزيع) وما اتصلناش.
+const split = buildWorkNumbers(
+  [
+    { id: 'c1', name: 'عميل مسجّل من غير فيدباك', phone: '01000000001', stage: 'new', activities: [] },
+    {
+      id: 'c2',
+      name: 'عميل عليه فيدباك',
+      phone: '01000000002',
+      stage: 'contacted',
+      activities: [{ id: 'a1', type: 'feedback', text: 'طلب معاينة', status: 'follow-up', at: AT }],
+    },
+  ],
+  [
+    { id: 'l1', name: 'رقم جديد ما اتفتحش', phone: '01000000003', status: 'new', salesId: 'u1' },
+    { id: 'l2', name: 'رقم اتفتح من التوزيع', phone: '01000000004', status: 'viewed', salesId: 'u1' },
+    { id: 'l3', name: 'رقم اتفتح واتصلنا بيه', phone: '01000000005', status: 'viewed', salesId: 'u1' },
+  ],
+  feedbackByPhone(
+    [],
+    [
+      {
+        id: 'lg1',
+        salesId: 'u1',
+        clientPhone: '01000000005',
+        result: 'no-answer',
+        comment: 'No answer',
+        createdAt: AT,
+      },
+    ]
+  )
+);
+const calledPhones = new Set(['01000000005']);
+const cold = split.filter((n) => isColdNumber(n, calledPhones));
+const fresh = split.filter((n) => n.bucket === 'fresh-stage' && !isColdNumber(n, calledPhones));
+check('«Cold Calls» = العميل المسجّل + الرقم اللي اتفتح (٢)', cold.length === 2, `وجد ${cold.length}`);
+check('«Fresh Leads» = الرقم الجديد اللي ما اتفتحش (١)', fresh.length === 1, `وجد ${fresh.length}`);
+check(
+  'الرقم الواحد ما بيحسبش في الاتنين',
+  cold.every((n) => !fresh.some((f) => f.key === n.key))
+);
+check(
+  'الرقم اللي اتصلنا بيه مش بارد ومش جديد',
+  !cold.some((n) => n.phone === '01000000005') && !fresh.some((n) => n.phone === '01000000005')
+);
+check(
+  'العميل اللي عليه فيدباك حالته follow-up (مش بارد ولا جديد)',
+  split.find((n) => n.phone === '01000000002')?.bucket === 'follow-up'
+);
+
+// ===== ٦) الملاحظة = كلام المندوب (مش اللوج) =====
+const noteCall = feedbackByPhone(
+  [],
+  [
+    {
+      id: 'lg2',
+      salesId: 'u1',
+      clientPhone: '01007778888',
+      result: 'no-answer',
+      comment: 'No answer\nمردش هكلمه تاني',
+      createdAt: AT,
+    },
+  ]
+);
+check(
+  'سطر النظام الآلي («No answer») بيتشال من الملاحظة',
+  noteCall.get('01007778888')?.note === 'مردش هكلمه تاني'
+);
+const noteOld = feedbackByPhone(
+  [
+    {
+      id: 'f9',
+      clientPhone: '01006665555',
+      status: 'follow-up',
+      feedback: 'طلب معاينة',
+      createdAt: AT,
+    },
+  ],
+  [
+    {
+      id: 'lg3',
+      salesId: 'u1',
+      clientPhone: '01006665555',
+      result: 'no-answer',
+      comment: 'No answer',
+      createdAt: '2026-10-24T12:00:00.000Z',
+    },
+  ]
+);
+check(
+  'اللوج الجديد ما بيمسحش كلام المندوب اللي قبله',
+  noteOld.get('01006665555')?.note === 'طلب معاينة'
 );
 
 console.log(`\n✅ نجحت ${passed} فحوصات (انتقال الحالة من الفيدباك)`);
