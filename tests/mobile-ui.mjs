@@ -134,7 +134,9 @@ check(
 check(
   'وقت تسجيل الرقم في الكامبين مكتوب جمب الرقم زي اسم الفورم',
   app.includes('function CampaignTimeChip') &&
-    (app.match(/<CampaignTimeChip at=/g) || []).length >= 5 &&
+    // ٤ مواضع: كارت العميل · كارت الرقم الموزّع · صفحة الأرقام · شاشة التوزيع.
+    // (موضع مركز الإشعارات اتشال مع تبويب «أرقام جديدة» — بقى إشعار خارجي).
+    (app.match(/<CampaignTimeChip at=/g) || []).length >= 4 &&
     css.includes('.cc-time')
 );
 check(

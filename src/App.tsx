@@ -2866,21 +2866,10 @@ function App() {
     totalProperties: properties.length,
   };
 
-  // ===== بيانات مركز الإشعارات (أرقام جديدة / رسائل / اتصالات الفريق) =====
+  // ===== بيانات مركز الإشعارات (رسائل / اتصالات الفريق) =====
   // التذكيرات اتشالت من هنا: بقت إشعارًا خارجيًّا على الجهاز في وقتها فقط.
-  // الأجدد أولاً في القائمة أيضاً.
-
-  // ===== أرقام جديدة نزلت على السيلز =====
-  // السيلز كان ما يوصلهوش أي إشعار برقم اتوزّع عليه (لا في الجرس ولا عدّاد) — الأرقام
-  // كانت بتتسجّل في «عملاء كامبين» بس. فبقى له تبويب «أرقام جديدة» في مركز الإشعارات
-  // بعدّاد أحمر، ويعرض الأرقام اللي لسه ما اتفتحتش.
-  const myLeads: AssignedLead[] = isSalesView
-    ? assignedLeads
-        .filter((l: AssignedLead) => l.salesId === currentUser.id && l.status !== 'closed')
-        .slice()
-        .sort((a, b) => String(b.assignedAt || b.createdAt || '').localeCompare(String(a.assignedAt || a.createdAt || '')))
-    : [];
-  const notifLeads = myLeads.slice(0, 40);
+  // و«رقم جديد في الفورم» كمان اتشال من جوّه البرنامج: بقى إشعار خارجي على
+  // جهاز السيلز («رقم فريش جديد نزل ليك») — فمفيش عدّاد أحمر ولا تكرار.
 
   const notifMessages = messages
     .filter((m) => messageTargetsUser(m, currentUser))
@@ -2894,7 +2883,7 @@ function App() {
   // «اتصالات الفريق» إشعار إدارة: حساب المطوّر (سلوكه سيلز) ما يحسبش اتصالات زملائه
   // في العدّاد، وإلا ظهرت له إشعارات مش ليه.
   const unseenNotifIds = [
-    ...notifLeads.filter((l) => l.status === 'new').map((l) => `lead-${l.id}`),
+    // «رقم جديد في الفورم» مش إشعار داخلي — إشعار خارجي على جهاز السيلز بس
     ...notifMessages.filter((m) => !isMessageReadBy(m, currentUser.id)).map((m) => `msg-${m.id}`),
     ...(effectiveRoleOf(currentUser) !== 'sales' ? notifCalls.slice(0, 30).map((c) => `call-${c.id}`) : []),
   ];
@@ -3653,14 +3642,13 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* مركز الإشعارات — مقسَّم على تبويبات (أرقام جديدة / رسائل / اتصالات الفريق).
-          التذكيرات مش هنا: بتوصل إشعارًا خارجيًّا على الجهاز في وقتها مرة واحدة. */}
+      {/* مركز الإشعارات — مقسَّم على تبويبات (رسائل / اتصالات الفريق).
+          التذكيرات مش هنا: بتوصل إشعارًا خارجيًّا على الجهاز في وقتها مرة واحدة.
+          و«رقم جديد في الفورم» كمان: إشعار خارجي على جهاز السيلز بس («فريش جديد»). */}
       <AnimatePresence>
         {showNotifyCenter && (
           <NotificationsCenter
             user={currentUser}
-            leads={notifLeads}
-            showLeads={isSalesView}
             messages={notifMessages}
             callLogs={effectiveRoleOf(currentUser) === 'sales' ? [] : notifCalls}
             unseenIds={unseenNotifIds}
@@ -7295,19 +7283,14 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
 }
 
 // ===== مركز الإشعارات: كل ما يخصك مقسَّماً على تبويبات =====
-function NotificationsCenter({ user, leads, messages, callLogs, unseenIds, showLeads, onSeen, onClose, onOpenAlarm, onGo }: any) {
+function NotificationsCenter({ user, messages, callLogs, unseenIds, onSeen, onClose, onOpenAlarm, onGo }: any) {
   const isSales = effectiveRoleOf(user) === 'sales';
-  // تبويب «أرقام جديدة» للحسابات اللي بتستقبل أرقاماً (سيلز/حساب المطوّر السيلز)
-  const leadsTab = showLeads === undefined ? isSales : !!showLeads;
-  // مفيش تبويب «تذكيرات»: إشعار التذكير خارجي على الجهاز مرة واحدة في وقته،
+  // ===== مفيش تبويب «أرقام جديدة» هنا =====
+  // إشعار «رقم جديد في الفورم» اتشال من جوّه البرنامج: بقى إشعار خارجي على
+  // جهاز السيلز بس («رقم فريش جديد نزل ليك») — فمفيش تكرار ولا إزعاج بالجرس.
+  // ومفيش تبويب «تذكيرات» كمان: إشعار التذكير خارجي على الجهاز مرة واحدة في وقته،
   // ومفيش أي نسخة داخل البرنامج.
-  const tabs = leadsTab
-    ? [
-        { id: 'leads', label: 'أرقام جديدة', icon: UserPlus },
-        { id: 'messages', label: 'الرسائل', icon: MessageCircle },
-        ...(isSales ? [] : [{ id: 'calls', label: 'اتصالات الفريق', icon: PhoneCall }]),
-      ]
-    : isSales
+  const tabs = isSales
     ? [{ id: 'messages', label: 'الرسائل', icon: MessageCircle }]
     : [
         { id: 'calls', label: 'اتصالات الفريق', icon: PhoneCall },
@@ -7362,15 +7345,10 @@ function NotificationsCenter({ user, leads, messages, callLogs, unseenIds, showL
     allSeen
       ? 0
       : unseenIds.filter((x: string) =>
-          x.startsWith(id === 'calls' ? 'call-' : id === 'leads' ? 'lead-' : 'msg-')
+          x.startsWith(id === 'calls' ? 'call-' : 'msg-')
         ).length;
 
-  const goTarget =
-    tab === 'leads'
-      ? 'leads'
-      : tab === 'calls'
-      ? (isSales ? 'daily-feedback' : 'admin-feedback')
-      : (isSales ? 'chat' : 'admin-chat');
+  const goTarget = tab === 'calls' ? (isSales ? 'daily-feedback' : 'admin-feedback') : (isSales ? 'chat' : 'admin-chat');
 
   const now = Date.now();
   const empty = (text: string) => <p className="text-sm text-[var(--text-dim)] text-center py-10">{text}</p>;
@@ -7448,23 +7426,6 @@ function NotificationsCenter({ user, leads, messages, callLogs, unseenIds, showL
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-2 min-h-[180px]">
-          {tab === 'leads' && (leads.length === 0 ? empty('لا توجد أرقام جديدة') : leads.map((l: AssignedLead) => (
-            <div key={l.id} className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="font-bold text-[var(--text-strong)] text-sm truncate">{l.name || 'بدون اسم'}</p>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${l.status === 'new' ? 'bg-[var(--brand-primary-softer)] text-[var(--brand)]' : 'bg-[var(--tint-2)] text-[var(--text)]'}`}>
-                  {l.status === 'new' ? 'جديد' : l.status === 'viewed' ? 'تم العرض' : 'تم التواصل'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-2 flex-wrap mt-1">
-                <a className="text-xs text-[var(--brand)] font-bold" dir="ltr" href={`tel:${l.phone}`}>{l.phone}</a>
-                <FormNameChip record={l} />
-                <CampaignTimeChip at={campaignTimeOf(l).at} kind={campaignTimeOf(l).kind} />
-              </div>
-              {l.description && <p className="text-xs text-[var(--text-dim)] mt-1">{formatLeadDescription(l.description)}</p>}
-            </div>
-          )))}
-
           {tab === 'messages' && (messages.length === 0 ? empty('لا توجد رسائل') : messages.map((m: ChatMessage) => (
             <div key={m.id} className="rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3">
               <div className="flex items-center justify-between gap-2">

@@ -270,14 +270,26 @@ try {
   check('إعادة الاشتراك عند مفتاح قديم (InvalidStateError)', pushSrc.includes('stale.unsubscribe()'));
   check('ملف العامل يعرض الإشعار بمحاولة آمنة', swSrc.includes('showSafe') && swSrc.includes('requireInteraction'));
   check('إشعار الرقم الجديد يفتح الصفحة عند اللمس', swSrc.includes('notificationclick') && swSrc.includes('openWindow'));
-  // إشعار «رقم جديد نزل» للمندوب: يُحسب من وقت الإسناد لا الوصول، ويُسجَّل لكل
-  // «رقم × مستلم» على حدة، ويحمل اسم الفورم الذي نزل منه الرقم.
+  // إشعار «رقم فريش جديد نزل ليك» للمندوب: يُحسب من وقت الإسناد لا الوصول، ويُسجَّل
+  // لكل «رقم × مستلم» على حدة، ويحمل اسم الفورم الذي نزل منه الرقم.
   check('إشعار الرقم يُحسب من وقت الإسناد', serverPushSrc.includes('lead.assignedAt || lead.createdAt'));
   check('إشعار الرقم يُسجّل لكل «رقم × مستلم»', serverPushSrc.includes('`${lead.id}|${target}`'));
   check('إشعار الرقم يحمل اسم الفورم', serverPushSrc.includes('one?.formName'));
   check(
-    'الواجهة تعلّم وقت الإسناد على الرقم وتفتح تبويب «أرقام جديدة» للسيلز',
-    app.includes('assignedAt: movedAt') && app.includes("label: 'أرقام جديدة'")
+    'الإشعار الخارجي يقول «رقم فريش جديد نزل ليك»',
+    serverPushSrc.includes('رقم فريش جديد نزل ليك') && serverPushSrc.includes('أرقام فريش جديدة نزلت ليك')
+  );
+  const centerSrc = app.slice(app.indexOf('function NotificationsCenter'), app.indexOf('function NotificationsPanel'));
+  check(
+    'مفيش إشعار داخلي «أرقام جديدة» في مركز الإشعارات',
+    !centerSrc.includes("{ id: 'leads'") &&
+      !centerSrc.includes("tab === 'leads'") &&
+      !app.includes('leads={notifLeads}') &&
+      !app.includes('`lead-${l.id}`')
+  );
+  check(
+    'الواجهة لسه بتعلّم وقت الإسناد على الرقم (لحساب لحظة الإسناد في الإشعار)',
+    app.includes('assignedAt: movedAt')
   );
 
   // ===== ١٢) تنبيهات النظام (انتهاء توكن السحب) — تصل الإدارة وحدها ولا تتكرر كل دورة =====
@@ -338,13 +350,24 @@ try {
   const leadAgain = await processPushesOnce({ storage, vapidStore, stateStore });
   check('نفس الرقم لا يُرسل مرتين', leadAgain.leads === 0 && received.length === beforeLead + 1, JSON.stringify(leadAgain));
 
-  // رقم غير موزّع: الإشعار يذهب للإدارة لتعرف أن رقماً وصل وينتظر التوزيع
+  // رقم غير موزّع: مفيش إشعار — «رقم جديد في الفورم» بقى إشعار خارجي لكل سيلز
+  // عن أرقامه هو بس (الإدارة بتشوف الأرقام غير الموزّعة في «توزيع الأرقام»).
   db.data.crm_assigned_leads.push({
     id: 'lead-2', name: 'بانتظار التوزيع', phone: '01010002002', salesId: '',
     createdAt: new Date(Date.now() - 30_000).toISOString(), formName: 'فورم فيلات',
   });
   const unassignedRun = await processPushesOnce({ storage, vapidStore, stateStore });
-  check('الرقم غير الموزّع يُنبّه الإدارة', unassignedRun.leads === 1 && received.length === beforeLead + 2, JSON.stringify(unassignedRun));
+  check(
+    'الرقم غير الموزّع ما بيبعتهش إشعار (مفيش إزعاج للإدارة)',
+    unassignedRun.leads === 0 && received.length === beforeLead + 1,
+    JSON.stringify(unassignedRun)
+  );
+  check(
+    'الرقم غير الموزّع ما اتسجّلش كمُرسَل',
+    (pushState.leads || {})['lead-2|managers'] === undefined &&
+      Object.keys(pushState.leads || {}).every((k) => !k.startsWith('lead-2')),
+    JSON.stringify(pushState.leads)
+  );
 
   // الدفعة الواحدة تُجمَّع في إشعار واحد لا إشعار لكل رقم
   db.data.crm_assigned_leads.push(
@@ -365,9 +388,9 @@ try {
     JSON.stringify(batchRun)
   );
 
-  // ===== ١٤) رقم يوصل غير موزّع ثم يتوزّع: الإدارة تُنبَّه أولاً وصاحبه بعدها =====
-  // العلة الحقيقية التي كانت تمنع وصول الإشعار للمندوب: إشعار الإدارة عن رقم غير
-  // موزّع كان يسجّل الرقم نفسه، فلما يتوزّع على مندوب ما يوصلهوش أي شيء.
+  // ===== ١٤) رقم يوصل غير موزّع ثم يتوزّع: صاحبه وحده يتبنبّه =====
+  // «رقم جديد في الفورم» بقى إشعار خارجي لكل سيلز عن أرقامه هو بس — فالرقم غير
+  // الموزّع ما بيبعتهش إشعار، ولما يتوزّع على مندوب يوصله إشعار فريش واحد.
   db.data.crm_assigned_leads = [
     {
       id: 'lead-late',
@@ -385,22 +408,22 @@ try {
   db.data.crm_assigned_leads[0].createdAt = new Date(Date.now() - 60_000).toISOString();
   const arrivedRun = await processPushesOnce({ storage, vapidStore, stateStore });
   check(
-    'رقم جديد غير موزّع يُنبّه الإدارة',
-    arrivedRun.leads === 1 && received.length === beforeLate + 1,
+    'رقم جديد غير موزّع ما بيبعتهش إشعار لأحد',
+    arrivedRun.leads === 0 && received.length === beforeLate,
     JSON.stringify(arrivedRun)
   );
 
-  // دلوقتي بيتوزّع على مندوب: لازم يوصله إشعار **رغم** أن الإدارة عرفت بالرقم قبله
+  // دلوقتي بيتوزّع على مندوب: يوصله إشعار واحد (رقم فريش جديد نزل ليك)
   db.data.crm_assigned_leads[0].salesId = 'sales-1';
   db.data.crm_assigned_leads[0].assignedAt = new Date().toISOString();
   const assignedRun = await processPushesOnce({ storage, vapidStore, stateStore });
   check(
-    'الرقم لما يتوزّع يوصل صاحبه إشعار حتى لو الإدارة اتنبّهت بيه قبل كده',
-    assignedRun.leads === 1 && received.length === beforeLate + 2,
+    'الرقم لما يتوزّع يوصل صاحبه إشعار واحد',
+    assignedRun.leads === 1 && received.length === beforeLate + 1,
     JSON.stringify(assignedRun)
   );
   const repeatRun = await processPushesOnce({ storage, vapidStore, stateStore });
-  check('إشعار التوزيع لا يتكرر كل دورة', repeatRun.leads === 0 && received.length === beforeLate + 2, JSON.stringify(repeatRun));
+  check('إشعار التوزيع لا يتكرر كل دورة', repeatRun.leads === 0 && received.length === beforeLate + 1, JSON.stringify(repeatRun));
 
   // نفس الرقم لو اتنقل لمندوب بلا أجهزة: الإشعار ما يضيعش ولا يتسجّل كمُرسَل
   db.data.crm_assigned_leads[0].salesId = 'sales-2';
@@ -409,7 +432,7 @@ try {
   check(
     'رقم اتنقل لمندوب بلا أجهزة: ما يتسجّلش كمُرسَل (يُعاد لما يشترك)',
     movedRun.leads === 0 &&
-      received.length === beforeLate + 2 &&
+      received.length === beforeLate + 1 &&
       (pushState.leads || {})['lead-late|sales-2'] === undefined,
     JSON.stringify(movedRun)
   );

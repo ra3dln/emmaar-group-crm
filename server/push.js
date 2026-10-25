@@ -520,9 +520,10 @@ async function processPushTick({
     changed = true;
   }
 
-  // ٤) أرقام جديدة نزلت أو اتوزّعت على سيلز — إشعار فوري حتى لو الموقع مقفول
+  // ٤) رقم فريش جديد نزل على سيلز — إشعار خارجي على جهازه حتى لو الموقع مقفول
   //    • الرقم الموزّع: إشعار لصاحبه بالاسم والرقم واسم الفورم ليبدأ الاتصال فوراً.
-  //    • الرقم غير الموزّع: إشعار للإدارة أنه وصل وينتظر التوزيع.
+  //    • الرقم غير الموزّع: مفيش إشعار — «رقم جديد في الفورم» بقى إشعار خارجي
+  //      لكل سيلز عن أرقامه هو بس (مش إزعاج للإدارة برقم مش معروف).
   //    تُجمع أرقام المستلم الواحد في إشعار واحد (دفعة الفورم ٤٠ رقماً لا تتحول ٤٠ إشعاراً).
   //    ولا يُعلَّم الرقم كمُرسَل إلا إذا وصل لجهاز فعلاً — فإن لم توجد أجهزة يُعاد لاحقاً.
   //
@@ -536,12 +537,12 @@ async function processPushTick({
   for (const lead of data.crm_assigned_leads || []) {
     if (!lead?.id) continue;
     const owner = String(lead.salesId || '').trim();
-    const target = owner || 'managers';
-    if (state.leads[`${lead.id}|${target}`]) continue;
-    const stamp = owner ? lead.assignedAt || lead.createdAt : lead.createdAt;
+    if (!owner) continue; // غير موزّع: مفيش إشعار (الإدارة بتشوف الأرقام في «توزيع الأرقام»)
+    if (state.leads[`${lead.id}|${owner}`]) continue;
+    const stamp = lead.assignedAt || lead.createdAt;
     const at = Date.parse(stamp || '');
     if (!Number.isFinite(at) || now - at > RECENT_MS) continue;
-    pendingLeads.push({ lead, target });
+    pendingLeads.push({ lead, target: owner });
   }
   if (pendingLeads.length) {
     const byTarget = new Map();
@@ -556,8 +557,8 @@ async function processPushTick({
         kind: 'lead',
         title:
           leads.length === 1
-            ? `🆕 رقم جديد نزل${target === 'managers' ? ' وينتظر التوزيع' : ''}`
-            : `🆕 ${leads.length} أرقام جديدة نزلت${target === 'managers' ? ' وتنتظر التوزيع' : ''}`,
+            ? '🆕 رقم فريش جديد نزل ليك'
+            : `🆕 ${leads.length} أرقام فريش جديدة نزلت ليك`,
         body:
           leads.length === 1
             ? `${one?.name || 'عميل'} — ${one?.phone || ''}${form}`
@@ -573,12 +574,7 @@ async function processPushTick({
         tag: `lead-${one?.id || Date.now()}`,
         url: '/',
       };
-      let delivered = 0;
-      if (target === 'managers') {
-        for (const manager of managers) delivered += await push(manager.id, payload);
-      } else {
-        delivered = await push(target, payload);
-      }
+      const delivered = await push(target, payload);
       if (!delivered) continue; // لا أجهزة/فشل مؤقت: يُعاد في الدورة القادمة بلا ضياع
       for (const lead of leads) state.leads[`${lead.id}|${target}`] = now;
       leadCount += leads.length;
