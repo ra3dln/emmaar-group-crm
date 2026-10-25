@@ -3715,6 +3715,10 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
   gap: 12px;
   box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.45);
 }
+/* أبناء الشيت ما يتضغطوش (flex-shrink) لما المحتوى يطول على الشاشة:
+   بدون ده كان صف «Answered / No Answer» بينكمش لارتفاع ١px فيتداخل مع
+   الكومنت ويبقى مش قابل للضغط — فلا تُختار النتيجة ولا يحفظ «Add Action». */
+.eg-sheet > * { flex: 0 0 auto; }
 @media (min-width: 640px) {
   .eg-sheet { border-radius: var(--r-xl); padding-bottom: 18px; margin: 0 12px; }
 }

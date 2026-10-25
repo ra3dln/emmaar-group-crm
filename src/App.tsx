@@ -7291,7 +7291,7 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
             </div>
 
             <button type="button" onClick={save} className="eg-submit"
-              disabled={status === 'cancellation' && !cancelReason}>
+              disabled={!result || (status === 'cancellation' && !cancelReason)}>
               Add Action
             </button>
             {!result && <p className="eg-hint text-center">Pick “Answered” or “No Answer”, then write your comment.</p>}

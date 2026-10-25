@@ -159,4 +159,17 @@ check(
   /\.ct-phone button \{[\s\S]{0,300}cursor: pointer/.test(css)
 );
 
+// ===== ٨) «Add Action» بيحفظ فعلاً على الشاشات القصيرة =====
+// الشيت عمود مرن (flex column) وله تمرير داخلي: أبناؤه لازم ما ينضغطوش،
+// وإلا صف «Answered / No Answer» بينكمش لارتفاع صفر ويتداخل مع الكومنت —
+// فلا تُختار النتيجة ولا يحفظ الزر شيئاً (المشكلة اللي اتصلحت).
+check(
+  'أبناء شيت الإجراء ما بينكمشوش (الشيت هو اللي بيعمل تمرير)',
+  /\.eg-sheet > \* \{ flex: 0 0 auto; \}/.test(css)
+);
+check(
+  'زر Add Action معطّل لحد ما تُختار Answered / No Answer (مفيش ضغط بلا نتيجة)',
+  /className="eg-submit"[\s\S]{0,120}disabled=\{!result/.test(modal)
+);
+
 console.log(`\n✅ نجحت ${passed} فحوصات (نافذة «رد / لم يرد» بدل الرنّ المباشر)`);
