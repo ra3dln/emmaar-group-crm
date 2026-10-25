@@ -164,7 +164,10 @@ check('الرقم اليدوي بيتسجّل بعلامة manual', /manual: tru
 // ===== ٧) التذكيرات: شارة برتقالية بدل التبويب =====
 check('شارة التذكيرات المتأخرة برتقالية على الجرس', /topbar-badge is-delay/.test(app) && /delayedRemindersCount/.test(app));
 check('العدّاد = التذكيرات المتأخرة أو المستحقة', /!r\.isCompleted && \(r\.isDelayed \|\| isReminderDue\(r\)\)/.test(app));
-check('التذكير لسه إشعار (مفيش تبويب بس)', /function RemindersView/.test(app) && /function AlarmBar/.test(app));
+check(
+  'التذكير لسه إشعار خارجي (مفيش بطاقة تنبيه داخل البرنامج)',
+  /function RemindersView/.test(app) && !/function AlarmBar/.test(app) && !/<AlarmBar/.test(app)
+);
 check('مركز الإشعارات لسه فيه تبويب التذكيرات', /id: 'reminders', label: 'التذكيرات'/.test(app));
 
 // ===== ٨) شريط التنقل السفلي =====

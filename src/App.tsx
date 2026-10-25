@@ -1464,25 +1464,17 @@ function App() {
 
   // ===== المنبه والإشعارات الحقيقية =====
   const [alarmSettings, setAlarmSettings] = useState<AlarmSettings>(() => loadAlarmSettings());
-  const [activeAlarm, setActiveAlarm] = useState<{ id: string; title: string; body: string; phone: string; quiet: boolean; firedAt: number } | null>(null);
-  // تذكيرات أُغلقت في هذه الجلسة فقط — تُفتح من جديد عند إعادة تحميل الصفحة
-  // أو الدخول التالي، لأن التذكير المستحق لا يجوز أن يختفي نهائياً.
-  const dismissedAlarmIds = useRef<Set<string>>(new Set());
-  // تذكيرات أُرسل لها إشعار جهاز في هذه الجلسة (منع التكرار كل ثانيتين)
-  const notifiedReminderIds = useRef<Set<string>>(new Set());
-  const activeAlarmRef = useRef<typeof activeAlarm>(null);
-  useEffect(() => {
-    activeAlarmRef.current = activeAlarm;
-  }, [activeAlarm]);
+  // تذكيرات طُلب لها إشعار خارجي في هذه الجلسة (منع نداء الإرسال كل ثانيتين)
+  const flushAskedRef = useRef<Set<string>>(new Set());
   const [showNotifyPanel, setShowNotifyPanel] = useState(false);
   const [notifState, setNotifState] = useState<PushState>('default');
   const [notifBusy, setNotifBusy] = useState(false);
   const [notifMessage, setNotifMessage] = useState('');
 
-  const alarmNotifiedKey = 'crm_alarmed';
-
-  // ----- بند ٦ (التذكيرات نوتفكيشن فقط) وبند ٨ (التأخير بعد ٥ دقايق) -----
+  // ----- بند ٦ (التذكيرات نوتفكيشن خارجي فقط) وبند ٨ (التأخير بعد ٥ دقايق) -----
   const reminderFiredKey = 'crm_reminder_fired';
+  // تذكيرات ظهر لها إشعار على هذا الجهاز — محفوظة فلا يتكرر الإشعار أبداً
+  const reminderNotifiedKey = 'crm_notified';
   const reminderActedKey = 'crm_reminder_acted';
   const REMINDER_ACTION_WINDOW_MS = 5 * 60 * 1000; // لو مافيش إجراء خلال ٥ دقايق → «متأخر»
 
@@ -1526,9 +1518,9 @@ function App() {
         return { ...r, isDelayed: true, delayCount: (r.delayCount || 0) + 1 };
       });
       if (delayedName) {
+        // التسجيل بيحصل في البيانات فقط (بدون أي تنبيه داخلي): التذكير له
+        // إشعار خارجي واحد في وقته، والتأخير يبان في شارة الجرس والتبويبات.
         localStorage.setItem('crm_reminders', JSON.stringify(next));
-        setInAppNotification({ title: '⏱ تأخير — مافيش إجراء على التذكير', body: `${delayedName} اتسجّل «متأخر»` });
-        setTimeout(() => setInAppNotification(null), 8000);
         if (currentUser) loadData();
       }
     } catch {
@@ -1544,35 +1536,22 @@ function App() {
     }
   };
 
-  // بند ٦: التذكير نوتفكيشن فقط — بلا رنة وبلا صوت متكرر.
-  // بنعرض بطاقة التذكير على الشاشة + إشعار الجهاز، والعدّاد بيبدأ فوراً.
-  const startAlarm = (reminder: any) => {
-    const title = `⏰ حان وقت الاتصال بـ ${reminder.clientName || 'عميل'}`;
-    const body = `${reminder.clientPhone || ''}${reminder.note ? ' — ' + reminder.note : ''}`.trim();
-    alarm.stop(); // لو فيه رنة قديمة شغّالة من نسخة أقدم، تتقفل
-    const nextAlarm = { id: reminder.id, title, body, phone: reminder.clientPhone || '', quiet: true, firedAt: Date.now() };
-    activeAlarmRef.current = nextAlarm;
-    setActiveAlarm(nextAlarm);
-    // عدّاد «متأخر» يخص صاحب التذكير فقط — الإدارة تعرض تذكير مندوب دون أن تُسجّله متأخراً
-    if (reminder.userId === currentUser?.id) markReminderFired(reminder.id);
-  };
-
-  const startAlarmById = (id: string) => {
-    const reminder = readReminders().find((r) => r.id === id);
-    if (reminder) {
-      // فتح التذكير يدوياً (من رابط إشعار مثلاً) يلغى إغلاقه المؤقت
-      dismissedAlarmIds.current.delete(id);
-      markReminderAction(id); // فتح التذكير = إجراء
-      startAlarm(reminder);
+  // تذكيرات ظهر لها إشعار على هذا الجهاز (بديل محلي لما الجهاز مش مشترك في الدفع)
+  const readNotifiedIds = (): Set<string> => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(reminderNotifiedKey) || '[]');
+      return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+    } catch {
+      return new Set();
     }
   };
 
-  const closeActiveAlarm = (id: string) => {
-    if (activeAlarmRef.current?.id !== id) return;
-    dismissedAlarmIds.current.add(id);
-    activeAlarmRef.current = null;
-    alarm.stop();
-    setActiveAlarm(null);
+  const writeNotifiedIds = (ids: Set<string>) => {
+    try {
+      localStorage.setItem(reminderNotifiedKey, JSON.stringify(Array.from(ids).slice(-500)));
+    } catch {
+      /* لا شيء */
+    }
   };
 
   const completeReminder = (id: string) => {
@@ -1580,7 +1559,6 @@ function App() {
     const next = readReminders().map((r) => (r.id === id ? { ...r, isCompleted: true } : r));
     localStorage.setItem('crm_reminders', JSON.stringify(next));
     void pushKey('crm_reminders');
-    closeActiveAlarm(id);
     loadData();
   };
 
@@ -1615,42 +1593,16 @@ function App() {
     });
     localStorage.setItem('crm_reminders', JSON.stringify(next));
     void pushKey('crm_reminders');
-    // نُخرجه من قائمة «تم إشعاره» حتى يرنّ مرة أخرى في موعده الجديد
-    try {
-      const notified = JSON.parse(localStorage.getItem('crm_notified') || '[]').filter((item: string) => item !== id);
-      localStorage.setItem('crm_notified', JSON.stringify(notified));
-      const alarmed = JSON.parse(localStorage.getItem(alarmNotifiedKey) || '[]').filter((item: string) => item !== id);
-      localStorage.setItem(alarmNotifiedKey, JSON.stringify(alarmed));
-    } catch {
-      /* لا شيء */
-    }
-    notifiedReminderIds.current.delete(id);
-    closeActiveAlarm(id);
+    // نُخرجه من قائمة «تم إشعاره» حتى يظهر إشعار آخر في موعده الجديد
+    const notified = readNotifiedIds();
+    notified.delete(id);
+    writeNotifiedIds(notified);
+    flushAskedRef.current.delete(id);
     loadData();
   };
 
-  const hideAlarm = () => {
-    if (activeAlarm) {
-      dismissedAlarmIds.current.add(activeAlarm.id);
-      markReminderAction(activeAlarm.id);
-    }
-    activeAlarmRef.current = null;
-    alarm.stop();
-    setActiveAlarm(null);
-  };
-
-  // ملاحظة: كان فيه هنا «فتح الصوت ثم إعادة الرنّة» — اتشال خلاص
-  // لأن التذكيرات بقت نوتفكيشن فقط (بند ٦).
-
-  // فتح المنبه تلقائياً لو وصل المستخدم من إشعار
-  useEffect(() => {
-    const match = window.location.hash.match(/alarm=([^&]+)/);
-    if (match) {
-      const id = decodeURIComponent(match[1]);
-      setTimeout(() => startAlarmById(id), 1500);
-      history.replaceState(null, '', window.location.pathname);
-    }
-  }, []);
+  // ملاحظة: التنبيه الداخلي (بطاقة التذكير العائمة) اتشال خلاص —
+  // التذكير بيظهر كإشعار خارجي على الجهاز مرة واحدة في وقته بس.
 
   // تحديث الهوية على الأجهزة المثبّتة: المتصفح يقرأ المانيفست من السيرفر لما نطلب
   // منه يعيد تحميل عامل الخدمة، فيتغيّر الاسم والأيقونة على الاختصار المثبّت
@@ -1671,16 +1623,12 @@ function App() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
-  // رسائل من خدمة الإشعارات: إسكات / تأجيل / فتح المنبه
+  // رسائل من خدمة الإشعارات: زر «تأجيل ٥ د» على الإشعار الخارجي
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
     const onMessage = (event: MessageEvent) => {
       const msg = event.data || {};
-      if (msg.type === 'silence') {
-        alarm.stop();
-      }
       if (msg.type === 'snooze' && msg.id) snoozeReminder(msg.id, Number(msg.minutes) || loadAlarmSettings().snoozeMin);
-      if (msg.type === 'open-alarm' && msg.id) startAlarmById(msg.id);
     };
     navigator.serviceWorker.addEventListener('message', onMessage);
     return () => navigator.serviceWorker.removeEventListener('message', onMessage);
@@ -1723,7 +1671,7 @@ function App() {
   // ===== إرسال التذكيرات المستحقة من أي جهاز مفتوح =====
   // الإشعار الخارجي كان يعتمد على مجدول خارجي وحده؛ فلو تأخر أو توقف تبقى التذكيرات
   // بلا إشعار. كل جهاز مفتوح يطلب من السيرفر (مرة كل دقيقة) إرسال المستحق الآن،
-  // فيوصل إشعار لبقية الأجهزة حتى لو الموقع مقفول عندها.
+  // فيوصل إشعار للأجهزة — حتى لو الموقع مقفول عندها — مرة واحدة لكل تذكير.
   useEffect(() => {
     if (!currentUser) return;
     const run = () => {
@@ -1986,28 +1934,11 @@ function App() {
     };
   }, [currentUser?.id, currentUser?.role]);
 
-  // ===== جلسة جديدة: نمسح علامات «تم الإشعار» القديمة =====
-  // كانت هذه العلامات تُحفظ للأبد، فلو ضاع أول إشعار (صلاحية مقفولة / التاب مقفول)
-  // يظل التذكير صامتاً إلى الأبد حتى بعد تحديث الصفحة. التذكير المستحق لازم يظهر
-  // من جديد في كل جلسة، ويختفي فقط بإجراء حقيقي (تم / تأجيل) أو بإغلاقه يدوياً.
-  useEffect(() => {
-    notifiedReminderIds.current = new Set();
-    dismissedAlarmIds.current = new Set();
-    activeAlarmRef.current = null;
-    setActiveAlarm(null);
-    try {
-      localStorage.removeItem('crm_notified');
-      localStorage.removeItem('crm_alarmed');
-    } catch {
-      /* لا شيء */
-    }
-  }, [currentUser?.id]);
-
   useEffect(() => {
     if (!currentUser) return;
     let stopped = false;
 
-    const checkReminders = () => {
+    const checkReminders = async () => {
       if (stopped) return;
       let allReminders: Reminder[] = [];
       try {
@@ -2027,24 +1958,38 @@ function App() {
         .slice()
         .sort((a, b) => String(b.dateTime || '').localeCompare(String(a.dateTime || '')));
 
-      // إشعار الجهاز: مرة واحدة لكل تذكير في هذه الجلسة، بغض النظر عن الصلاحية.
-      // (لو الصلاحية رُفضت وقتها، ولا شيء يمنع المحاولة من جديد في الجلسة التالية)
-      for (const reminder of due) {
-        if (notifiedReminderIds.current.has(reminder.id)) continue;
-        notifiedReminderIds.current.add(reminder.id);
-        void sendNotification(
-          `⏰ حان وقت الاتصال بـ ${reminder.clientName || 'عميل'}`,
-          `${reminder.clientPhone || ''}${reminder.note ? ' — ' + reminder.note : ''}`.trim(),
-          `reminder-${reminder.id}`
-        );
-      }
-
-      // بطاقة داخل الموقع: أول تذكير مستحق لم يُغلق في هذه الجلسة.
-      // الأولوية لتذكيراتي أنا، ثم أي تذكير داخل نطاقي (حساب الإدارة).
-      if (!activeAlarmRef.current) {
-        const fresh = due.filter((r) => !dismissedAlarmIds.current.has(r.id));
-        const next = fresh.find((r) => r.userId === currentUser.id) || fresh[0];
-        if (next) startAlarm(next);
+      // ===== إشعار خارجي فقط — مرة واحدة عند وقت الاتصال =====
+      // مفيش تنبيه داخل البرنامج. لو الجهاز مشترك في إشعارات الدفع، نطلب من
+      // السيرفر يرسل التذكير المستحق فوراً، وهو يعلّمه مُرسَلاً في قاعدة الحالة
+      // فلا يتكرر (لا من المجدول ولا من بقية الأجهزة). ولو مش مشترك، يظهر
+      // إشعار من الجهاز نفسه — ومحفوظ في crm_notified فلا يتكرر بعد كده أبداً.
+      if (due.length) {
+        for (const reminder of due) markReminderFired(reminder.id);
+        const pushIsOn = await pushState();
+        if (pushIsOn === 'subscribed') {
+          const fresh = due.filter((r) => !flushAskedRef.current.has(r.id));
+          if (fresh.length) {
+            fresh.forEach((r) => flushAskedRef.current.add(r.id));
+            void flushPush(true);
+          }
+        } else {
+          const notified = readNotifiedIds();
+          let changed = false;
+          for (const reminder of due) {
+            if (notified.has(reminder.id)) continue;
+            // ما نعلّمش التذكير كمُنبَّه إلا لو الإشعار ظهر فعلاً — لو الصلاحية
+            // اتقفلت وقتها، يفضل قابلاً للظهور لما المستخدم يفعّلها.
+            const shown = await localNotification(
+              `⏰ حان وقت الاتصال بـ ${reminder.clientName || 'عميل'}`,
+              `${reminder.clientPhone || ''}${reminder.note ? ' — ' + reminder.note : ''}`.trim(),
+              `reminder-${reminder.id}`
+            );
+            if (!shown) continue;
+            notified.add(reminder.id);
+            changed = true;
+          }
+          if (changed) writeNotifiedIds(notified);
+        }
       }
 
       // بند ٨: تذكير بلا إجراء خلال ٥ دقايق يتسجّل «متأخر»
@@ -2571,7 +2516,7 @@ function App() {
       }
       void registerWorker();
       // نسمح بمحاولة إشعار جديدة للتذكيرات المستحقة فوراً بعد السماح
-      notifiedReminderIds.current = new Set();
+      flushAskedRef.current = new Set();
       let subscribed = false;
       if (currentUser) {
         try {
@@ -3070,7 +3015,6 @@ function App() {
       );
       localStorage.setItem('crm_reminders', JSON.stringify(nextReminders));
       void pushKey('crm_reminders');
-      closeActiveAlarm(reminderCallId);
       setReminderCallId(null);
       loadData();
     }
@@ -3705,23 +3649,6 @@ function App() {
             }}
             onClose={() => setStatusBoard(null)}
             onSelect={(c: Client) => { setStatusBoard(null); setSelectedClient(c); }}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* بطاقة التذكير — نوتفكيشن فقط: تم / تأجيل / اتصال (بلا رنة)
-          تختفي مؤقتاً ودرج القائمة مفتوح: البطاقة العائمة كانت تغطي أول عناصر
-          القائمة على الهاتف فلا يمكن الضغط على «الرئيسية» أو «العملاء». */}
-      <AnimatePresence>
-        {activeAlarm && !sidebarOpen && (
-          <AlarmBar
-            alarm={activeAlarm}
-            snoozeMinutes={alarmSettings.snoozeMin}
-            lateAfterMinutes={5}
-            onComplete={() => { if (activeAlarm) completeReminder(activeAlarm.id); hideAlarm(); }}
-            onSnooze={() => { if (activeAlarm) snoozeReminder(activeAlarm.id, alarmSettings.snoozeMin); hideAlarm(); }}
-            onDismiss={hideAlarm}
-            onDial={() => { if (activeAlarm) markReminderAction(activeAlarm.id); }}
           />
         )}
       </AnimatePresence>
@@ -7034,50 +6961,6 @@ function LoginPlan({ lines }: { lines: string[] }) {
         ))}
       </div>
     </aside>
-  );
-}
-
-function AlarmBar({ alarm: current, snoozeMinutes = 5, lateAfterMinutes = 5, onComplete, onSnooze, onDismiss, onDial }: any) {
-  // عدّاد بسيط: يبيّن إمتى التذكير اتسجّل «متأخر» (٥ دقايق بلا إجراء)
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 15000);
-    return () => clearInterval(t);
-  }, []);
-  const waitedMin = Math.max(0, Math.floor((now - (current.firedAt || now)) / 60000));
-  const late = waitedMin >= lateAfterMinutes;
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: -60 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -60 }}
-      className="alarm-float fixed left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4"
-    >
-      <div className={`panel p-4 ${late ? 'rc-panel is-late' : ''}`}>
-        <div className="flex items-start gap-3">
-          <span className="rc-bell"><Bell className="w-4.5 h-4.5" /></span>
-          <div className="flex-1 min-w-0">
-            <p className="font-bold text-[var(--text-strong)] text-sm">{current.title}</p>
-            <p className="text-[var(--text-muted)] text-xs mt-1">{current.body}</p>
-            <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
-              <span className={`rc-chip${late ? ' is-late' : ''}`}>
-                {late ? `متأخر — ${waitedMin} د بلا إجراء` : 'حان الموعد'}
-              </span>
-              {current.phone && (
-                <a href={`tel:${current.phone}`} className="rc-action" dir="ltr"
-                  onClick={() => onDial?.()}>اتصال</a>
-              )}
-              <button type="button" onClick={onSnooze} className="rc-action">تأجيل {snoozeMinutes} د</button>
-              <button type="button" onClick={onComplete} className="rc-action is-done">تم</button>
-            </div>
-          </div>
-          <button type="button" onClick={onDismiss} title="إغلاق" className="rc-close">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-    </motion.div>
   );
 }
 

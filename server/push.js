@@ -335,8 +335,8 @@ function buildPushHandler({ getKeys, loadDb, saveDb, stateStore = null, auth = n
           saveState,
           logger,
           minIntervalMs: 20000,
-          // جهاز الطالب نفسه عنده تنبيه داخل الصفحة، فلا نكرر له نفس التذكير
-          skipReminderUserIds: session ? [session.u] : [],
+          // مفيش تنبيه داخل الصفحة خلاص: التذكير يوصل كإشعار خارجي للجهاز،
+          // والعلامة في state.reminders تمنع تكراره بعد كده (مجزول أو جهاز تاني).
         });
         return send(res, 200, { ok: true, ...result });
       }
@@ -372,7 +372,6 @@ async function processPushTick({
   saveState,
   logger = console,
   minIntervalMs = 0,
-  skipReminderUserIds = [],
   systemAlerts = [],
 }) {
   const keys = await getKeys();
@@ -437,8 +436,6 @@ async function processPushTick({
   let reminderCount = 0;
   for (const reminder of data.crm_reminders || []) {
     if (reminder.isCompleted || !reminder.dateTime) continue;
-    // صاحب التذكير اللي طلب الإرسال بنفسه عنده تنبيه داخل الصفحة — لا نكرره له
-    if (skipReminderUserIds.includes(reminder.userId)) continue;
     const dueAt = Date.parse(reminder.dateTime);
     if (Number.isNaN(dueAt)) continue;
     if (dueAt > now || now - dueAt > RECENT_MS) continue;
@@ -450,7 +447,7 @@ async function processPushTick({
       phone: reminder.clientPhone || '',
       tag: `reminder-${reminder.id}`,
       id: reminder.id,
-      url: `/#alarm=${reminder.id}`,
+      url: '/',
     });
     if (!delivered) continue; // لا أجهزة/فشل مؤقت: يُعاد في الدورة القادمة بلا ضياع
     state.reminders[reminder.id] = now;

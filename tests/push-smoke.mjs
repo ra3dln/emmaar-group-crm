@@ -227,20 +227,22 @@ try {
     dateTime: iso(-1), isCompleted: false,
   });
   const beforeFlush = received.length;
+  // نُصفّر وقت آخر تشغيل حتى لا يُحجب النداء بفاصل الـ٢٠ ثانية
+  pushState = { ...pushState, lastRunAt: 0 };
   const flush = await call('/api/push/flush', { method: 'POST', cookie });
   check(
-    'جهاز الطالب لا يستقبل إشعاراً مكرراً لتذكيره هو',
-    flush.status === 200 && flush.json.reminders === 0 && received.length === beforeFlush,
+    'الإرسال الفوري يوصل تذكير صاحب الجهاز نفسه (إشعار خارجي، مفيش بطاقة داخلية)',
+    flush.status === 200 && flush.json.reminders === 1 && received.length === beforeFlush + 1,
     JSON.stringify(flush.json)
   );
   const flushAgain = await call('/api/push/flush', { method: 'POST', cookie });
   check('النداء المتكرر خلال ٢٠ ثانية لا يضرب القاعدة', flushAgain.json?.skipped === true, JSON.stringify(flushAgain.json));
 
-  // المجدول (أو جهاز آخر) يرسل نفس التذكير لأنه لم يُستهلك من جهاز الطالب
+  // التذكير اتعلّم مُرسَلاً من نفس النداء — المجدول ما يبعتهوش تاني (مرة واحدة بس)
   const afterFlush = await processPushesOnce({ storage, vapidStore, stateStore });
   check(
-    'التذكير لم يُعلَّم كمُرسَل من جهاز الطالب — وصله من المسار العادي',
-    afterFlush.reminders === 1 && received.length === beforeFlush + 1,
+    'نفس التذكير ما يتكررش من المجدول بعد إرساله فوراً',
+    afterFlush.reminders === 0 && received.length === beforeFlush + 1,
     JSON.stringify(afterFlush)
   );
 
@@ -253,6 +255,17 @@ try {
   check('ضغط الجرس يعلّم الرسائل مقروءة في السجل المشترك', /openNotifyCenter[\s\S]{0,400}handleMarkRead\(direct\)/.test(app));
   check('تعليم الرسائل مقروءة يُرفع للسيرفر', /handleMarkRead[\s\S]{0,900}pushKey\('crm_messages'\)/.test(app));
   check('كل جهاز مفتوح يطلب الإرسال المستحق دورياً', app.includes('flushPush()') && app.includes("setInterval(run, 60_000)"));
+  // ===== التذكير: إشعار خارجي فقط — مفيش تنبيه داخل البرنامج =====
+  check('مفيش بطاقة تنبيه تذكير داخل البرنامج', !app.includes('function AlarmBar') && !app.includes('<AlarmBar'));
+  check(
+    'التذكير المستحق يروح إشعار خارجي من السيرفر لما الجهاز مشترك',
+    /pushIsOn === 'subscribed'[\s\S]{0,300}flushPush\(true\)/.test(app)
+  );
+  check(
+    'ولو الجهاز مش مشترك: إشعار محلي مرة واحدة محفوظة',
+    /readNotifiedIds\(\)[\s\S]{0,900}writeNotifiedIds\(notified\)/.test(app) && app.includes("reminderNotifiedKey = 'crm_notified'")
+  );
+  check('إشعار التذكير يفتح التطبيق بلا رابط منبه داخلي', serverPushSrc.includes("url: '/',"));
   check('مركز الإشعارات يعرض تشخيص الإشعارات الخارجية', app.includes('pushHealth') && app.includes('الإشعارات الخارجية'));
   check('إعادة الاشتراك عند مفتاح قديم (InvalidStateError)', pushSrc.includes('stale.unsubscribe()'));
   check('ملف العامل يعرض الإشعار بمحاولة آمنة', swSrc.includes('showSafe') && swSrc.includes('requireInteraction'));
