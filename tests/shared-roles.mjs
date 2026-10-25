@@ -30,6 +30,9 @@ const sales = { id: 'sales-1', username: 'ahmed', name: 'أحمد', role: 'sales
 const sales2 = { id: 'sales-2', username: 'sara', name: 'سارة', role: 'sales', isActive: true };
 const lead = { id: 'lead-1', username: 'mostafa', name: 'مصطفى', role: 'supervisor', team: 'A', isActive: true };
 const leadNoTeam = { id: 'lead-2', username: 'haidy', name: 'هايدي', role: 'supervisor', team: '', isActive: true };
+// إداري وسيلز في نفس الوقت (فريدة): إداري في القاعدة، يستقبل أرقاماً، ويظهر «CEO»
+// بلا أي لقب «مطوّر» — وهذا الفرق الوحيد عن حساب المطوّر (محمد).
+const exec = { id: 'exec-1', username: 'farida', name: 'فريدة', role: 'admin', receivesLeads: true, dataScope: 'own', isActive: true };
 const all = [ceo, dev, sales, sales2, lead, leadNoTeam];
 
 // ===== ١) مين حساب المطوّر =====
@@ -44,6 +47,13 @@ check('السيلز سلوكه سيلز', effectiveRoleOf(sales) === 'sales');
 check('حساب المطوّر مش من غرفة المدراء', isManagerAccount(dev) === false);
 check('الإدارة وقائد الفريق من غرفة المدراء', isManagerAccount(ceo) === true && isManagerAccount(lead) === true);
 check('صلاحيات الإدارة (إدارة الحسابات) باقية للمطوّر', isAdminAccount(dev) === true);
+
+// ===== الإداري الذي يعمل سيلزاً (فريدة): سلوك سيلز، لقب CEO، بلا «مطوّر» =====
+check('الإداري الذي يستقبل أرقاماً سلوكه سيلز (يظهر في الفيدباك والحضور والتوزيع)', effectiveRoleOf(exec) === 'sales');
+check('ما يتكتبش عليه لقب «مطوّر»', isDeveloperAccount(exec) === false);
+check('صلاحياته الإدارية باقية (رتبته admin)', isAdminAccount(exec) === true);
+check('نطاق بياناته «بياناته فقط» كما اختار', [...(dataScopeOf(exec, all) || [])].join(',') === 'exec-1');
+check('الإداري الذي يعمل سيلزاً يستقبل أرقاماً', isAssignableSales(exec) === true);
 
 // ===== ٣) نطاق البيانات =====
 check('الإدارة (CEO) ترى كل الشركة', dataScopeOf(ceo, all) === null);
@@ -93,6 +103,19 @@ check(
   'لوحة الفيدباك اليومي تعرض أرقام المندوب حتى اللي مالها كومنت',
   !/filter\(\(entry\) => entry\.items\.length > 0\)/.test(app) &&
     /const all = Array\.from\(map\.values\(\)\)/.test(app)
+);
+check(
+  'بطاقة الفيدباك تكتب CEO للإداري الذي يعمل سيلزاً و«سيلز» للمطوّر',
+  /isDeveloperAccount\(user\) \? 'سيلز' : user\.role === 'admin' \? 'CEO'/.test(app)
+);
+check('عنوان الإدارة في الشريط «إعمار جروب»', app.includes('إعمار جروب — إدارة العملاء'));
+
+// ===== التوزيع/الإلغاء يظهر فوراً بلا ريفرش =====
+// لوحة التوزيع كانت تتحدّث بعد المزامنة فقط (fullLeads)، فيبدو توزيع الرقم على
+// سيلز آخر أو سحبه من العهدة كأنه لم يُحفظ حتى يعمل المستخدم ريفرش.
+check(
+  'تعديل التوزيع يحدّث لوحات الإدارة فوراً (بلا ريفرش)',
+  /localStorage\.setItem\('crm_assigned_leads'[\s\S]{0,700}if \(currentUser\?\.role !== 'sales'\) setFullLeads\(next\);/.test(app)
 );
 
 console.log(`\n✅ نجحت ${passed} فحوصات لحساب المطوّر`);

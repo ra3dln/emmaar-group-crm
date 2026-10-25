@@ -195,7 +195,7 @@ try {
     'نطاق البيانات مصدره واحد (dataScopeOf) ويحترم إعداد الحساب الصريح',
     roles.includes('export const dataScopeOf =') &&
       roles.includes("if (user.dataScope === 'all') return null;") &&
-      /const ownOnly = user\.dataScope === 'own' \|\| isDeveloperAccount\(user\);/.test(roles) &&
+      /const ownOnly = user\.dataScope === 'own' \|\| worksAsSales\(user\);/.test(roles) &&
       /const myScopeIds: Set<string> \| null = dataScopeOf\(currentUser, allUsers\);/.test(app)
   );
   check(
@@ -215,7 +215,7 @@ try {
   check(
     'حساب المطوّر محدود النطاق (بياناته هو) والإدارة (CEO) ترى كل الأرقام',
     /isDeveloperAccount\(user\) \? 'System Developer'/.test(app) &&
-      /const ownOnly = user\.dataScope === 'own' \|\| isDeveloperAccount\(user\);/.test(roles) &&
+      /const ownOnly = user\.dataScope === 'own' \|\| worksAsSales\(user\);/.test(roles) &&
       /if \(!ownOnly && user\.role === 'admin'\) return null;/.test(roles)
   );
   check(

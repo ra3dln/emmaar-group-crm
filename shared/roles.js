@@ -25,8 +25,17 @@ export const isDeveloperAccount = (user) => {
   return !!name && DEV_USERNAMES.includes(name);
 };
 
+// ===== إداري وسيلز في نفس الوقت =====
+// إداري اختار صراحةً أنه يستقبل أرقاماً (receivesLeads، مثل حساب فريدة).
+// سلوكه في القوائم والفيدباك والحضور والنطاق سلوك سيلز (يظهر بلقبه الحقيقي CEO)،
+// لكن صلاحياته الإدارية وقوائمه تبقى كما هي لأنه role = admin.
+// ميزة عن `developer`: لا يُكتب له لقب «مطوّر» في أي مكان — واللقب يتبع رتبته.
+export const worksAsSales = (user) =>
+  isDeveloperAccount(user) ||
+  (String(user?.role || '') === 'admin' && user?.receivesLeads === true);
+
 // الرتبة التي يتصرف بها الحساب فعلياً (وليس رتبته المخزَّنة)
-export const effectiveRoleOf = (user) => (isDeveloperAccount(user) ? 'sales' : String(user?.role || 'sales'));
+export const effectiveRoleOf = (user) => (worksAsSales(user) ? 'sales' : String(user?.role || 'sales'));
 
 // مدير حقيقي في غرفة المدراء وفي إشعارات الإدارة
 export const isManagerAccount = (user) => {
@@ -50,7 +59,7 @@ export const isAdminAccount = (user) => String(user?.role || '') === 'admin';
 export const dataScopeOf = (user, allUsers = []) => {
   if (!user || !user.id) return new Set();
   if (user.dataScope === 'all') return null;
-  const ownOnly = user.dataScope === 'own' || isDeveloperAccount(user);
+  const ownOnly = user.dataScope === 'own' || worksAsSales(user);
   if (!ownOnly && user.role === 'admin') return null;
   if (!ownOnly && user.role === 'supervisor' && String(user.team || '').trim()) {
     return new Set([

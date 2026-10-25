@@ -34,9 +34,16 @@ check('اسم التطبيق المثبّت على آيفون MSA CRM', /apple-m
 check('اسم المانيفست الكامل MSA CRM', manifest.name.startsWith('MSA CRM'));
 check('الاسم المختصر على شاشة الهاتف MSA CRM', manifest.short_name === 'MSA CRM');
 check('اسم التطبيق داخل الواجهة MSA CRM', app.includes('MSA CRM'));
+// اسم التطبيق «MSA CRM»، و«إعمار جروب» مسموح مرة واحدة فقط كمسمّى إدارة الشركة
+// في شريط الحساب الإداري — وليس علامة للتطبيق ولا في الصفحة ولا المانيفست.
+const ADMIN_LABEL = 'إعمار جروب — إدارة العملاء';
 check(
-  'لا أثر للاسم القديم «إعمار/Emaar» في الواجهة أو الصفحة أو المانيفست',
-  !/إعمار|Emaar|emaar/i.test(html) && !/إعمار|Emaar|emaar/i.test(manifestText) && !/Emaar CRM|إعمار جروب/.test(app)
+  'لا أثر للاسم القديم «Emaar» في الواجهة أو الصفحة أو المانيفست',
+  !/Emaar|emaar/i.test(html) && !/Emaar|emaar/i.test(manifestText) && !/Emaar CRM/.test(app)
+);
+check(
+  '«إعمار جروب» مكتوب مرة واحدة فقط كمسمّى الإدارة',
+  app.split(ADMIN_LABEL).length === 2
 );
 
 // ===== ٢) المانيفست مربوط برابط جديد حتى لا يُقرأ من كاش قديم =====

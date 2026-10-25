@@ -43,7 +43,7 @@ import {
   type AutoAssignRule,
   type LeadAssignment,
 } from '../shared/autoAssign.js';
-import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount } from '../shared/roles.js';
+import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount, worksAsSales } from '../shared/roles.js';
 import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor, LEAD_CLIENT_ID_PREFIX } from '../shared/leadClients.js';
 import {
   cleanCommentText,
@@ -413,7 +413,7 @@ const initializeSystem = () => {
         id: 'admin-001',
         username: 'admin',
         password: 'admin123',
-        name: 'إدارة MSA CRM',
+        name: 'إدارة إعمار جروب',
         phone: '',
         role: 'admin',
         team: '',
@@ -1825,8 +1825,9 @@ function App() {
     // صفحة الأرقام جوه الرئيسية: لو خرجنا للتبويب تاني نرجع للوحة الأرقام
     if (activeTab !== 'dashboard') setLeadsOpen(false);
     // لو تغيّرت صلاحية الحساب أثناء فتح الصفحة، نرجع لتبويب مسموح بدل شاشة فاضية
-    const devMenus = !!(currentUser as User).developer && !impersonator;
-    const guardRole = impersonator && (currentUser as User).developer ? 'sales' : currentUser.role;
+    // قوائم السلبرز + الإدارة معاً لكل من يعمل سيلزاً (المطوّر أو إداري يستقبل أرقاماً)
+    const devMenus = worksAsSales(currentUser) && !impersonator;
+    const guardRole = impersonator && worksAsSales(currentUser) ? 'sales' : currentUser.role;
     if (!isTabAllowed(guardRole, activeTab, devMenus)) {
       setActiveTab(guardRole === 'sales' || devMenus ? 'dashboard' : 'admin-users');
       return;
@@ -1836,7 +1837,7 @@ function App() {
     } catch {
       /* التخزين قد يكون معطّلاً — التنقل يعمل عادي بلا حفظ */
     }
-  }, [activeTab, currentUser?.id, currentUser?.role, (currentUser as User)?.developer, impersonator?.id]);
+  }, [activeTab, currentUser?.id, currentUser?.role, (currentUser as User)?.developer, (currentUser as User)?.receivesLeads, impersonator?.id]);
 
   // السيرفر رفض أي طلب بيانات (لا جلسة) => نخفي كل شيء ونعرض شاشة الدخول فوراً
   useEffect(() => {
@@ -2125,6 +2126,10 @@ function App() {
     localStorage.setItem('crm_assigned_leads', JSON.stringify(next));
     const scope = dataScopeOf(currentUser, JSON.parse(localStorage.getItem('crm_users') || '[]'));
     setAssignedLeads(scope ? next.filter((l: AssignedLead) => scope.has(String(l.salesId || ''))) : next);
+    // اللوحات الإدارية (توزيع الأرقام والحصص) تقرأ fullLeads: كانت تتحدّث بعد المزامنة
+    // فقط، فيبدو التوزيع اليدوي وإلغاء التوزيع كأنهما لم يُحفَظا حتى يعمل ريفرش.
+    // نفس شرط loadData: أي حساب غير سيلز يحمل المخزون الكامل.
+    if (currentUser?.role !== 'sales') setFullLeads(next);
     // نُرجع وعد الرفع حتى ينتظر من يحتاج إشعاراً بعد وصول التوزيع للسيرفر
     return pushKey('crm_assigned_leads');
   };
@@ -2133,7 +2138,7 @@ function App() {
   // قبل كده كان العدّاد يفضل مكتوب بعد الدخول، لأن الأرقام ما كانتش تُعلَّم «تم العرض».
   useEffect(() => {
     if (!currentUser || activeTab !== 'clients') return;
-    if (!(currentUser.role === 'sales' || isDeveloperAccount(currentUser))) return;
+    if (!(currentUser.role === 'sales' || effectiveRoleOf(currentUser) === 'sales')) return;
     const pending = assignedLeads.filter(
       (l: AssignedLead) => l.salesId === currentUser.id && l.status === 'new'
     );
@@ -2180,7 +2185,7 @@ function App() {
     setSelectedClient(null);
     setCallClient(null);
     setSelectedUserFeedback(null);
-    setActiveTab(target.role === 'sales' || target.developer ? 'dashboard' : 'admin-users');
+    setActiveTab(target.role === 'sales' || worksAsSales(target) ? 'dashboard' : 'admin-users');
     setLoginAnimation(target);
   };
 
@@ -2681,11 +2686,12 @@ function App() {
   // مجموعات القائمة الجانبية + عنوان الصفحة الحالية + الحرف الأول من الاسم داخل الصورة الرمزية
   // أثناء «الدخول لحساب» من الإدارة يظهر لحساب المطوّر قوائم السيلز فقط
   // (الإدارة تشوفه زي أي مندوب)، أما صاحبه فيرى القوائمتين.
-  const developerMenus = !!(currentUser as User).developer && !impersonator;
-  const menuRole = impersonator && (currentUser as User).developer ? 'sales' : currentUser.role;
+  // كل من يعمل سيلزاً يرى قوائم السلبرز والإدارة معاً: المطوّر، أو إداري يستقبل أرقاماً
+  const developerMenus = worksAsSales(currentUser) && !impersonator;
+  const menuRole = impersonator && worksAsSales(currentUser) ? 'sales' : currentUser.role;
   const navGroups = getTabGroups(menuRole, developerMenus);
-  // حساب المطوّر يرى واجهات السيلز والإدارة معاً
-  const isDeveloper = !!(currentUser as User).developer;
+  // يرى واجهات السيلز والإدارة معاً (بلا لقب «مطوّر» — اللقب يتبع الرتبة)
+  const isDeveloper = worksAsSales(currentUser);
   const isSalesView = currentUser.role === 'sales' || isDeveloper;
   const activeTabMeta = navGroups.flatMap((g) => g.items).find((t) => t.id === activeTab);
   const userInitial = (currentUser.name || '؟').trim().charAt(0);
@@ -3161,7 +3167,7 @@ function App() {
             <div className="min-w-0">
               <h1 className="text-[13px] font-semibold text-[var(--text-strong)] leading-tight truncate">MSA CRM</h1>
               <p className="text-[10.5px] text-[var(--text-dim)] truncate">
-                {(currentUser as User).developer ? 'MSA CRM — System Developer' : 'MSA CRM — إدارة العملاء'}
+                {(currentUser as User).developer ? 'MSA CRM — System Developer' : 'إعمار جروب — إدارة العملاء'}
               </p>
             </div>
           </div>
@@ -4336,11 +4342,11 @@ function isTabAllowed(role: string, tab: string, developer = false): boolean {
 }
 
 function startTabFor(user: User): TabType {
-  const fallback: TabType = user.role === 'sales' || user.developer ? 'dashboard' : 'admin-users';
+  const fallback: TabType = user.role === 'sales' || worksAsSales(user) ? 'dashboard' : 'admin-users';
   try {
     const saved = localStorage.getItem(tabKeyOf(user.id));
     if (!saved) return fallback;
-    return isTabAllowed(user.role, saved, !!user.developer) ? (saved as TabType) : fallback;
+    return isTabAllowed(user.role, saved, worksAsSales(user)) ? (saved as TabType) : fallback;
   } catch {
     return fallback;
   }
@@ -8813,8 +8819,9 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, leads = [], callLog
                 </div>
                 <div>
                   <h4 className="font-bold text-[var(--text-strong)]">{user.name}</h4>
-                  {/* الرتبة السلوكية: الإداري الذي يعمل سيلزاً (محمد/فريدة) يظهر «سيلز» */}
-                  <p className="text-sm text-[var(--text-muted)]">{effectiveRoleOf(user) === 'supervisor' ? 'مشرف' : 'سيلز'}</p>
+                  {/* الرتبة الحقيقية: الإداري الذي يعمل سيلزاً (فريدة) يظهر «CEO»،
+                      وحساب المطوّر يبقى يظهر «سيلز» كما هو. */}
+                  <p className="text-sm text-[var(--text-muted)]">{isDeveloperAccount(user) ? 'سيلز' : user.role === 'admin' ? 'CEO' : effectiveRoleOf(user) === 'supervisor' ? 'مشرف' : 'سيلز'}</p>
                 </div>
               </div>
               
@@ -11599,7 +11606,8 @@ function StatusBadge({ status }: { status: Client['status'] }) {
 function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
   // حساب «المطوّر» إداري في القاعدة لكنه يعمل سيلزاً — فالعميل يُسجّل باسمه هو،
   // بلا قائمة اختيار مندوب (كانت تطلب منه اختيار سيلز قبل الحفظ).
-  const isAdmin = currentUser?.role !== 'sales' && !isDeveloperAccount(currentUser);
+  // الإداري الذي يعمل سيلزاً (المطوّر/فريدة) يسجّل العميل باسمه هو بلا قائمة مندوبين
+  const isAdmin = currentUser?.role !== 'sales' && !worksAsSales(currentUser);
   // المدير يضيف العميل لمندوب بعينه حتى يظهر للفريق (الإدارة مالها تبويب عملاء خاص)
   const reps = (users || []).filter((u: User) => ['sales', 'supervisor'].includes(effectiveRoleOf(u)));
   const [form, setForm] = useState({
