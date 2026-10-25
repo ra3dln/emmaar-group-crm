@@ -675,6 +675,8 @@ const addClientActivity = (
         text,
         at: nowIso,
         by: by || '',
+        // كاتب الكومنت بالمعرّف كمان — فيدباك اليومي يلاقي كومنتاته حتى لو الاسم اتغيّر
+        ...(opts?.authorId ? { authorId: opts.authorId } : {}),
         // حالة الفيدباك تسافر مع الحدث نفسه فتظهر في الشريط وبجوار الكومنت
         ...(opts?.status ? { status: opts.status } : {}),
         // سبب الإلغاء يُحفظ مع الحدث **وعلى العميل** — فلتر القائمة يقرأه مباشرة
@@ -3466,7 +3468,11 @@ function App() {
           {/* «الفيدباك اليومي لكل سيلز» = لوحة إدارة: تُبنى على مخزون الشركة الكامل،
               لا على نطاق الحساب (وإلا تظهر فاضية لحساب إداري محدود النطاق مثل المطوّر). */}
           {activeTab === 'admin-feedback' && currentUser.role !== 'sales' && <AdminFeedbackView
-            users={(currentUser.role === 'admin' ? users : scopedUsers).filter((u: User) => u.role === 'sales' || u.role === 'supervisor')}
+            users={(currentUser.role === 'admin' ? users : scopedUsers).filter((u: User) => {
+              // حساب المطوّر إداري في القاعدة لكنه بيشتغل سيلز — لازم يظهر معاهم
+              const role = effectiveRoleOf(u);
+              return role === 'sales' || role === 'supervisor';
+            })}
             dailyFeedbacks={currentUser.role === 'admin' ? fullFeedbacks : scopedFeedbacks}
             clients={currentUser.role === 'admin' ? fullClients : scopedClients}
             callLogs={currentUser.role === 'admin' ? fullCallLogs : scopedCallLogs}
@@ -5603,7 +5609,7 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
     for (const log of callLogs) {
       // كلام المندوب بس — اللوج الآلي (من غير كلام) ما بيظهرش
       const logText = cleanCommentText(log?.comment);
-      if (!logText || isSystemOnlyText(logText)) continue;
+      if (!logText || (isSystemOnlyText(logText) && !isCallResultText(logText))) continue;
       out.push({
         id: log.id,
         client: log.clientName || '',
@@ -7013,7 +7019,9 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
       (result === 'no-answer' ? NO_ANSWER_COMMENT : '') ||
       (statusId === 'cancellation' ? cancelReasonLabelOf(cancelReason) : '');
     if (!text) return;
-    onSave({ result, comment: text, status: statusId, cancelReason, nextCallAt });
+    // الإلغاء ما يسجّلش موعد اتصال قادم — مفيش تواصل تاني ولا تذكير
+    const nextAt = statusId === 'cancellation' ? '' : nextCallAt;
+    onSave({ result, comment: text, status: statusId, cancelReason, nextCallAt: nextAt });
     setDone(true);
   };
 
@@ -7094,32 +7102,41 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
                   setStatus(id);
                   // الحالة غير الإلغاء تمسح أي سبب قديم
                   setCancelReason('');
-                  if (id === 'cancellation') setComment('');
+                  if (id === 'cancellation') {
+                    // إلغاء = خلاص مش هيتواصل معاه تاني: مفيش كومنت قديم ولا تذكير
+                    setComment('');
+                    setNextCallAt('');
+                  }
                 }}
               />
             </div>
 
-            {/* ===== موعد الإجراء القادم (يتسجّل تذكير في وقته) ===== */}
-            <div className="eg-row eg-date-row">
-              <Calendar className="w-4.5 h-4.5 shrink-0 text-[var(--text-muted)]" />
-              <input type="datetime-local" value={nextCallAt} dir="ltr" className="eg-date-input"
-                onChange={(e) => setNextCallAt(e.target.value)} />
-              {nextCallAt && (
-                <button type="button" className="eg-clear" title="Clear date" onClick={() => setNextCallAt('')}>
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
+            {/* ===== موعد الإجراء القادم (يتسجّل تذكير في وقته) =====
+                إلغاء = مفيش تواصل تاني، فمفيش موعد ولا تذكير. */}
+            {status !== 'cancellation' && (
+              <>
+                <div className="eg-row eg-date-row">
+                  <Calendar className="w-4.5 h-4.5 shrink-0 text-[var(--text-muted)]" />
+                  <input type="datetime-local" value={nextCallAt} dir="ltr" className="eg-date-input"
+                    onChange={(e) => setNextCallAt(e.target.value)} />
+                  {nextCallAt && (
+                    <button type="button" className="eg-clear" title="Clear date" onClick={() => setNextCallAt('')}>
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
 
-            <div className="eg-quick">
-              {[['After 1hr', 60], ['After 2hr', 120], ['Tomorrow', 1440], ['Next week', 10080]].map(([label, mins]) => (
-                <button key={label as string} type="button"
-                  onClick={() => { const d = new Date(); d.setMinutes(d.getMinutes() + (mins as number)); setNextCallAt(toLocalInput(d)); }}
-                  className="eg-quick-btn">
-                  {label as string}
-                </button>
-              ))}
-            </div>
+                <div className="eg-quick">
+                  {[['After 1hr', 60], ['After 2hr', 120], ['Tomorrow', 1440], ['Next week', 10080]].map(([label, mins]) => (
+                    <button key={label as string} type="button"
+                      onClick={() => { const d = new Date(); d.setMinutes(d.getMinutes() + (mins as number)); setNextCallAt(toLocalInput(d)); }}
+                      className="eg-quick-btn">
+                      {label as string}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
 
             {/* ===== تم الرد / لم يرد ===== */}
             <div className="eg-seg">
@@ -7173,11 +7190,6 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
                       {c.text && <p className="eg-comment-text">{c.text}</p>}
                       {c.nextAt && <p className="eg-comment-next">Next Action : {c.nextAt}</p>}
                     </div>
-                    {c.result && (
-                      <span className={`eg-result ${c.result === 'answered' ? 'is-yes' : 'is-no'}`}>
-                        {c.result === 'answered' ? 'Answered' : 'No Answer'}
-                      </span>
-                    )}
                   </div>
                 ))
               )}
@@ -8284,7 +8296,8 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, callLogs = [] }: a
   // اللوج الآلي لوحده (من غير كلام) ما بيظهرش.
   for (const l of callLogs || []) {
     const text = cleanCommentText(l?.comment);
-    if (!text || isSystemOnlyText(text)) continue;
+    // نص نتيجة الاتصال (No answer / تم الرد) كومنت حقيقي — ما يتشالش
+    if (!text || (isSystemOnlyText(text) && !isCallResultText(text))) continue;
     const key = norm(l?.clientPhone) || `name:${normalizeArabicText(l?.clientName || '')}`;
     const entry: any = {
       id: `log-${l?.id}`,
@@ -8304,7 +8317,7 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, callLogs = [] }: a
     const unique: any[] = [];
     for (const f of list) {
       const text = cleanCommentText(f?.feedback);
-      if (!text || isSystemOnlyText(text)) continue;
+      if (!text || (isSystemOnlyText(text) && !isCallResultText(text))) continue;
       const sig = commentSignature(text, f?.date || f?.createdAt);
       if (seen.has(sig)) continue;
       seen.add(sig);
@@ -8680,7 +8693,12 @@ function ReportsView({ clients, feedbacks, reminders }: any) {
 
 // Admin Feedback View - Show feedback for each sales person
 function AdminFeedbackView({ users, dailyFeedbacks, clients, callLogs = [], onSelect }: any) {
-  const salesUsers = users.filter((u: User) => u.role === 'sales' || u.role === 'supervisor');
+  // كل من يعمل «سيلز» فعلياً — بما فيهم حساب المطوّر (role في القاعدة admin لكن
+  // سلوكه سيلز)، وإلا كان حسابه غايباً عن لوحة الفيدباك اليومي وكومنتاته كمان.
+  const salesUsers = users.filter((u: User) => {
+    const role = effectiveRoleOf(u);
+    return role === 'sales' || role === 'supervisor';
+  });
   const [showComments, setShowComments] = useState(false);
   const totalComments = callLogs.filter((l: CallLog) => l.comment).length +
     clients.reduce((acc: number, c: Client) => acc + (c.activities || []).filter((a: ClientActivity) => /feedback|call|comment|note/i.test(`${a.type}`)).length, 0);
@@ -13176,16 +13194,27 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
   // عملاؤه — وفيدباكه المكتوب على عميل مسجَّل باسم حساب تاني.
   // الفيدباك يُنسب لكاتبه (activity.by) لا لصاحب العميل: كان كومنت المندوب على
   // عميل مسجَّل باسم الإدارة يظهر كأن الإدارة كتبته ولا يظهر في كارت المندوب إطلاقاً.
+  // مطابقة اسم الكاتب بعد توحيد الحروف والمسافات (كانت المقارنة الحرفية تُضيّع
+  // كومنتات السيلز لو الاسم مكتوب بشكل مختلف بمسافة أو همزة)
+  const normName = (v: any) => normalizeArabicText(String(v || '')).replace(/\s+/g, ' ').trim();
+  const myName = normName(userName);
   for (const c of clients || []) {
     const isOwner = c.userId === userId || c.assignedTo === userId;
-    // كلام المندوب فقط: لا لوجات (اتصال/واتساب/تذكير) ولا كومنت مكرر
-    const acts = commentActivitiesOf(c).filter(
-      (a: any) => isOwner || (!!userName && String(a.by || '').trim() === userName)
-    );
+    // كلام المندوب فقط: لا لوجات (اتصال/واتساب/تذكير) ولا كومنت مكرر.
+    // النسبة: صاحب العميل، أو معرّف الكاتب، أو اسمه (بعد التوحيد).
+    const acts = (Array.isArray(c.activities) ? c.activities : []).filter((a: any) => {
+      if (!isCommentActivity(a)) return false;
+      if (isOwner) return true;
+      if (a.authorId && String(a.authorId) === String(userId)) return true;
+      return !!myName && normName(a.by) === myName;
+    });
     if (!isOwner && !acts.length) continue;
     const entry = ensure(norm(c.phone) || `id:${c.id}`, { ...c, incoming: false });
     for (const a of acts) {
-      entry.items.push({ id: a.id, text: a.text, at: a.at, kind: 'كومنت', status: a.status || '' });
+      const text = cleanCommentText(a.text);
+      // نص نتيجة الاتصال (No answer / تم الرد) كومنت حقيقي — ما يتشالش
+      if (!text || (isSystemOnlyText(text) && !isCallResultText(text))) continue;
+      entry.items.push({ id: a.id, text, at: a.at, kind: 'كومنت', status: a.status || '' });
     }
   }
 
@@ -13204,7 +13233,7 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
       (!!userName && String(l?.salesName || '').trim() === String(userName).trim());
     if (!mine) continue;
     const text = cleanCommentText(l?.comment);
-    if (!text || isSystemOnlyText(text)) continue;
+    if (!text || (isSystemOnlyText(text) && !isCallResultText(text))) continue;
     const key = norm(l?.clientPhone) || `log:${l?.id}`;
     const entry = ensure(key, {
       name: l?.clientName,
@@ -13258,7 +13287,7 @@ function mergeDailyFeedbackCards(
     if (!card || card.userId !== userId || !String(card.feedback || '').trim()) continue;
     // نص النظام الآلي (لوج) ما بيظهرش — كلام السيلز بس
     const cardText = cleanCommentText(card.feedback);
-    if (!cardText || isSystemOnlyText(cardText)) continue;
+    if (!cardText || (isSystemOnlyText(cardText) && !isCallResultText(cardText))) continue;
     const key = normPhone(card.clientPhone) || `fb:${card.id}`;
     let target: FeedbackNumber | undefined = nums.find((n: FeedbackNumber) => n.key === key);
     if (!target) {

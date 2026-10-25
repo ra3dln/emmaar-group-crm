@@ -40,6 +40,8 @@ export interface ClientActivity {
   text: string;
   at: string;
   by?: string;
+  // معرّف كاتب الكومنت — يُنسب له الفيدباك اليومي حتى لو تغيّر الاسم المعروض
+  authorId?: string;
   // حالة الفيدباك المختارة من الشريط (follow up / meeting / done deal …) — اختيارية
   // حتى تبقى الأحداث القديمة التي لا حالة لها صالحة كما هي.
   status?: string;

@@ -159,6 +159,30 @@ check(
   /\.ct-phone button \{[\s\S]{0,300}cursor: pointer/.test(css)
 );
 
+// ===== ٧ب) الكومنت بيعرض الحالة المختارة بس (مفيش Answered / No Answer) =====
+check(
+  'آخر التعليقات ما بتكتبش Answered / No Answer على الكومنت',
+  !/eg-result/.test(modal) && !/c\.result === 'answered' \? 'Answered'/.test(modal)
+);
+check(
+  'آخر التعليقات بتعرض الحالة المختارة من الشريط',
+  /FEEDBACK_STATUS_BY_ID\[c\.status\]/.test(modal)
+);
+
+// ===== ٧ج) الإلغاء: مفيش موعد اتصال ولا تذكير =====
+check(
+  'اختيار Cancellation بيخفي حقل التاريخ وأزرار المواعيد السريعة',
+  /status !== 'cancellation' && \([\s\S]{0,600}eg-date-row[\s\S]{0,900}eg-quick/.test(modal)
+);
+check(
+  'الإلغاء ما يبعتش موعد اتصال قادم للتذكير',
+  /statusId === 'cancellation' \? '' : nextCallAt/.test(modal)
+);
+check(
+  'اختيار الإلغاء بيمسح أي موعد كان متحدد',
+  /id === 'cancellation'[\s\S]{0,220}setNextCallAt\(''\)/.test(modal)
+);
+
 // ===== ٨) كومنت الإجراء بيظهر في «Last comments» =====
 // نص نتيجة الاتصال («No answer» / «تم الرد») كان بيتفلتر كنص نظام،
 // فالكومنت اللي بيتكتب مع Add Action ما كانش يظهر في آخر التعليقات.

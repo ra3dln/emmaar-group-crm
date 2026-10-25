@@ -178,8 +178,33 @@ check(
 );
 check(
   'فيدباك مندوب مكتوب على عميل باسم حساب تاني يُنسب لكاتبه وتظهر رقمه',
-  /String\(a\.by \|\| ''\)\.trim\(\) === userName/.test(app) &&
+  /normName\(a\.by\) === myName/.test(app) &&
+    /a\.authorId && String\(a\.authorId\) === String\(userId\)/.test(app) &&
     /salesFeedbackByNumber\(user\.id, clients, \[\], callLogs, user\.name\)/.test(app)
+);
+
+// ===== ٥) حساب المطوّر يظهر مع السيلز (كان role=admin فيختفي من اللوحة) =====
+const adminFeedback = app.slice(app.indexOf('function AdminFeedbackView'), app.indexOf('function AdminFeedbackView') + 1200);
+check(
+  'لوحة الفيدباك اليومي بتحسب الرتبة السلوكية فتشمل حساب المطوّر',
+  /role === 'sales' \|\| role === 'supervisor'/.test(adminFeedback) && /effectiveRoleOf\(u\)/.test(adminFeedback)
+);
+check(
+  'تمرير الحسابات للوحة من التطبيق يستخدم نفس القاعدة (مش u.role الحرفي)',
+  /const role = effectiveRoleOf\(u\);/.test(app) &&
+    !/filter\(\(u: User\) => u\.role === 'sales' \|\| u\.role === 'supervisor'\)\}\n\s*dailyFeedbacks=/.test(app)
+);
+
+// ===== ٦) نص نتيجة الاتصال (No answer) كومنت حقيقي في الفيدباك اليومي =====
+check(
+  'الفيدباك اليومي بيحتفظ بنص نتيجة الاتصال بدل ما يفلتره كنص نظام',
+  /isSystemOnlyText\(cardText\) && !isCallResultText\(cardText\)/.test(app) &&
+    /isSystemOnlyText\(text\) && !isCallResultText\(text\)/.test(app)
+);
+check(
+  'الكومنت بيتحفظ بمعرّف كاتبه كمان',
+  /opts\?\.authorId \? \{ authorId: opts\.authorId \}/.test(app) &&
+    /authorId\?: string/.test(fs.readFileSync('src/types.ts', 'utf8'))
 );
 
 // كل setItem على مفتاح الفيدباك لازم يتبعه رفع في نفس الدالة (نافذة 1200 حرف)
