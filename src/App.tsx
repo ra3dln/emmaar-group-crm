@@ -68,6 +68,7 @@ import {
 } from './feedbackBuckets';
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
 import { alertMapOf, clientActionState, leadAlertState, actedAfterReminder } from './reminders';
+import { installBackGuard } from './backNav';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import {
   ATTENDANCE_END_DEFAULT,
@@ -2694,6 +2695,29 @@ function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [sidebarOpen]);
+
+  // ===== زرار الرجوع في الجهاز (أو السحب من حافة الشاشة) =====
+  // المشكلة: السحب من اليمين/الشمال — أو زرار الرجوع في الأندرويد — كان بيطلع
+  // المستخدم من البرنامج خالص. دلوقتي: أول ما يفتح التطبيق بنضيف صفحة للـ history،
+  // فالرجوع بيرجع جوّه البرنامج: بيقفل آخر نافذة مفتوحة (خطوة واحدة) ويفضل
+  // المستخدم في البرنامج — بدل ما يقفله خالص.
+  const backStateRef = useRef<{ leadsOpen: boolean; statusBoard: string | null; sidebarOpen: boolean }>({
+    leadsOpen: false,
+    statusBoard: null,
+    sidebarOpen: false,
+  });
+  useEffect(() => {
+    backStateRef.current = { leadsOpen, statusBoard, sidebarOpen };
+  });
+  useEffect(() => {
+    // خطوة واحدة ورا: نقفل آخر نافذة مفتوحة، ولو مفيش نافذة نرجع بخطوة في التطبيق
+    return installBackGuard(() => {
+      if (backStateRef.current.leadsOpen) { setLeadsOpen(false); return true; }   // «الأرقام» → الرئيسية
+      if (backStateRef.current.statusBoard) { setStatusBoard(null); return true; } // صفحة الحالة → التبويب
+      if (backStateRef.current.sidebarOpen) { setSidebarOpen(false); return true; } // درج القائمة
+      return false; // مفيش حاجة تتقفل — المستخدم يفضل في البرنامج
+    });
+  }, []);
 
   // أسماء الفورمات المفعّلة في إعدادات السحب — تُغذّي القوائم المسندلة في
   // «عملاء كامبين» و«توزيع الأرقام» (قبل أي return شرطي احتراماً لقواعد الـ Hooks)
