@@ -2280,14 +2280,16 @@ function App() {
   const applyLeadOwners = (ownerOf: Map<string, string>) => {
     if (!currentUser || !ownerOf.size) return null;
     const movedAt = new Date().toISOString();
-    // `assignedAt` = وقت التوزيع: إشعار المندوب يُحسب منه لا من تاريخ وصول الرقم،
-    // فرقم قديم اتوزّع النهاردة يوصل صاحبه إشعار برضه.
+    // `assignedAt` = وقت آخر تغيير في التوزيع (توزيع أو سحب رقم من السيلز):
+    // إشعار المندوب يُحسب منه لا من تاريخ وصول الرقم، فرقم قديم اتوزّع النهاردة
+    // يوصل صاحبه إشعار برضه. وهو أيضاً وقت المقارنة عند المزامنة: هو اللي بيحدد
+    // أي نسخة من السجل هي الأحدث (نسخة الجهاز ولا نسخة السيرفر القديمة).
     const synced = writeAssignedLeads((all) =>
       all.map((l: AssignedLead) => {
         if (!ownerOf.has(l.id)) return l;
         const owner = ownerOf.get(l.id) || '';
         if (owner === String(l.salesId || '')) return l;
-        return { ...l, salesId: owner, ...(owner ? { assignedAt: movedAt } : {}) };
+        return { ...l, salesId: owner, assignedAt: movedAt };
       })
     );
 
@@ -2296,7 +2298,10 @@ function App() {
     const ownerByPhone = new Map<string, string>();
     for (const lead of fullLeads) {
       const owner = ownerOf.get(lead.id);
-      if (!owner || owner === (lead.salesId || '') || !lead.phone) continue;
+      // `owner === undefined`: الرقم ده مش من الأرقام المتغيّرة في الحركة دي.
+      // `owner` فارغ: سحب الرقم من عهدة السيلز ⇒ لازم يخرج العميل من عنده كمان
+      // (كان يفضل مع المندوب في «عملائي» بعد ما الإدارة تسحبه منه).
+      if (owner === undefined || owner === (lead.salesId || '') || !lead.phone) continue;
       const key = digits(lead.phone);
       if (key) ownerByPhone.set(key, owner);
     }
@@ -2314,17 +2319,24 @@ function App() {
     if (ownerByPhone.size) {
       next = all.map((c) => {
         const own = [c.phone, ...(c.phones || [])].map((p) => digits(p));
-        const owner = own.map((p) => (p ? ownerByPhone.get(p) : undefined)).find(Boolean);
-        if (!owner) return c;
+        // البحث بـ«معرّف» مش «قيمة»: صاحب فارغ (سحب الرقم من السيلز) لازم يتلقط كمان.
+        const owner = own.map((p) => (p ? ownerByPhone.get(p) : undefined)).find((v) => v !== undefined);
+        if (owner === undefined) return c;
         touched = true;
-        const ownerName = users.find((u: User) => u.id === owner)?.name || 'سيلز آخر';
+        const ownerName = owner ? (users.find((u: User) => u.id === owner)?.name || 'سيلز آخر') : '';
         return {
           ...c,
           userId: owner,
           assignedTo: owner,
           updatedAt: movedAt,
           activities: [
-            { id: crypto.randomUUID(), type: 'assign', text: `تم تخصيص العميل إلى ${ownerName}`, at: movedAt, by: currentUser.name },
+            {
+              id: crypto.randomUUID(),
+              type: 'assign',
+              text: owner ? `تم تخصيص العميل إلى ${ownerName}` : 'سُحب الرقم من عهدة السيلز',
+              at: movedAt,
+              by: currentUser.name,
+            },
             ...(c.activities || []),
           ],
         };
@@ -2354,6 +2366,31 @@ function App() {
       void pushKey('crm_clients');
     }
     return synced;
+  };
+
+  // ===== حذف الرقم من التوزيع يشيل عميله التلقائي كمان =====
+  // الرقم الموزَّع بيتحوّل لعميل بصاحب رقمه (معرّف مشتق من الرقم نفسه)، فكان
+  // حذف الرقم من «توزيع الأرقام» يسيب العميل عند المندوب في «عملائي» — يعنى
+  // الرقم المحذوف لسه موجود عنده. هنا العميل التلقائي للرقم ده بيتشال برضه.
+  // العميل اليدوي (اللي اتسجّل برقم تاني) ما بيتمسش — بيانات العملاء محفوظة.
+  const removeLeadClient = (leadId: string) => {
+    const lead = fullLeads.find((l: AssignedLead) => String(l.id) === String(leadId));
+    if (!lead?.phone) return;
+    const clientId = leadClientIdFor(lead.phone);
+    if (!clientId) return;
+    let all: Client[] = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+      all = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      all = [];
+    }
+    if (!all.some((c: Client) => String(c.id) === clientId)) return;
+    const next = all.filter((c: Client) => String(c.id) !== clientId);
+    setClients(next);
+    localStorage.setItem('crm_clients', JSON.stringify(next));
+    // pushKey يسجّل شاهد الحذف لوحده فيرفعه قبل القائمة ⇒ ما يرجعش من جهاز قديم
+    void pushKey('crm_clients');
   };
 
   const handleAssignLeads = (ids: string[], salesId: string) => {
@@ -3559,10 +3596,13 @@ function App() {
             // الحساب محدود النطاق يحمل أرقامه وحده، والكتابة من نسخته المعروضة
             // كانت تمسح أرقام بقية الفريق من قاعدة البيانات.
             writeAssignedLeads((all) => all.filter((l: AssignedLead) => l.id !== id));
+            // العميل التلقائي للرقم ده كمان يتشال — وإلا فضل عند المندوب في «عملائي»
+            removeLeadClient(id);
           }} onDeleteMany={(ids: string[]) => {
             const target = new Set(ids);
             writeAssignedLeads((all) => all.filter((l: AssignedLead) => !target.has(l.id)));
-          }} onAssign={handleAssignLeads} autoRules={autoAssignRules} onSaveAutoRule={handleSaveAutoRule} onRebalanceForm={handleRebalanceForm} />}
+            ids.forEach((id: string) => removeLeadClient(id));
+          }} onAssign={handleAssignLeads} onSave={() => writeAssignedLeads((all) => all)} autoRules={autoAssignRules} onSaveAutoRule={handleSaveAutoRule} onRebalanceForm={handleRebalanceForm} />}
           {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={scopedUsers} />}
           {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
           {activeTab === 'chat' && isSalesView && <SalesChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} readOnly={!!impersonator} />}
@@ -9779,7 +9819,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, active
   );
 }
 
-function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onDeleteMany, onImport, onAssign, activeForms = [], autoRules = [], onSaveAutoRule, onRebalanceForm }: any) {
+function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onDeleteMany, onImport, onAssign, onSave, activeForms = [], autoRules = [], onSaveAutoRule, onRebalanceForm }: any) {
   // نفس قاعدة السيرفر حرفياً (isAssignableSales): سيلز/قائد فريق + حساب «مطوّر»
   // إداري يعمل سيلزاً أيضاً. والاشتراط بـ u.isActive كان يُخفي أي حساب قديم
   // لم يُكتب له الحقل أصلاً، فلا يظهر في توزيع الأرقام ولا يقبل رقمأ.
@@ -9910,6 +9950,17 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {/* حفظ التوزيع: رفع فوري لكل الأجهزة — reassurance إن التعديل اتحفظ فعلاً */}
+          <button
+            onClick={async () => {
+              const ok = await onSave?.();
+              setFlash(ok ? 'تم حفظ التوزيع وإرساله لكل الأجهزة ✓' : 'تعذّر الحفظ — اتأكد من الاتصال ثم حاول تاني');
+            }}
+            className="bg-emerald-500/10 border border-emerald-400/40 text-emerald-200 px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 hover:bg-emerald-500/20 transition-colors"
+            title="حفظ التوزيع وإرساله لكل الأجهزة فوراً"
+          >
+            <Check className="w-4 h-4" /> حفظ التوزيع
+          </button>
           <button onClick={() => setShowShare(true)} className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 hover:bg-[var(--brand-primary-soft)] transition-colors">
             <BarChart3 className="w-4 h-4" /> الأرقام لكل سيلز
           </button>

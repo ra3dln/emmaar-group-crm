@@ -264,14 +264,34 @@ const localData = (): StoreData => {
   return out;
 };
 
-// اتحاد السجلين بالمعرّف — النسخة البعيدة تفوز عند الاختلاف (السيرفر هو المرجع)
+// وقت آخر تعديل على السجل (أي حقل زمني معروف فيه) — يُستخدم لاختيار الأحدث
+// بين نسختين للسجل نفسه: نسخة هذا الجهاز ونسخة السيرفر.
+const changeStamp = (record: any): number => {
+  const times = [
+    Date.parse(record?.updatedAt || ''),
+    Date.parse(record?.assignedAt || ''),
+    Date.parse(record?.viewedAt || ''),
+    Date.parse(record?.createdAt || ''),
+  ].filter((n) => Number.isFinite(n));
+  return times.length ? Math.max(...times) : 0;
+};
+
+// اتحاد السجلين بالمعرّف — الأحدث يفوز.
+// كان «النسخة البعيدة تفوز دائماً»، فأي تعديل جديد على هذا الجهاز يرجع لنسخته
+// القديمة: المزامنة تجلب نسخة السيرفر **قبل** ما ترفع تغيير هذا الجهاز، فتتراجع
+// التوزيعات إلى «غير مخصص» بعد ثانيتين، ويضيع الحذف، ولا يتوقف التوزيع التلقائي.
+// الآن: لو نسختنا أحدث فهي الأصح، وعند التساوي يبقى السيرفر هو المرجع.
 const mergeUnion = (remote: any[], local: any[]): any[] => {
   const byId = new Map<string, any>();
   for (const item of local) {
-    if (item && item.id) byId.set(item.id, item);
+    if (item && item.id) byId.set(String(item.id), item);
   }
   for (const item of remote) {
-    if (item && item.id) byId.set(item.id, item);
+    if (!item || !item.id) continue;
+    const id = String(item.id);
+    const mine = byId.get(id);
+    if (mine && changeStamp(mine) > changeStamp(item)) continue; // نسختنا أحدث ⇒ هي الأصح
+    byId.set(id, item);
   }
   return Array.from(byId.values());
 };
