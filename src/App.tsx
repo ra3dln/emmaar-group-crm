@@ -55,7 +55,7 @@ import {
   isSystemOnlyText,
 } from '../shared/comments.js';
 import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
-import { MONTHS_PER_YEAR, caretAfterGrouping, digitsOnly, groupThousands, installmentBreakdown, type InstallmentBreakdown } from './installments';
+import { MONTHS_PER_YEAR, areaTotal, caretAfterGrouping, digitsOnly, groupThousands, installmentBreakdown, normalizeArea, type InstallmentBreakdown } from './installments';
 import {
   FEEDBACK_STATUS_TO_STAGE,
   LEAD_STATUS_TO_FEEDBACK_STATUS,
@@ -8718,7 +8718,6 @@ function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }
   );
 }
 
-// ===== «التقارير» = تقريرك الشخصي أنت فقط (لا علاقة له بإحصائيات الرئيسية) =====
 // ===== حساب المقدم والأقساط =====
 // أداة عرض سعر للسيلز: المبلغ الكلي + نسبة المقدم + عدد السنين، وتطلع
 // المقدم بالجنيه، المتبقي بعد المقدم، والقسط الشهري (المتبقي ÷ عدد الأشهر).
@@ -8727,34 +8726,56 @@ function InstallmentCalculatorView() {
   const [total, setTotal] = useState('');
   const [percent, setPercent] = useState('');
   const [years, setYears] = useState('');
+  // حقول اختيارية: سعر المتر × المساحة = إجمالي سعر الشقة (بدل المبلغ الكلي)
+  const [pricePerMeter, setPricePerMeter] = useState('');
+  const [area, setArea] = useState('');
   const totalRef = useRef<HTMLInputElement | null>(null);
+  const meterRef = useRef<HTMLInputElement | null>(null);
   const caretRef = useRef<number | null>(null);
+  const meterCaretRef = useRef<number | null>(null);
 
   // بعد ما الفواصل تتضاف، نرجّع المؤشر مكانه: لو عدّلت في وسط الرقم ما ينطش لآخره
   useEffect(() => {
-    if (caretRef.current === null || !totalRef.current) return;
-    totalRef.current.setSelectionRange(caretRef.current, caretRef.current);
-    caretRef.current = null;
-  }, [total]);
+    const pairs = [
+      [totalRef, caretRef],
+      [meterRef, meterCaretRef],
+    ] as const;
+    for (const [inputRef, caret] of pairs) {
+      if (caret.current === null || !inputRef.current) continue;
+      inputRef.current.setSelectionRange(caret.current, caret.current);
+      caret.current = null;
+    }
+  }, [total, pricePerMeter]);
 
-  const calc: InstallmentBreakdown = installmentBreakdown(total, percent, years);
+  // الإجمالي: لو سعر المتر والمساحة موجودين يتحسب منهم، وإلا المبلغ اللي اتكتب بنفسه
+  const computedTotal = areaTotal(pricePerMeter, area);
+  const fromArea = computedTotal > 0;
+  const calc: InstallmentBreakdown = installmentBreakdown(fromArea ? computedTotal : total, percent, years);
   const { percent: percentNum, years: yearsNum, downPayment: down, remaining, months, monthly, ready } = calc;
   const totalNum = calc.total;
+  const areaNum = Number(normalizeArea(area).replace(/\.$/, '')) || 0;
 
   const money = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 2 });
 
-  // حقل المبلغ: القيمة المحفوظة أرقام فقط، والمعروضة بفواصل آلاف (1,600,000)
-  const writeTotal = (input: HTMLInputElement) => {
-    const caret = input.selectionStart ?? input.value.length;
-    const digitsBefore = digitsOnly(input.value.slice(0, caret)).length;
+  // حقل مبلغ بفواصل آلاف: القيمة المحفوظة أرقام فقط، والمعروضة منسّقة (1,600,000)
+  const writeGrouped = (
+    input: HTMLInputElement,
+    setter: (value: string) => void,
+    caret: { current: number | null }
+  ) => {
+    const at = input.selectionStart ?? input.value.length;
+    const digitsBefore = digitsOnly(input.value.slice(0, at)).length;
     const digits = digitsOnly(input.value).slice(0, 12);
-    setTotal(digits);
-    caretRef.current = caretAfterGrouping(groupThousands(digits), digitsBefore);
+    setter(digits);
+    caret.current = caretAfterGrouping(groupThousands(digits), digitsBefore);
   };
 
   const reset = () => {
     setTotal('');
+    setPricePerMeter('');
+    setArea('');
     caretRef.current = null;
+    meterCaretRef.current = null;
     setPercent('');
     setYears('');
   };
@@ -8762,8 +8783,8 @@ function InstallmentCalculatorView() {
   const rows = [
     {
       label: 'المقدم المدفوع',
-      value: percentNum > 0 ? `${money(down)} ج.م` : '—',
-      note: percentNum > 0 ? `${money(percentNum)}% من ${money(totalNum)}` : '',
+      value: percentNum > 0 && totalNum > 0 ? `${money(down)} ج.م` : '—',
+      note: percentNum > 0 && totalNum > 0 ? `${money(percentNum)}% من ${money(totalNum)}` : '',
     },
     {
       label: 'المبلغ بعد خصم المقدم',
@@ -8819,21 +8840,65 @@ function InstallmentCalculatorView() {
 
           <div className="grid gap-3 sm:grid-cols-3">
             <label className="block">
-              <span className="block text-[11.5px] text-[var(--text-muted)] mb-1">المبلغ الكلي (ج.م)</span>
+              <span className="block text-[11.5px] text-[var(--text-muted)] mb-1">
+                المبلغ الكلي (ج.م){fromArea && <span className="text-[var(--text-dim)]"> — محسوب</span>}
+              </span>
               <input
                 ref={totalRef}
                 type="text"
                 inputMode="numeric"
                 autoComplete="off"
-                value={groupThousands(total)}
-                onChange={(e) => writeTotal(e.currentTarget)}
+                value={fromArea ? money(computedTotal) : groupThousands(total)}
+                onChange={(e) => writeGrouped(e.currentTarget, setTotal, caretRef)}
+                disabled={fromArea}
                 placeholder="1,600,000"
                 dir="ltr"
-                className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm tabular-nums focus:outline-none focus:border-[var(--brand)]"
+                className={`w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm tabular-nums focus:outline-none focus:border-[var(--brand)]${fromArea ? ' opacity-70 cursor-not-allowed' : ''}`}
               />
             </label>
             {field('المقدم (%)', percent, setPercent, '8')}
             {field('عدد السنين', years, setYears, '8')}
+          </div>
+
+          {/* اختياري: سعر المتر × المساحة = إجمالي سعر الشقة، ويُستخدم بدل المبلغ الكلي */}
+          <div className="mt-4 pt-3 border-t border-[var(--border-soft)]">
+            <p className="text-[11.5px] text-[var(--text-muted)] mb-2">
+              أو احسبها من المساحة <span className="text-[var(--text-dim)]">— اختياري، وبيستخدم بدل المبلغ الكلي</span>
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="block text-[11.5px] text-[var(--text-muted)] mb-1">سعر المتر (ج.م)</span>
+                <input
+                  ref={meterRef}
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={groupThousands(pricePerMeter)}
+                  onChange={(e) => writeGrouped(e.currentTarget, setPricePerMeter, meterCaretRef)}
+                  placeholder="25,000"
+                  dir="ltr"
+                  className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm tabular-nums focus:outline-none focus:border-[var(--brand)]"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-[11.5px] text-[var(--text-muted)] mb-1">مساحة الشقة (م²)</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  value={area}
+                  onChange={(e) => setArea(normalizeArea(e.currentTarget.value))}
+                  placeholder="120"
+                  dir="ltr"
+                  className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm tabular-nums focus:outline-none focus:border-[var(--brand)]"
+                />
+              </label>
+            </div>
+            <p className="text-[11px] leading-relaxed text-[var(--text-dim)] mt-2">
+              {fromArea
+                ? `إجمالي سعر الشقة: ${money(computedTotal)} ج.م (${money(areaNum)} م² × ${money(Number(pricePerMeter))} ج.م)`
+                : 'لو مليت سعر المتر والمساحة، الإجمالي يتحسب منهم تلقائيًا — ولو سيبتهم فاضيين بنستخدم المبلغ الكلي اللي فوق.'}
+            </p>
           </div>
 
           {percentNum > 100 && (
@@ -8871,6 +8936,7 @@ function InstallmentCalculatorView() {
   );
 }
 
+// ===== «التقارير» = تقريرك الشخصي أنت فقط (لا علاقة له بإحصائيات الرئيسية) =====
 function ReportsView({ clients, feedbacks, reminders }: any) {
   const mine: Client[] = clients || [];
   const closed = mine.filter((c) => c.stage === 'closed').length;

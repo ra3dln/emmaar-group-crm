@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { caretAfterGrouping, digitsOnly, groupThousands, installmentBreakdown, MONTHS_PER_YEAR, toAmount } from '../src/installments.ts';
+import { areaTotal, caretAfterGrouping, digitsOnly, groupThousands, installmentBreakdown, MONTHS_PER_YEAR, normalizeArea, toAmount } from '../src/installments.ts';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const read = (rel) => fs.readFileSync(path.join(root, '..', rel), 'utf8');
@@ -71,18 +71,44 @@ check('مليون و٦٠٠ ألف: المقدم 128,000', near(big.downPayment, 
 check('مليون و٦٠٠ ألف: المتبقي 1,472,000', near(big.remaining, 1472000), String(big.remaining));
 check('مليون و٦٠٠ ألف: القسط = 1,472,000 ÷ 96', near(big.monthly, 1472000 / 96), String(big.monthly));
 
-// ===== ٧) التبويب موجود في الواجهة ومربوط بالحسبة =====
+// ===== ٧) إجمالي سعر الشقة من المساحة (اختياري) =====
+check('سعر المتر × المساحة: 25,000 × 120 = 3,000,000', areaTotal('25000', '120') === 3000000, String(areaTotal('25000', '120')));
+check('الفواصل في سعر المتر مش بتلخبط الحسبة', areaTotal('25,000', '120') === 3000000);
+check('مساحة بكسر عشري: 25,000 × 120.5', areaTotal('25000', '120.5') === 3012500, String(areaTotal('25000', '120.5')));
+check('لو سعر المتر فاضي ← صفر (يستخدم المبلغ الكلي)', areaTotal('', '120') === 0);
+check('لو المساحة فاضية ← صفر (يستخدم المبلغ الكلي)', areaTotal('25000', '') === 0);
+check('لو الاتنين فاضيين ← صفر', areaTotal('', '') === 0);
+check('مساحة فيها حروف بتتنضف', areaTotal('25000', '1a2b0') === 3000000, String(areaTotal('25000', '1a2b0')));
+check('المساحة العشرية: رقمين بعد العلامة', normalizeArea('120.567') === '120.56', normalizeArea('120.567'));
+check('نقطة زيادة في المساحة بتتشال', normalizeArea('1.2.3') === '1.23');
+check('المساحة العادية زي ما هي', normalizeArea('120') === '120');
+
+// نفس مثال الطلب لكن من المساحة: 25,000 × 120 = 3,000,000 ثم مقدم 8% و8 سنين
+const fromAreaCalc = installmentBreakdown(areaTotal('25000', '120'), 8, 8);
+check('من المساحة: المقدم = 240,000', near(fromAreaCalc.downPayment, 240000), String(fromAreaCalc.downPayment));
+check('من المساحة: المتبقي = 2,760,000', near(fromAreaCalc.remaining, 2760000), String(fromAreaCalc.remaining));
+check('من المساحة: القسط = 2,760,000 ÷ 96', near(fromAreaCalc.monthly, 2760000 / 96), String(fromAreaCalc.monthly));
+check('إجمالي المساحة بيدخل الحسبة بدل المبلغ المكتوب', fromAreaCalc.total === 3000000);
+
+// ===== ٨) التبويب موجود في الواجهة ومربوط بالحسبة =====
 const app = read('src/App.tsx');
 const types = read('src/types.ts');
 check('نوع التبويب مضاف', /'calculator'/.test(types));
 check('التبويب في القائمة الجانبية', /id: 'calculator', icon: Calculator, label: 'حساب المقدم والأقساط'/.test(app));
 check('التبويب بيظهر للسيلز والإدارة', (app.match(/id: 'calculator'/g) || []).length >= 2);
 check('التبويب بيعرض الشاشة', /activeTab === 'calculator' && <InstallmentCalculatorView \/>/.test(app));
-check('الشاشة بتستخدم دالة الحسبة المشتركة', /installmentBreakdown\(total, percent, years\)/.test(app));
+check('الشاشة بتستخدم دالة الحسبة المشتركة', /const calc: InstallmentBreakdown = installmentBreakdown\(/.test(app));
 check('الحقول الثلاثة موجودة', ['المبلغ الكلي (ج.م)', 'المقدم (%)', 'عدد السنين'].every((l) => app.includes(l)));
 check('مخرجات الحسبة معروضة', ['المقدم المدفوع', 'المبلغ بعد خصم المقدم', 'القسط الشهري', 'عدد الأشهر'].every((l) => app.includes(l)));
-check('حقل المبلغ بيعرض الفواصل وأنت بتكتب', /value=\{groupThousands\(total\)\}/.test(app));
+check('حقل المبلغ بيعرض الفواصل وأنت بتكتب', app.includes('groupThousands(total)'));
+check('حقل سعر المتر كمان بفواصل', app.includes('groupThousands(pricePerMeter)'));
 check('حقل المبلغ نصي (عشان يقبل الفاصلة)', /inputMode="numeric"/.test(app));
 check('الكتابة بتتحفظ أرقاماً فقط', /const digits = digitsOnly\(input\.value\)/.test(app));
+check('حقل سعر المتر موجود', app.includes('سعر المتر (ج.م)'));
+check('حقل مساحة الشقة موجود', app.includes('مساحة الشقة (م²)'));
+check('الخانتان اختياريتان وبتتحسب منهم الحسبة', /const computedTotal = areaTotal\(pricePerMeter, area\)/.test(app));
+check('لو الخانتين مليانين المبلغ الكلي بيتحسب منهم', /installmentBreakdown\(fromArea \? computedTotal : total, percent, years\)/.test(app));
+check('حقل المبلغ بيتقفل لما يتحسب من المساحة', /disabled=\{fromArea\}/.test(app));
+check('إجمالي سعر الشقة معروض', app.includes('إجمالي سعر الشقة'));
 
 console.log(`\n✅ نجحت ${passed} فحوصات (حساب المقدم والأقساط)`);

@@ -35,6 +35,28 @@ export function groupThousands(value: string | number | null | undefined): strin
   return digits ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
 }
 
+// المساحة ممكن تكون بكسر عشري (120.5 م²): رقم واحد للفاصلة العشرية وبعدها رقمين
+// على الأكثر، وأي حاجة غير أرقام بتتشال.
+export function normalizeArea(value: string | number | null | undefined): string {
+  const cleaned = String(value ?? '').replace(/[^\d.]/g, '');
+  const [head, ...rest] = cleaned.split('.');
+  const decimals = rest.join('').slice(0, 2);
+  return decimals ? `${head}.${decimals}` : head;
+}
+
+// إجمالي سعر الشقة = سعر المتر × المساحة.
+// لو واحد منهم فاضي (أو صفر) بيرجع صفر، ساعتها الحاسبة بتستخدم المبلغ الكلي
+// اللي المستخدم كتبه بنفسه — فالحقول دي اختياربة فعلاً.
+export function areaTotal(
+  pricePerMeter: string | number | null | undefined,
+  area: string | number | null | undefined
+): number {
+  const price = toAmount(pricePerMeter);
+  const size = Number(normalizeArea(area).replace(/\.$/, ''));
+  if (!price || !Number.isFinite(size) || size <= 0) return 0;
+  return Math.round(price * size * 100) / 100;
+}
+
 // موضع المؤشر بعد إضافة الفواصل: بنعدّ الأرقام اللي قبل المؤشر وبنحطّه بعد نفس
 // عدد الأرقام في النص المنسّق، فلو عدّلت في وسط الرقم المؤشر ما ينطش لآخره.
 export function caretAfterGrouping(formatted: string, digitsBefore: number): number {
