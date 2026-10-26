@@ -30,6 +30,7 @@ import {
   roomsFromText,
 } from './arabicNumbers';
 import { buildXlsx, downloadBlob } from './xlsx';
+import { matchLeadSearch } from './leadSearch';
 import { formNameOf, formKeyOf, activeFormNamesOf, isSelectedFormRecord, UNKNOWN_FORM } from './campaignForms';
 import {
   AUTO_ASSIGN_KEY,
@@ -6884,24 +6885,14 @@ function LeadsView({
   }, [rows]);
 
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
     let list = rows;
     // «Cold Calls» فلتر خاص: الأرقام القديمة اللي ما اتصلناش فيها
     // «Fresh Leads» فلتر تاني: الأرقام الجديدة اللي نازلة حالاً
     if (filter === COLD_CALL_ID) list = list.filter((row) => row.cold);
     else if (filter === 'fresh-stage') list = list.filter((row) => row.fresh);
     else if (filter) list = list.filter((row) => row.status === filter);
-    if (!q) return list;
-    return list.filter((row) => {
-      if (field === 'name') return row.name.toLowerCase().includes(q);
-      if (field === 'phone') return row.phone.replace(/\D/g, '').includes(q.replace(/\D/g, ''));
-      if (field === 'form') return row.formName.toLowerCase().includes(q);
-      return (
-        row.name.toLowerCase().includes(q) ||
-        row.phone.replace(/\D/g, '').includes(q.replace(/\D/g, '')) ||
-        row.formName.toLowerCase().includes(q)
-      );
-    });
+    // المقارنة في دالة مستقلة ومختبَرة: البحث بالحروف للاسم/الفورم وبالأرقام للتليفون
+    return list.filter((row) => matchLeadSearch(row, query, field));
   }, [rows, filter, query, field]);
 
   return (
