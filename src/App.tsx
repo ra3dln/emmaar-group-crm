@@ -14,7 +14,7 @@ import {
   Rows, LayoutList, List, ShieldAlert, MapPinOff, Navigation,
   ChevronRight, ChevronLeft, Filter, KeyRound,
   Workflow, BellRing, ClipboardList, MessagesSquare, Share2, LineChart,
-  Megaphone, Globe, Link2, Facebook, ChevronDown, Palette, Scale
+  Megaphone, Globe, Link2, Facebook, ChevronDown, Palette, Scale, Calculator
 } from 'lucide-react';
 import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, CallTarget, TabType } from './types';
 import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, syncNow, ownerOfPhoneOnServer, leadOwnerOfPhoneOnServer, clientPhonesOnServer } from './sync';
@@ -55,6 +55,7 @@ import {
   isSystemOnlyText,
 } from '../shared/comments.js';
 import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
+import { MONTHS_PER_YEAR, installmentBreakdown, type InstallmentBreakdown } from './installments';
 import {
   FEEDBACK_STATUS_TO_STAGE,
   LEAD_STATUS_TO_FEEDBACK_STATUS,
@@ -3580,6 +3581,7 @@ function App() {
             }
           }} onAdd={() => setShowAddFeedback(true)} />}
           {activeTab === 'reports' && isSalesView && <ReportsView clients={clients} feedbacks={dailyFeedbacks} reminders={reminders} />}
+          {activeTab === 'calculator' && <InstallmentCalculatorView />}
           {activeTab === 'admin-users' && currentUser.role !== 'sales' && <AdminUsersView users={scopedUsers} currentUser={currentUser} onSelect={setSelectedUserFeedback} onAdd={() => setShowAddUser(true)} onEdit={setEditingUser} onDelete={setDeletingUser} onImpersonate={handleImpersonate} />}
           {/* «الفيدباك اليومي لكل سيلز» = لوحة إدارة: تُبنى على مخزون الشركة الكامل،
               لا على نطاق الحساب (وإلا تظهر فاضية لحساب إداري محدود النطاق مثل المطوّر). */}
@@ -4306,6 +4308,7 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
         { id: 'chat', icon: MessagesSquare, label: 'المحادثة' },
         { id: 'reports', icon: BarChart3, label: 'التقارير' },
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
+        { id: 'calculator', icon: Calculator, label: 'حساب المقدم والأقساط' },
       ],
     },
   ];
@@ -4327,6 +4330,7 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
         // شيت الفورمات: كل فورم لوحده وأرقامه وفيدباكه العام في ملف Excel
         { id: 'admin-forms', icon: FileText, label: 'شيت الفورمات' },
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
+        { id: 'calculator', icon: Calculator, label: 'حساب المقدم والأقساط' },
         { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
         { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
         { id: 'admin-chat', icon: MessagesSquare, label: 'المحادثات' },
@@ -4358,6 +4362,7 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
           { id: 'admin-clients', icon: Users, label: 'عملاء كامبين' },
           { id: 'admin-forms', icon: FileText, label: 'شيت الفورمات' },
           { id: 'pipeline', icon: Workflow, label: 'المراحل' },
+          { id: 'calculator', icon: Calculator, label: 'حساب المقدم والأقساط' },
           { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
           { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
           { id: 'admin-chat', icon: MessagesSquare, label: 'المحادثات' },
@@ -8714,6 +8719,126 @@ function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }
 }
 
 // ===== «التقارير» = تقريرك الشخصي أنت فقط (لا علاقة له بإحصائيات الرئيسية) =====
+// ===== حساب المقدم والأقساط =====
+// أداة عرض سعر للسيلز: المبلغ الكلي + نسبة المقدم + عدد السنين، وتطلع
+// المقدم بالجنيه، المتبقي بعد المقدم، والقسط الشهري (المتبقي ÷ عدد الأشهر).
+// الحساب كله في المتصفح — لا يُحفظ ولا يُزامَن؛ أرقام معروضة على العميل فقط.
+function InstallmentCalculatorView() {
+  const [total, setTotal] = useState('');
+  const [percent, setPercent] = useState('');
+  const [years, setYears] = useState('');
+
+  const calc: InstallmentBreakdown = installmentBreakdown(total, percent, years);
+  const { percent: percentNum, years: yearsNum, downPayment: down, remaining, months, monthly, ready } = calc;
+  const totalNum = calc.total;
+
+  const money = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+
+  const reset = () => {
+    setTotal('');
+    setPercent('');
+    setYears('');
+  };
+
+  const rows = [
+    {
+      label: 'المقدم المدفوع',
+      value: percentNum > 0 ? `${money(down)} ج.م` : '—',
+      note: percentNum > 0 ? `${money(percentNum)}% من ${money(totalNum)}` : '',
+    },
+    {
+      label: 'المبلغ بعد خصم المقدم',
+      value: totalNum > 0 ? `${money(remaining)} ج.م` : '—',
+      note: '',
+    },
+    {
+      label: 'عدد الأشهر',
+      value: months > 0 ? `${money(months)} شهر` : '—',
+      note: yearsNum > 0 ? `${money(yearsNum)} سنة × ${MONTHS_PER_YEAR} شهر` : '',
+    },
+  ];
+
+  const field = (label: string, value: string, onChange: (v: string) => void, placeholder: string) => (
+    <label className="block">
+      <span className="block text-[11.5px] text-[var(--text-muted)] mb-1">{label}</span>
+      <input
+        type="number"
+        min={0}
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        dir="ltr"
+        className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm tabular-nums focus:outline-none focus:border-[var(--brand)]"
+      />
+    </label>
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="page-intro">
+        <div className="min-w-0">
+          <h2>حساب المقدم والأقساط</h2>
+          <p>اعرف المقدم والمتبقي والقسط الشهري قبل ما تعرض السعر على العميل</p>
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,340px)]">
+        <section className="panel p-5">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <h3 className="font-bold text-[var(--text-strong)] flex items-center gap-2">
+              <Calculator className="w-4 h-4 text-[var(--text-dim)]" /> بيانات العرض
+            </h3>
+            <button
+              type="button"
+              onClick={reset}
+              className="text-[11.5px] text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+            >
+              مسح الحقول
+            </button>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            {field('المبلغ الكلي (ج.م)', total, setTotal, '20000')}
+            {field('المقدم (%)', percent, setPercent, '8')}
+            {field('عدد السنين', years, setYears, '8')}
+          </div>
+
+          {percentNum > 100 && (
+            <p className="text-[11.5px] text-[var(--warn)] mt-2">نسبة المقدم أكبر من 100% — راجع الرقم.</p>
+          )}
+
+          <p className="text-[11px] leading-relaxed text-[var(--text-dim)] mt-4 pt-3 border-t border-[var(--border-soft)]">
+            المقدم = المبلغ الكلي × نسبة المقدم. المتبقي = المبلغ الكلي − المقدم. القسط الشهري = المتبقي ÷ (عدد السنين × ١٢ شهر).
+          </p>
+        </section>
+
+        <section className="panel p-5 flex flex-col">
+          <p className="text-[11.5px] text-[var(--text-muted)]">القسط الشهري</p>
+          <p className="mt-1 leading-none font-bold text-[32px] tabular-nums text-[var(--text-strong)]" dir="ltr">
+            {ready ? money(monthly) : '—'}
+          </p>
+          <p className="text-[11px] text-[var(--text-dim)] mt-2">
+            {ready ? `جنيه شهريًا لمدة ${money(months)} شهر` : 'اكتب المبلغ وعدد السنين عشان يظهر القسط'}
+          </p>
+
+          <div className="mt-4 pt-3 border-t border-dashed border-[var(--border)] space-y-2.5">
+            {rows.map((row) => (
+              <div key={row.label} className="flex items-baseline justify-between gap-2">
+                <span className="text-[12px] text-[var(--text-muted)]">
+                  {row.label}
+                  {row.note && <span className="block text-[10.5px] text-[var(--text-dim)]">{row.note}</span>}
+                </span>
+                <span className="text-[13px] font-bold text-[var(--text)] tabular-nums whitespace-nowrap">{row.value}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function ReportsView({ clients, feedbacks, reminders }: any) {
   const mine: Client[] = clients || [];
   const closed = mine.filter((c) => c.stage === 'closed').length;
