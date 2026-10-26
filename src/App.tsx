@@ -8718,6 +8718,9 @@ function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }
   );
 }
 
+// عناوين الدفعات السنوية الثلاث (اختيارية)
+const YEARLY_LABELS = ['الدفعة السنوية ١ (%)', 'الدفعة السنوية ٢ (%)', 'الدفعة السنوية ٣ (%)'];
+
 // ===== حساب المقدم والأقساط =====
 // أداة عرض سعر للسيلز: المبلغ الكلي + نسبة المقدم + عدد السنين، وتطلع
 // المقدم بالجنيه، المتبقي بعد المقدم، والقسط الشهري (المتبقي ÷ عدد الأشهر).
@@ -8729,6 +8732,10 @@ function InstallmentCalculatorView() {
   // حقول اختيارية: سعر المتر × المساحة = إجمالي سعر الشقة (بدل المبلغ الكلي)
   const [pricePerMeter, setPricePerMeter] = useState('');
   const [area, setArea] = useState('');
+  // ثلاث دفعات سنوية اختيارية (نسب %): مجموعها يتخصم مع المقدم من المبلغ الكلي
+  const [yearly, setYearly] = useState<string[]>(['', '', '']);
+  const writeYearly = (index: number, value: string) =>
+    setYearly((prev) => prev.map((v, i) => (i === index ? value : v)));
   const totalRef = useRef<HTMLInputElement | null>(null);
   const meterRef = useRef<HTMLInputElement | null>(null);
   const caretRef = useRef<number | null>(null);
@@ -8750,8 +8757,9 @@ function InstallmentCalculatorView() {
   // الإجمالي: لو سعر المتر والمساحة موجودين يتحسب منهم، وإلا المبلغ اللي اتكتب بنفسه
   const computedTotal = areaTotal(pricePerMeter, area);
   const fromArea = computedTotal > 0;
-  const calc: InstallmentBreakdown = installmentBreakdown(fromArea ? computedTotal : total, percent, years);
+  const calc: InstallmentBreakdown = installmentBreakdown(fromArea ? computedTotal : total, percent, years, yearly);
   const { percent: percentNum, years: yearsNum, downPayment: down, remaining, months, monthly, ready } = calc;
+  const { annualPercents, annualPercent, annualPayments, annualTotal } = calc;
   const totalNum = calc.total;
   const areaNum = Number(normalizeArea(area).replace(/\.$/, '')) || 0;
 
@@ -8774,6 +8782,7 @@ function InstallmentCalculatorView() {
     setTotal('');
     setPricePerMeter('');
     setArea('');
+    setYearly(['', '', '']);
     caretRef.current = null;
     meterCaretRef.current = null;
     setPercent('');
@@ -8786,10 +8795,19 @@ function InstallmentCalculatorView() {
       value: percentNum > 0 && totalNum > 0 ? `${money(down)} ج.م` : '—',
       note: percentNum > 0 && totalNum > 0 ? `${money(percentNum)}% من ${money(totalNum)}` : '',
     },
+    ...(annualTotal > 0
+      ? [
+          {
+            label: 'الدفعات السنوية',
+            value: `${money(annualTotal)} ج.م`,
+            note: `${annualPercents.map((p) => `${money(p)}%`).join(' + ')} = ${money(annualPercent)}% من ${money(totalNum)}`,
+          },
+        ]
+      : []),
     {
-      label: 'المبلغ بعد خصم المقدم',
+      label: annualTotal > 0 ? 'المبلغ بعد خصم المقدم والدفعات' : 'المبلغ بعد خصم المقدم',
       value: totalNum > 0 ? `${money(remaining)} ج.م` : '—',
-      note: '',
+      note: annualTotal > 0 ? `${money(down)} مقدم + ${money(annualTotal)} دفعات` : '',
     },
     {
       label: 'عدد الأشهر',
@@ -8901,12 +8919,48 @@ function InstallmentCalculatorView() {
             </p>
           </div>
 
-          {percentNum > 100 && (
-            <p className="text-[11.5px] text-[var(--warn)] mt-2">نسبة المقدم أكبر من 100% — راجع الرقم.</p>
+          {/* اختياري: ثلاث دفعات سنوية — مجموع نسبها يتخصم مع المقدم */}
+          <div className="mt-4 pt-3 border-t border-[var(--border-soft)]">
+            <p className="text-[11.5px] text-[var(--text-muted)] mb-2">
+              دفعات سنوية <span className="text-[var(--text-dim)]">— اختياري، مجموعها بيتخصم من المبلغ الكلي مع المقدم</span>
+            </p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {YEARLY_LABELS.map((label, i) => (
+                <label key={label} className="block">
+                  <span className="block text-[11.5px] text-[var(--text-muted)] mb-1">{label}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    inputMode="decimal"
+                    value={yearly[i] ?? ''}
+                    onChange={(e) => writeYearly(i, e.target.value)}
+                    placeholder={['10', '20', '10'][i]}
+                    dir="ltr"
+                    className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm tabular-nums focus:outline-none focus:border-[var(--brand)]"
+                  />
+                  <span className="block text-[10.5px] text-[var(--text-dim)] mt-1 tabular-nums" dir="ltr">
+                    {annualPayments[i] ? `= ${money(annualPayments[i])} ج.م` : '\u00a0'}
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className="text-[11px] leading-relaxed text-[var(--text-dim)] mt-2">
+              {annualPercent > 0
+                ? `${annualPercents.map((p) => `${money(p)}%`).join(' + ')} = ${money(annualPercent)}% من المبلغ الكلي (${money(annualTotal)} ج.م) بتتخصم مع المقدم.`
+                : 'لو مليهاش، الحسبة بتفضل على المقدم بس زي ما هي.'}
+            </p>
+          </div>
+
+          {(percentNum > 100 || percentNum + annualPercent > 100) && (
+            <p className="text-[11.5px] text-[var(--warn)] mt-2">
+              {percentNum > 100
+                ? 'نسبة المقدم أكبر من 100% — راجع الرقم.'
+                : 'مجموع المقدم والدفعات السنوية أكبر من 100% — راجع الأرقام.'}
+            </p>
           )}
 
           <p className="text-[11px] leading-relaxed text-[var(--text-dim)] mt-4 pt-3 border-t border-[var(--border-soft)]">
-            المقدم = المبلغ الكلي × نسبة المقدم. المتبقي = المبلغ الكلي − المقدم. القسط الشهري = المتبقي ÷ (عدد السنين × ١٢ شهر).
+            المقدم = المبلغ الكلي × نسبة المقدم. المتبقي = المبلغ الكلي − المقدم − الدفعات السنوية. القسط الشهري = المتبقي ÷ (عدد السنين × ١٢ شهر).
           </p>
         </section>
 

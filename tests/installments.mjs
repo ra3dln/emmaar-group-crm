@@ -90,6 +90,26 @@ check('من المساحة: المتبقي = 2,760,000', near(fromAreaCalc.remai
 check('من المساحة: القسط = 2,760,000 ÷ 96', near(fromAreaCalc.monthly, 2760000 / 96), String(fromAreaCalc.monthly));
 check('إجمالي المساحة بيدخل الحسبة بدل المبلغ المكتوب', fromAreaCalc.total === 3000000);
 
+// ===== ٧ب) الدفعات السنوية (اختياري) =====
+const withYearly = installmentBreakdown(20000, 8, 8, ['10', '20', '10']);
+check('الدفعات السنوية: المجموع 10+20+10 = 40%', near(withYearly.annualPercent, 40), String(withYearly.annualPercent));
+check('الدفعات السنوية بالجنيه: 2,000 + 4,000 + 2,000 = 8,000', near(withYearly.annualTotal, 8000), String(withYearly.annualTotal));
+check('المتبقي = 20,000 − 1,600 مقدم − 8,000 دفعات = 10,400', near(withYearly.remaining, 10400), String(withYearly.remaining));
+check('القسط = 10,400 ÷ 96', near(withYearly.monthly, 10400 / 96), String(withYearly.monthly));
+check('الدفعات محسوبة واحدة واحدة', withYearly.annualPayments.join(',') === '2000,4000,2000', withYearly.annualPayments.join(','));
+
+const noYearly = installmentBreakdown(20000, 8, 8, ['', '', '']);
+check('دفعات فاضية ← الحسبة زي ما هي', near(noYearly.remaining, 18400) && noYearly.annualTotal === 0);
+check('دفعات فاضية ← مفيش نسب محسوبة', noYearly.annualPercents.length === 0 && noYearly.annualPercent === 0);
+check('من غير ما تبعت الدفعات خالص ← نفس الحسبة', near(installmentBreakdown(20000, 8, 8).remaining, 18400));
+
+const oneYearly = installmentBreakdown(20000, 0, 1, ['', '25', '']);
+check('دفعة واحدة بس: 25% من 20,000 = 5,000', oneYearly.annualTotal === 5000 && oneYearly.remaining === 15000);
+check('القسط بيوزع المتبقي بعد الدفعة', near(oneYearly.monthly, 15000 / 12));
+
+const yearlyOver = installmentBreakdown(20000, 20, 1, ['100']);
+check('مجموع المقدم والدفعات فوق المبلغ ← المتبقي صفر', yearlyOver.remaining === 0 && yearlyOver.monthly === 0);
+
 // ===== ٨) التبويب موجود في الواجهة ومربوط بالحسبة =====
 const app = read('src/App.tsx');
 const types = read('src/types.ts');
@@ -107,8 +127,12 @@ check('الكتابة بتتحفظ أرقاماً فقط', /const digits = digit
 check('حقل سعر المتر موجود', app.includes('سعر المتر (ج.م)'));
 check('حقل مساحة الشقة موجود', app.includes('مساحة الشقة (م²)'));
 check('الخانتان اختياريتان وبتتحسب منهم الحسبة', /const computedTotal = areaTotal\(pricePerMeter, area\)/.test(app));
-check('لو الخانتين مليانين المبلغ الكلي بيتحسب منهم', /installmentBreakdown\(fromArea \? computedTotal : total, percent, years\)/.test(app));
+check('لو الخانتين مليانين المبلغ الكلي بيتحسب منهم', /installmentBreakdown\(fromArea \? computedTotal : total, percent, years/.test(app));
 check('حقل المبلغ بيتقفل لما يتحسب من المساحة', /disabled=\{fromArea\}/.test(app));
 check('إجمالي سعر الشقة معروض', app.includes('إجمالي سعر الشقة'));
+check('خانات الدفعات السنوية الثلاثة موجودة', ['الدفعة السنوية ١ (%)', 'الدفعة السنوية ٢ (%)', 'الدفعة السنوية ٣ (%)'].every((l) => app.includes(l)));
+check('الدفعات السنوية بتدخل الحسبة', /installmentBreakdown\(fromArea \? computedTotal : total, percent, years, yearly\)/.test(app));
+check('قيمة كل دفعة سنوية معروضة بالجنيه', app.includes('annualPayments[i]'));
+check('المتبقي بيوضح خصم الدفعات', app.includes('المبلغ بعد خصم المقدم والدفعات'));
 
 console.log(`\n✅ نجحت ${passed} فحوصات (حساب المقدم والأقساط)`);

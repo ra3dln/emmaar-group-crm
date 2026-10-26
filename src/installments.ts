@@ -1,7 +1,8 @@
 // ===== حساب المقدم والأقساط =====
 // دوال صافية (بلا واجهة) عشان الحسبة تتحسب وتتختبر لوحدها:
 //   المقدم    = المبلغ الكلي × نسبة المقدم
-//   المتبقي   = المبلغ الكلي − المقدم
+//   الدفعات السنوية (اختياري) = مجموع نسبها × المبلغ الكلي
+//   المتبقي   = المبلغ الكلي − المقدم − الدفعات السنوية
 //   القسط     = المتبقي ÷ (عدد السنين × ١٢ شهر)
 // أي مدخل غير صالح أو سالب بيتعامل كصفر، والنسبة فوق ١٠٠% ما بتنقصش المتبقي تحت الصفر.
 
@@ -12,6 +13,11 @@ export type InstallmentBreakdown = {
   percent: number;
   years: number;
   downPayment: number;
+  // دفعات سنوية اختيارية (نسب من المبلغ الكلي): مجموعها بيتخصم مع المقدم
+  annualPercents: number[];
+  annualPercent: number;
+  annualPayments: number[];
+  annualTotal: number;
   remaining: number;
   months: number;
   monthly: number;
@@ -69,17 +75,26 @@ export function caretAfterGrouping(formatted: string, digitsBefore: number): num
   return formatted.length;
 }
 
+// yearlyPercents: الدفعات السنوية (اختياري). كل نسبة بتتحسب من المبلغ الكلي،
+// ومجموعها بيتخصم مع المقدم قبل تقسيم المتبقي على الشهور. لو كلها فاضية
+// الحسبة تفضل زي ما هي بالظبط (مقدم بس).
 export function installmentBreakdown(
   totalInput: string | number,
   percentInput: string | number,
-  yearsInput: string | number
+  yearsInput: string | number,
+  yearlyPercents: (string | number | null | undefined)[] = []
 ): InstallmentBreakdown {
   const total = toAmount(totalInput);
   const percent = toAmount(percentInput);
   const years = toAmount(yearsInput);
 
+  const annualPercents = (yearlyPercents || []).map(toAmount).filter((p) => p > 0);
+  const annualPercent = annualPercents.reduce((sum, p) => sum + p, 0);
+  const annualPayments = annualPercents.map((p) => Math.round(((total * p) / 100) * 100) / 100);
+  const annualTotal = annualPayments.reduce((sum, v) => sum + v, 0);
+
   const downPayment = (total * percent) / 100;
-  const remaining = Math.max(0, total - downPayment);
+  const remaining = Math.max(0, total - downPayment - annualTotal);
   const months = Math.round(years * MONTHS_PER_YEAR);
   const monthly = months > 0 ? remaining / months : 0;
 
@@ -88,6 +103,10 @@ export function installmentBreakdown(
     percent,
     years,
     downPayment,
+    annualPercents,
+    annualPercent,
+    annualPayments,
+    annualTotal,
     remaining,
     months,
     monthly,
