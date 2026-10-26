@@ -55,7 +55,7 @@ import {
   isSystemOnlyText,
 } from '../shared/comments.js';
 import { CANCEL_REASONS, CANCEL_REASON_BY_ID, cancelReasonLabelOf, latestCancelReasonOf } from './cancelReasons';
-import { MONTHS_PER_YEAR, installmentBreakdown, type InstallmentBreakdown } from './installments';
+import { MONTHS_PER_YEAR, caretAfterGrouping, digitsOnly, groupThousands, installmentBreakdown, type InstallmentBreakdown } from './installments';
 import {
   FEEDBACK_STATUS_TO_STAGE,
   LEAD_STATUS_TO_FEEDBACK_STATUS,
@@ -8727,6 +8727,15 @@ function InstallmentCalculatorView() {
   const [total, setTotal] = useState('');
   const [percent, setPercent] = useState('');
   const [years, setYears] = useState('');
+  const totalRef = useRef<HTMLInputElement | null>(null);
+  const caretRef = useRef<number | null>(null);
+
+  // بعد ما الفواصل تتضاف، نرجّع المؤشر مكانه: لو عدّلت في وسط الرقم ما ينطش لآخره
+  useEffect(() => {
+    if (caretRef.current === null || !totalRef.current) return;
+    totalRef.current.setSelectionRange(caretRef.current, caretRef.current);
+    caretRef.current = null;
+  }, [total]);
 
   const calc: InstallmentBreakdown = installmentBreakdown(total, percent, years);
   const { percent: percentNum, years: yearsNum, downPayment: down, remaining, months, monthly, ready } = calc;
@@ -8734,8 +8743,18 @@ function InstallmentCalculatorView() {
 
   const money = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 2 });
 
+  // حقل المبلغ: القيمة المحفوظة أرقام فقط، والمعروضة بفواصل آلاف (1,600,000)
+  const writeTotal = (input: HTMLInputElement) => {
+    const caret = input.selectionStart ?? input.value.length;
+    const digitsBefore = digitsOnly(input.value.slice(0, caret)).length;
+    const digits = digitsOnly(input.value).slice(0, 12);
+    setTotal(digits);
+    caretRef.current = caretAfterGrouping(groupThousands(digits), digitsBefore);
+  };
+
   const reset = () => {
     setTotal('');
+    caretRef.current = null;
     setPercent('');
     setYears('');
   };
@@ -8799,7 +8818,20 @@ function InstallmentCalculatorView() {
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">
-            {field('المبلغ الكلي (ج.م)', total, setTotal, '20000')}
+            <label className="block">
+              <span className="block text-[11.5px] text-[var(--text-muted)] mb-1">المبلغ الكلي (ج.م)</span>
+              <input
+                ref={totalRef}
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                value={groupThousands(total)}
+                onChange={(e) => writeTotal(e.currentTarget)}
+                placeholder="1,600,000"
+                dir="ltr"
+                className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm tabular-nums focus:outline-none focus:border-[var(--brand)]"
+              />
+            </label>
             {field('المقدم (%)', percent, setPercent, '8')}
             {field('عدد السنين', years, setYears, '8')}
           </div>

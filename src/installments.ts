@@ -24,6 +24,29 @@ export function toAmount(value: string | number | null | undefined): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+// حقل المبلغ بيكتب بفواصل الآلاف وأنت بتكتب (1,600,000) عشان الرقم الكبير ما يتلخبطش:
+// القيمة المحفوظة أرقام فقط، والعرض هو اللي بيتجمّع كل ٣ أرقام.
+export function digitsOnly(value: string | number | null | undefined): string {
+  return String(value ?? '').replace(/\D/g, '');
+}
+
+export function groupThousands(value: string | number | null | undefined): string {
+  const digits = digitsOnly(value).replace(/^0+(?=\d)/, '');
+  return digits ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
+}
+
+// موضع المؤشر بعد إضافة الفواصل: بنعدّ الأرقام اللي قبل المؤشر وبنحطّه بعد نفس
+// عدد الأرقام في النص المنسّق، فلو عدّلت في وسط الرقم المؤشر ما ينطش لآخره.
+export function caretAfterGrouping(formatted: string, digitsBefore: number): number {
+  if (digitsBefore <= 0) return 0;
+  let seen = 0;
+  for (let i = 0; i < formatted.length; i++) {
+    if (/\d/.test(formatted[i])) seen++;
+    if (seen === digitsBefore) return i + 1;
+  }
+  return formatted.length;
+}
+
 export function installmentBreakdown(
   totalInput: string | number,
   percentInput: string | number,

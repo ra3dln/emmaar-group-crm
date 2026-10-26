@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { installmentBreakdown, MONTHS_PER_YEAR, toAmount } from '../src/installments.ts';
+import { caretAfterGrouping, digitsOnly, groupThousands, installmentBreakdown, MONTHS_PER_YEAR, toAmount } from '../src/installments.ts';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const read = (rel) => fs.readFileSync(path.join(root, '..', rel), 'utf8');
@@ -54,7 +54,24 @@ check('toAmount بيرفض النص غير الرقمي', toAmount('abc') === 0 
 const oneYear = installmentBreakdown(20000, 2, 1);
 check('سنة واحدة: 12 شهر وقسط شهري = المتبقي ÷ 12', oneYear.months === 12 && near(oneYear.monthly, 19600 / 12));
 
-// ===== ٥) التبويب موجود في الواجهة ومربوط بالحسبة =====
+// ===== ٥) فواصل الآلاف في حقل المبلغ =====
+check('المليون بيتكتب بفواصل: 1,600,000', groupThousands('1600000') === '1,600,000', groupThousands('1600000'));
+check('عشرين ألف: 20,000', groupThousands('20000') === '20,000');
+check('أقل من ألف من غير فاصلة', groupThousands('950') === '950');
+check('حقل فاضي يفضل فاضي', groupThousands('') === '');
+check('الأصفار اللي في الأول بتتشال', groupThousands('0001600000') === '1,600,000', groupThousands('0001600000'));
+check('القيمة المحفوظة أرقام فقط (الفاصلة بتتشال)', digitsOnly('1,600,000') === '1600000');
+check('المؤشر بيفضل بعد نفس الرقم عند الإضافة', caretAfterGrouping('20,000', 2) === 2);
+check('المؤشر بيتظبط في وسط الرقم الكبير', caretAfterGrouping('1,600,000', 7) === 9, String(caretAfterGrouping('1,600,000', 7)));
+check('المؤشر في آخر الرقم', caretAfterGrouping('1,600,000', 7) === 9 && caretAfterGrouping('950', 3) === 3);
+
+// ===== ٦) الفواصل مش بتغيّر نتيجة الحسبة =====
+const big = installmentBreakdown('1,600,000', 8, 8);
+check('مليون و٦٠٠ ألف: المقدم 128,000', near(big.downPayment, 128000), String(big.downPayment));
+check('مليون و٦٠٠ ألف: المتبقي 1,472,000', near(big.remaining, 1472000), String(big.remaining));
+check('مليون و٦٠٠ ألف: القسط = 1,472,000 ÷ 96', near(big.monthly, 1472000 / 96), String(big.monthly));
+
+// ===== ٧) التبويب موجود في الواجهة ومربوط بالحسبة =====
 const app = read('src/App.tsx');
 const types = read('src/types.ts');
 check('نوع التبويب مضاف', /'calculator'/.test(types));
@@ -64,5 +81,8 @@ check('التبويب بيعرض الشاشة', /activeTab === 'calculator' && <
 check('الشاشة بتستخدم دالة الحسبة المشتركة', /installmentBreakdown\(total, percent, years\)/.test(app));
 check('الحقول الثلاثة موجودة', ['المبلغ الكلي (ج.م)', 'المقدم (%)', 'عدد السنين'].every((l) => app.includes(l)));
 check('مخرجات الحسبة معروضة', ['المقدم المدفوع', 'المبلغ بعد خصم المقدم', 'القسط الشهري', 'عدد الأشهر'].every((l) => app.includes(l)));
+check('حقل المبلغ بيعرض الفواصل وأنت بتكتب', /value=\{groupThousands\(total\)\}/.test(app));
+check('حقل المبلغ نصي (عشان يقبل الفاصلة)', /inputMode="numeric"/.test(app));
+check('الكتابة بتتحفظ أرقاماً فقط', /const digits = digitsOnly\(input\.value\)/.test(app));
 
 console.log(`\n✅ نجحت ${passed} فحوصات (حساب المقدم والأقساط)`);
