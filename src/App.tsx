@@ -30,7 +30,7 @@ import {
   roomsFromText,
 } from './arabicNumbers';
 import { buildXlsx, downloadBlob } from './xlsx';
-import { formNameOf, formKeyOf, activeFormNamesOf, UNKNOWN_FORM } from './campaignForms';
+import { formNameOf, formKeyOf, activeFormNamesOf, isSelectedFormRecord, UNKNOWN_FORM } from './campaignForms';
 import {
   AUTO_ASSIGN_KEY,
   activeRuleFor,
@@ -9263,6 +9263,19 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
   const canImpersonate = (user: User) =>
     !!onImpersonate && user.id !== currentUser.id && (user.role !== 'admin' || !!user.developer) && user.isActive;
 
+  // ===== بحث حسابات السيلز =====
+  // يفلتر الكروت فوراً بالاسم أو اسم المستخدم أو الرقم أو الفريق أو الرتبة،
+  // وبنفس تطبيع النص العربي المستخدم في باقي الحقول عشان «أحمد» تلاقي «احمد».
+  const [accountQuery, setAccountQuery] = useState('');
+  const accountTerm = normalizeArabicText(accountQuery).trim();
+  const accountRows = (users as User[]).filter(
+    (u: User) =>
+      !accountTerm ||
+      normalizeArabicText(
+        `${u.name || ''} ${u.username || ''} ${u.phone || ''} ${u.team || ''} ${rankLabel(displayRoleOf(u))}`
+      ).includes(accountTerm)
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -9296,9 +9309,25 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
       {view !== 'accounts' ? (
         <ChannelSourceCard channel={view} />
       ) : (
+      <>
+      <div className="panel p-3.5">
+        <div className="relative">
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
+          <input
+            value={accountQuery}
+            onChange={(e) => setAccountQuery(e.target.value)}
+            placeholder="ابحث بالاسم أو اسم المستخدم أو الرقم أو الفريق..."
+            aria-label="بحث حسابات الفريق"
+            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm"
+          />
+        </div>
+      </div>
+      {accountRows.length === 0 && (
+        <p className="panel p-8 text-center text-sm text-[var(--text-muted)]">لا يوجد حساب مطابق للبحث</p>
+      )}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <AnimatePresence>
-          {users.map((user: User) => (
+          {accountRows.map((user: User) => (
             <motion.div
               key={user.id}
               layout
@@ -9357,6 +9386,7 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
           ))}
         </AnimatePresence>
       </div>
+      </>
       )}
     </div>
   );
@@ -9828,15 +9858,18 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, active
   const clientPhones = new Set((clients || []).map((c: Client) => digitsOf(c.phone)).filter(Boolean));
   const leadPhones = new Set((leads || []).map((l: AssignedLead) => digitsOf(l.phone)).filter(Boolean));
   const q = normalizeArabicText(query).trim();
+  // الفورم غير المحدّد في صفحة القناة لا يظهر هنا (ولا يُحذف — يرجع بتحديده)
   const campaignClients = (clients || []).filter(
-    (c: Client) => !campaignOnly || isCampaignRecord(c) || leadPhones.has(digitsOf(c.phone))
+    (c: Client) =>
+      isSelectedFormRecord(activeForms, c) &&
+      (!campaignOnly || isCampaignRecord(c) || leadPhones.has(digitsOf(c.phone)))
   );
   // الأرقام اللي لسه في «توزيع الأرقام» ولم تتحول لسجل عميل — تظهر هنا كأرقام كامبين
   // (كل الأرقام الموزعة أرقام كامبين/توزيع، حتى لو وصفها القديم بلا «المصدر»)
   const campaignLeads = (leads || []).filter((lead: AssignedLead) => {
     if (lead.status === 'closed') return false;
     if (clientPhones.has(digitsOf(lead.phone))) return false;
-    return true;
+    return isSelectedFormRecord(activeForms, lead);
   });
   const matches = (c: Client) =>
     !q ||
@@ -10166,8 +10199,10 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
   // اختيار فورم يحصر الأرقام المعروضة في هذا الفورم فقط، وكل توزيع من هذا التبويب
   // (فردي أو دفعة أو جماعي) يقع على أرقام الفورم المختار وحده.
   const [form, setForm] = useState('all');
+  // العدّاد للفورمات المحدّدة فقط — الفورم غير المحدّد لا يظهر في القائمة ولا في العدّ
   const formCounts = new Map<string, number>();
   for (const lead of assignedLeads) {
+    if (!isSelectedFormRecord(activeForms, lead)) continue;
     const key = formKeyOf(lead);
     formCounts.set(key, (formCounts.get(key) || 0) + 1);
   }
@@ -10181,7 +10216,9 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
   // الأرقام المحوَّلة لعميل (status = closed) خرجت من «توزيع الأرقام»:
   // سجلها بقى هو العميل نفسه (تبان في «عملاء كامبين»)، فما ينفعش تفضل
   // معروضة هنا كرقم «غير مخصص» وكأنها لسه متاحة للتوزيع.
-  const openLeads = (assignedLeads as AssignedLead[]).filter((lead: AssignedLead) => lead.status !== 'closed');
+  const openLeads = (assignedLeads as AssignedLead[]).filter(
+    (lead: AssignedLead) => lead.status !== 'closed' && isSelectedFormRecord(activeForms, lead)
+  );
   const formLeads = activeForm === 'all'
     ? openLeads
     : openLeads.filter((lead: AssignedLead) => formKeyOf(lead) === activeForm);
@@ -10337,7 +10374,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
             onChange={(e) => setForm(e.target.value)}
             className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
           >
-            <option value="all" className="bg-gray-900">كل الفورمات ({assignedLeads.length})</option>
+            <option value="all" className="bg-gray-900">كل الفورمات ({openLeads.length})</option>
             {formOptions.map((option) => (
               <option key={option.name} value={option.name} className="bg-gray-900">
                 {option.name} ({option.count} رقم)

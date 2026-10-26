@@ -12,7 +12,9 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { buildAssignments } from '../server/leadSource.js';
 
-const { formNameOf, formKeyOf, activeFormNamesOf, UNKNOWN_FORM } = await import('../src/campaignForms.ts');
+const { formNameOf, formKeyOf, activeFormNamesOf, isSelectedFormRecord, UNKNOWN_FORM } = await import(
+  '../src/campaignForms.ts'
+);
 
 let passed = 0;
 const check = (label, condition, extra = '') => {
@@ -66,6 +68,26 @@ const built = buildAssignments({
 check('الرقم المسحوب يحمل اسم فورمِه', built.added[0]?.formName === 'GO ADS | CAVA');
 check('لا يُكتب مفتاح فورم فارغ', !('formName' in (built.added[1] || {})));
 check('الأرقام تدخل غير مخصصة دائماً', built.added.every((lead) => lead.salesId === ''));
+
+// ===== ٣.٥) الفورمات المحدّدة فقط تظهر في «عملاء كامبين» و«توزيع الأرقام» =====
+const selected = ['فورم أكتوبر'];
+check('سجل من فورم محّدد يظهر', isSelectedFormRecord(selected, { formName: 'فورم أكتوبر' }));
+check('سجل من فورم غير محّدد يُخفى', !isSelectedFormRecord(selected, { formName: 'فورم قديم' }));
+check(
+  'الوصف القديم يُقارن بنفس القاعدة',
+  !isSelectedFormRecord(selected, { description: 'استيراد تلقائي • المصدر: فيسبوك - فورم قديم' })
+);
+check('سجل بلا اسم فورم لا يُحجب', isSelectedFormRecord(selected, { description: 'إضافة يدوية' }));
+check('بلا أي فورم محّدد لا يُحجب شيء', isSelectedFormRecord([], { formName: 'أي فورم' }));
+check('مسافات زائدة في الاسم لا تمنع الظهور', isSelectedFormRecord(['  فورم أكتوبر '], { formName: 'فورم أكتوبر' }));
+check(
+  'فلتر «عملاء كامبين» يستخدم قاعدة الاختيار',
+  /isSelectedFormRecord\(activeForms, c\)/.test(fs.readFileSync('src/App.tsx', 'utf8'))
+);
+check(
+  'فلتر «توزيع الأرقام» يستخدم قاعدة الاختيار',
+  /isSelectedFormRecord\(activeForms, lead\)/.test(fs.readFileSync('src/App.tsx', 'utf8'))
+);
 
 // ===== ٤) ربط الواجهة =====
 const app = fs.readFileSync('src/App.tsx', 'utf8');

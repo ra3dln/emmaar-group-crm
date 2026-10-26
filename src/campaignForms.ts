@@ -53,3 +53,20 @@ export const activeFormNamesOf = (config: any): string[] => {
 // (حتى لا يختفي رقم قديم من فورم أُوقف تفعيله). الأكثر أرقاماً أولاً.
 export const mergeFormNames = (activeForms: string[] = [], recorded: string[] = []): string[] =>
   [...new Set([...activeForms.map((name) => String(name || '').trim()).filter(Boolean), ...recorded])].sort();
+
+// ===== «عملاء كامبين» و«توزيع الأرقام» يعرضان الفورمات المحدّدة فقط =====
+// الاختيار بالعلامة الخضراء في صفحة القناة (فيسبوك/إنستجرام) هو الذي يحدد ما يظهر:
+// فورم غير مختار لا تظهر أرقامه في التبويبين (ولا تُحذف — ترجع بمجرد تحديده).
+// استثناءان مقصودان حتى لا يختفي شيء بالخطأ:
+//   • سجل بلا اسم فورم (قديم/مضاف يدوياً) لا ينتمي لأي فورم فلا يُحجب.
+//   • لو لم يُحدَّد أي فورم أصلاً (إعدادات فارغة) نعرض كل شيء بدل شاشات فاضية.
+export const isSelectedFormRecord = (
+  activeForms: string[] = [],
+  record: FormNamedRecord | null | undefined
+): boolean => {
+  const active = (activeForms || []).map((name) => String(name || '').trim()).filter(Boolean);
+  if (!active.length) return true;
+  const name = formNameOf(record).trim();
+  if (!name) return true;
+  return active.includes(name);
+};
