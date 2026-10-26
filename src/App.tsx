@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, CallTarget, TabType } from './types';
 import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, syncNow, ownerOfPhoneOnServer, leadOwnerOfPhoneOnServer, clientPhonesOnServer } from './sync';
-import { buildPreview, buildSampleCsv, buildFakeCampaignCsv, decodeText, parseTable, type ImportPreview } from './leadImport';
+import { buildPreview, buildSampleCsv, buildFakeCampaignCsv, decodeText, parseTable, readSheetTable, type ImportPreview } from './leadImport';
 import { alarm, loadAlarmSettings, saveAlarmSettings, DEFAULT_ALARM_SETTINGS, type AlarmSettings } from './alarm';
 import { enablePush, disablePush, pushState, sendTestPush, pushSupported, registerWorker, resyncPush, localNotification, flushPush, pushHealth, type PushState, type PushHealth } from './push';
 import {
@@ -1436,6 +1436,14 @@ function App() {
   const [selectedUserFeedback, setSelectedUserFeedback] = useState<User | null>(null);
   
   const [showAddClient, setShowAddClient] = useState(false);
+  // مصدر/فورم جاهز لنافذة «إضافة عميل» (عملاء كامبين يفتحوها بمصدر «كامبين»)
+  const [addClientPreset, setAddClientPreset] = useState<any>(null);
+  // فتح نافذة «إضافة عميل» — مع مصدر جاهز (من «عملاء كامبين» ⇒ مصدر «كامبين»
+  // عشان العميل المضاف يدوياً يظهر في تبويب عملاء كامبين زي ما يكون جاي من شيت)
+  const openAddClient = (preset?: any) => {
+    setAddClientPreset(preset || null);
+    setShowAddClient(true);
+  };
   const [showAddReminder, setShowAddReminder] = useState(false);
   const [showAddProperty, setShowAddProperty] = useState(false);
   const [showAddFeedback, setShowAddFeedback] = useState(false);
@@ -1445,6 +1453,8 @@ function App() {
   const [showAddTeam, setShowAddTeam] = useState(false);
   const [showAddAssignedLead, setShowAddAssignedLead] = useState(false);
   const [showImportLeads, setShowImportLeads] = useState(false);
+  // رفع شيت عملاء في «عملاء كامبين» (أي شيت فيه اسم الشخص ورقمه)
+  const [showImportClients, setShowImportClients] = useState(false);
   
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
@@ -3365,7 +3375,7 @@ function App() {
             {activeTab !== 'daily-feedback' && activeTab !== 'admin-feedback' && (
               <motion.button
                 whileHover={{ scale: 1.05 }}
-                onClick={() => setShowAddClient(true)}
+                onClick={() => openAddClient()}
                 title="عميل جديد"
                 className="btn-primary"
               >
@@ -3511,7 +3521,7 @@ function App() {
             searchTerm={searchTerm}
             onSearch={setSearchTerm}
             onSelect={setSelectedClient}
-            onAdd={() => setShowAddClient(true)}
+            onAdd={() => openAddClient()}
             onAddNumber={currentUser.role === 'sales' ? () => setShowAddAssignedLead(true) : undefined}
             onCall={(c: Client) => setCallClient(c)}
             // شريط الفيدباك في الكارت: كل حالة تنقل العميل إلى مرحلتها تلقائياً
@@ -3610,6 +3620,8 @@ function App() {
             activeForms={activeCampaignForms}
             onSelect={(c: Client) => setSelectedClient(c)}
             onCall={(c: Client) => setCallClient(c)}
+            onAdd={() => openAddClient({ source: 'كامبين — إضافة يدوية' })}
+            onImport={() => setShowImportClients(true)}
           />}
           {/* شيت الفورمات: كل فورم لوحده مع تصدير أرقامه وفيدباكه العام */}
           {activeTab === 'admin-forms' && currentUser.role !== 'sales' && <AdminFormsSheetView clients={fullClients} leads={fullLeads} />}
@@ -3662,14 +3674,15 @@ function App() {
       </div>
 
       <AnimatePresence>
-        {showAddClient && <AddClientModal currentUser={currentUser} users={users} onClose={() => setShowAddClient(false)} onSuccess={loadData} />}
+        {showAddClient && <AddClientModal currentUser={currentUser} users={users} preset={addClientPreset} onClose={() => setShowAddClient(false)} onSuccess={loadData} />}
         {showAddReminder && <AddReminderModal clients={clients} currentUser={currentUser} onClose={() => setShowAddReminder(false)} onSuccess={loadData} />}
         {showAddProperty && <AddPropertyModal clients={clients} currentUser={currentUser} onClose={() => setShowAddProperty(false)} onSuccess={loadData} />}
         {showAddFeedback && <AddFeedbackModal clients={clients} currentUser={currentUser} preset={feedbackPreset} onClose={() => { setShowAddFeedback(false); setFeedbackPreset(null); }} onSuccess={() => { setFeedbackPreset(null); loadData(); }} />}
         {showAddUser && <AddUserModal currentUser={currentUser} onClose={() => setShowAddUser(false)} onSuccess={loadData} />}
         {showAddTeam && <AddTeamModal users={users} currentUser={currentUser} onClose={() => setShowAddTeam(false)} onSuccess={loadData} />}
         {showAddAssignedLead && <AddAssignedLeadModal users={users} currentUser={currentUser} onClose={() => setShowAddAssignedLead(false)} onSuccess={loadData} />}
-        {showImportLeads && <ImportLeadsModal users={users} clients={clients} assignedLeads={assignedLeads} currentUser={currentUser} onClose={() => setShowImportLeads(false)} onSuccess={loadData} />}          {selectedUserFeedback && <UserFeedbackModal
+        {showImportLeads && <ImportLeadsModal users={users} clients={clients} assignedLeads={assignedLeads} currentUser={currentUser} onClose={() => setShowImportLeads(false)} onSuccess={loadData} />}
+        {showImportClients && <ImportClientsModal users={users} clients={fullClients} assignedLeads={fullLeads} currentUser={currentUser} activeForms={activeCampaignForms} onClose={() => setShowImportClients(false)} onSuccess={loadData} />}          {selectedUserFeedback && <UserFeedbackModal
             user={selectedUserFeedback}
             clients={currentUser.role === 'admin' ? fullClients : clients}
             leads={currentUser.role === 'admin' ? fullLeads : assignedLeads}
@@ -9833,10 +9846,321 @@ function AdminFormsSheetView({ clients = [], leads = [] }: { clients?: Client[];
   );
 }
 
+// ===== رفع شيت عملاء: أي ملف فيه اسم الشخص ورقمه =====
+// «عملاء كامبين» بقى فيه زرارين: إضافة عميل يدوي، ورفع شيت.
+// الشيت بيتقرأ (CSV / TXT / إكسل حقيقي)، ونتعرف فيه على عمود الاسم وعمود الرقم
+// (تلقائياً أو بتحديد المدير)، وبعدها كل سطر سليم بيتسجّل عميل في «عملاء كامبين».
+function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUser, activeForms = [], onClose, onSuccess }: any) {
+  const salesUsers = (users || []).filter((u: User) => isAssignableSales(u));
+  const [stage, setStage] = useState<'pick' | 'preview' | 'done'>('pick');
+  const [fileName, setFileName] = useState('');
+  const [table, setTable] = useState<string[][]>([]);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [error, setError] = useState('');
+  const [dragging, setDragging] = useState(false);
+  const [ownerId, setOwnerId] = useState(String(currentUser?.id || ''));
+  const [formName, setFormName] = useState('');
+  const [result, setResult] = useState<{ added: number; duplicates: number; invalid: number } | null>(null);
+
+  // كل الأرقام الموجودة بالفعل (عملاء أو أرقام موزّعة) — عشان نكشف المكرر
+  const existingPhones = [
+    ...(assignedLeads || []).map((l: AssignedLead) => l.phone),
+    ...(clients || []).flatMap((c: Client) => [c.phone, ...(c.phones || [])]),
+  ].filter(Boolean);
+
+  const readFile = async (file: File) => {
+    setError('');
+    try {
+      const rows = await readSheetTable(file);
+      if (!rows.length) {
+        setError('الملف فارغ أو غير مقروء');
+        return;
+      }
+      const built = buildPreview(rows, existingPhones);
+      if (!built.rows.length) {
+        setError('لم نجد أي صفوف قابلة للقراءة في الملف');
+        return;
+      }
+      setTable(rows);
+      setPreview(built);
+      setFileName(file.name);
+      setStage('preview');
+    } catch (e: any) {
+      setError(e?.message || 'تعذّر قراءة الملف — تأكد أنه بصيغة CSV أو إكسل');
+    }
+  };
+
+  // تصحيح أعمدة الشيت يدوياً (لو التعرّف التلقائي مش مظبوط)
+  const remap = (next: ImportPreview['mapping']) => {
+    setPreview(buildPreview(table, existingPhones, next));
+  };
+  const headerCells = (table[0] || []).map((cell, index) => ({ label: cell || `العمود ${index + 1}`, index }));
+
+  const handleSave = () => {
+    if (!preview) return;
+    const now = new Date().toISOString();
+    const existing: Client[] = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+    const known = new Set(existing.map((c: Client) => phoneKeyOf(c.phone)).filter(Boolean));
+    const added: Client[] = [];
+    for (const row of preview.rows) {
+      if (row.invalid || row.duplicate || !row.phone) continue;
+      const key = phoneKeyOf(row.phone);
+      if (!key || known.has(key)) continue;
+      known.add(key);
+      added.push({
+        id: crypto.randomUUID(),
+        name: row.name || 'عميل بدون اسم',
+        phone: row.phone,
+        phones: [],
+        property: '',
+        budget: '',
+        monthlyInstallment: '',
+        deliveryPeriod: '',
+        status: 'campaign',
+        stage: 'new',
+        feedback: '',
+        priority: 'medium',
+        source: formName ? `كامبين — ${formName}` : 'كامبين — شيت مرفوع',
+        ...(formName ? { formName } : {}),
+        userId: ownerId,
+        assignedTo: ownerId,
+        createdAt: now,
+        updatedAt: now,
+        activities: [
+          { id: crypto.randomUUID(), type: 'created', text: `تمت إضافة العميل من ملف ${fileName}`, at: now, by: currentUser?.name || '' },
+        ],
+      } as Client);
+    }
+    if (!added.length) {
+      setError('كل أرقام الملف موجودة بالفعل — مش في جديد');
+      return;
+    }
+    localStorage.setItem('crm_clients', JSON.stringify([...added, ...existing]));
+    void pushKey('crm_clients');
+    onSuccess();
+    setResult({ added: added.length, duplicates: preview.duplicates, invalid: preview.invalid });
+    setStage('done');
+  };
+
+  const summary = preview
+    ? [
+        { label: 'إجمالي الصفوف', value: preview.total, className: 'text-[var(--text-strong)]' },
+        { label: 'عملاء جدد', value: preview.fresh, className: 'text-emerald-400' },
+        { label: 'مكررة (تُتجاهل)', value: preview.duplicates, className: 'text-amber-400' },
+        { label: 'غير صالحة', value: preview.invalid, className: 'text-red-400' },
+      ]
+    : [];
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
+      <motion.div
+        initial={{ scale: 0.94, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0 }}
+        transition={{ type: 'spring', stiffness: 220, damping: 22 }}
+        className="panel p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-[var(--brand-fill)] rounded-full flex items-center justify-center">
+              <Upload className="w-6 h-6 text-[var(--text-strong)]" />
+            </div>
+            <div>
+              <div className="page-intro"><div><h2>رفع شيت عملاء</h2></div></div>
+              <p className="text-xs text-[var(--text-muted)]">أي شيت فيه اسم الشخص ورقمه — بنقراه ونسجّل كل سطر عميل</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-[var(--tint-2)] rounded-[var(--r-sm)] transition-colors">
+            <X className="w-5 h-5 text-[var(--text-muted)]" />
+          </button>
+        </div>
+
+        {/* الخطوة ١: اختيار الملف */}
+        {stage === 'pick' && (
+          <div className="space-y-4">
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) void readFile(file);
+              }}
+              className={`rounded-[var(--r-xl)] border-2 border-dashed p-8 text-center transition-colors ${dragging ? 'border-[var(--brand)] bg-[var(--brand-primary-softer)]' : 'border-[var(--brand-primary-soft)] bg-[var(--tint-1)]'}`}
+            >
+              <Upload className="w-12 h-12 text-[var(--brand)] mx-auto mb-3" />
+              <p className="text-[var(--text-strong)] font-bold mb-1">اسحب الشيت هنا أو اختره من جهازك</p>
+              <p className="text-xs text-[var(--text-muted)] mb-4">
+                مدعوم: Excel (xlsx) · CSV · TXT — ولو الأرقام مكتوبة عربي (+20 و 010 و ٠١٠) بيتحوّلوا صح
+              </p>
+              <label className="inline-block cursor-pointer gradient-primary text-[var(--text-strong)] px-6 py-3 rounded-[var(--r-md)] font-bold">
+                اختر الملف
+                <input type="file" accept=".csv,.txt,.xlsx,.xlsm,text/csv" className="hidden"
+                  onChange={(e) => { const file = e.target.files?.[0]; if (file) void readFile(file); }} />
+              </label>
+            </div>
+            <p className="text-xs text-[var(--text-muted)] bg-[var(--tint-1)] rounded-[var(--r-md)] px-4 py-3">
+              المطلوب في الشيت عمودين بس: <b className="text-[var(--text-strong)]">اسم الشخص</b> و<b className="text-[var(--text-strong)]"> رقمه</b>.
+              لو الأعمدة بأسماء تانية، بنكتشفها ونقدر تختارها بنفسك في الخطوة الجاية.
+            </p>
+            {error && (
+              <p className="text-amber-400 text-sm bg-amber-500/10 border border-amber-500/20 rounded-[var(--r-md)] py-2 px-3 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* الخطوة ٢: المراجعة قبل الحفظ */}
+        {stage === 'preview' && preview && (
+          <div className="space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-[var(--text)]">
+                <FileText className="w-4 h-4 inline ml-1 text-[var(--text-muted)]" />
+                الملف: <span className="text-[var(--text-strong)] font-bold">{fileName}</span>
+              </p>
+              <button onClick={() => { setPreview(null); setError(''); setStage('pick'); }}
+                className="text-xs text-[var(--brand)] hover:text-[var(--brand)] font-bold">اختيار ملف آخر</button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {summary.map((item) => (
+                <div key={item.label} className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] p-3 text-center">
+                  <p className={`text-2xl font-bold ${item.className}`}>{item.value}</p>
+                  <p className="text-[11px] text-[var(--text-muted)] mt-1">{item.label}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* أعمدة الشيت — يقدر المدير يصحّحها */}
+            <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] p-4 space-y-3">
+              <p className="text-sm font-bold text-[var(--text-strong)]">أعمدة الشيت</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-xs text-[var(--text-muted)]">
+                  عمود الاسم
+                  <select
+                    value={preview.mapping.name || ''}
+                    onChange={(e) => remap({ ...preview.mapping, name: e.target.value })}
+                    className="w-full mt-1 bg-[var(--bg)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-sm text-[var(--text)]"
+                  >
+                    <option value="">— بلا اسم —</option>
+                    {headerCells.map((cell) => <option key={cell.index} value={cell.label}>{cell.label}</option>)}
+                  </select>
+                </label>
+                <label className="text-xs text-[var(--text-muted)]">
+                  عمود الرقم
+                  <select
+                    value={preview.mapping.phone || ''}
+                    onChange={(e) => remap({ ...preview.mapping, phone: e.target.value })}
+                    className="w-full mt-1 bg-[var(--bg)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-sm text-[var(--text)]"
+                  >
+                    <option value="">— بلا رقم —</option>
+                    {headerCells.map((cell) => <option key={cell.index} value={cell.label}>{cell.label}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-xs text-[var(--text-muted)]">
+                  صاحب العميل
+                  <select
+                    value={ownerId}
+                    onChange={(e) => setOwnerId(e.target.value)}
+                    className="w-full mt-1 bg-[var(--bg)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-sm text-[var(--text)]"
+                  >
+                    <option value={String(currentUser?.id || '')}>الإدارة (أنا)</option>
+                    {salesUsers.map((u: User) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  </select>
+                </label>
+                <label className="text-xs text-[var(--text-muted)]">
+                  فورم الكامبين (اختياري)
+                  <select
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    className="w-full mt-1 bg-[var(--bg)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-sm text-[var(--text)]"
+                  >
+                    <option value="">— بدون فورم —</option>
+                    {(activeForms || []).map((name: string) => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div className="max-h-64 overflow-y-auto rounded-[var(--r-md)] border border-[var(--border)] table-scroll">
+              <table className="w-full text-sm">
+                <thead className="bg-[var(--tint-1)] sticky top-0">
+                  <tr className="text-[var(--text-muted)] text-xs">
+                    <th className="py-2 px-3 text-right font-bold">الاسم</th>
+                    <th className="py-2 px-3 text-right font-bold">الرقم</th>
+                    <th className="py-2 px-3 text-right font-bold">الحالة</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.rows.slice(0, 50).map((row, index) => (
+                    <tr key={index} className="border-t border-[var(--border-soft)]">
+                      <td className="py-2 px-3 text-[var(--text-strong)]">{row.name || <span className="text-[var(--text-dim)]">بدون اسم</span>}</td>
+                      <td className="py-2 px-3 text-[var(--text)]" dir="ltr">{row.phone || row.rawPhone}</td>
+                      <td className="py-2 px-3">
+                        {row.invalid ? (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/20 text-red-400">رقم غير صالح</span>
+                        ) : row.duplicate ? (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400">مكرر</span>
+                        ) : (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">جديد</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {preview.rows.length > 50 && (
+              <p className="text-[11px] text-[var(--text-dim)] text-center">معروض أول ٥٠ صفاً من إجمالي {preview.rows.length}</p>
+            )}
+
+            {error && (
+              <p className="text-amber-400 text-sm bg-amber-500/10 border border-amber-500/20 rounded-[var(--r-md)] py-2 px-3 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
+              </p>
+            )}
+
+            <div className="flex gap-2">
+              <button onClick={handleSave} disabled={!preview.fresh}
+                className="flex-1 gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-40">
+                حفظ {preview.fresh} عميل في «عملاء كامبين»
+              </button>
+              <button onClick={onClose} className="px-5 py-3 rounded-[var(--r-md)] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)]">
+                إلغاء
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* الخطوة ٣: تم */}
+        {stage === 'done' && result && (
+          <div className="space-y-4 text-center">
+            <div className="w-16 h-16 mx-auto rounded-full bg-emerald-500/15 flex items-center justify-center">
+              <Check className="w-8 h-8 text-emerald-400" />
+            </div>
+            <p className="text-lg font-bold text-[var(--text-strong)]">
+              اتسجّل <span className="text-emerald-400">{result.added}</span> عميل جديد
+            </p>
+            <p className="text-xs text-[var(--text-muted)]">
+              اتجاهل {result.duplicates} مكرر و{result.invalid} رقم غير صالح — وظهر كل العملاء في «عملاء كامبين».
+            </p>
+            <button onClick={onClose} className="gradient-primary text-[var(--text-strong)] px-8 py-3 rounded-[var(--r-md)] font-bold">
+              تمام
+            </button>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
 // ===== تبويب «العملاء» للإدارة =====
 // كل عملاء الشركة في مكان واحد: العدد الحالي في المقدمة، وكارت لكل عميل يفتح
 // نافذة التفاصيل نفسها المستخدمة في «المراحل» (البيانات + الخط الزمني + الاتصال).
-function AdminClientsView({ clients, leads = [], users, onSelect, onCall, activeForms = [] }: any) {
+function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd, onImport, activeForms = [] }: any) {
   const [query, setQuery] = useState('');
   const [stage, setStage] = useState<'all' | Client['stage']>('all');
   // افتراضياً عملاء الكامبين فقط — وزر واحد يعرض كل العملاء (بما فيهم المضافون يدوياً)
@@ -9957,13 +10281,32 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, active
             تصدير شيت كل فورم بقى في تبويب «شيت الفورمات». اضغط على الكارت لعرض التفاصيل الكاملة.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setCampaignOnly((value) => !value)}
-          className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)] self-start sm:self-auto"
-        >
-          {campaignOnly ? 'عرض كل العملاء' : 'كامبين فقط'}
-        </button>
+        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+          {/* إضافة عميل يدوي + رفع شيت (أي شيت فيه اسم الشخص ورقمه) */}
+          <button
+            type="button"
+            onClick={() => onAdd?.()}
+            className="text-[11.5px] font-bold bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--brand-primary-soft)] flex items-center gap-1.5"
+            title="إضافة عميل واحد يدوياً"
+          >
+            <Plus className="w-3.5 h-3.5" /> إضافة عميل
+          </button>
+          <button
+            type="button"
+            onClick={() => onImport?.()}
+            className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)] flex items-center gap-1.5"
+            title="رفع شيت فيه اسم الشخص ورقمه"
+          >
+            <Upload className="w-3.5 h-3.5" /> رفع شيت
+          </button>
+          <button
+            type="button"
+            onClick={() => setCampaignOnly((value) => !value)}
+            className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)]"
+          >
+            {campaignOnly ? 'عرض كل العملاء' : 'كامبين فقط'}
+          </button>
+        </div>
       </div>
 
       {/* العدد الحالي — ثلاث خانات تكفي للنظرة السريعة */}
@@ -11978,17 +12321,25 @@ function StatusBadge({ status }: { status: Client['status'] }) {
 }
 
 // Modal Components (simplified)
-function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
+function AddClientModal({ currentUser, users, onClose, onSuccess, preset }: any) {
   // حساب «المطوّر» إداري في القاعدة لكنه يعمل سيلزاً — فالعميل يُسجّل باسمه هو،
   // بلا قائمة اختيار مندوب (كانت تطلب منه اختيار سيلز قبل الحفظ).
   // الإداري الذي يعمل سيلزاً (المطوّر/فريدة) يسجّل العميل باسمه هو بلا قائمة مندوبين
   const isAdmin = currentUser?.role !== 'sales' && !worksAsSales(currentUser);
   // المدير يضيف العميل لمندوب بعينه حتى يظهر للفريق (الإدارة مالها تبويب عملاء خاص)
   const reps = (users || []).filter((u: User) => ['sales', 'supervisor'].includes(effectiveRoleOf(u)));
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<{
+    name: string; phone: string; phones: string[]; property: string; budget: string;
+    monthlyInstallment: string; deliveryPeriod: string; status: 'campaign' | 'facebook' | 'external';
+    stage: 'new' | 'contacted' | 'meeting' | 'negotiation' | 'closed' | 'lost';
+    feedback: string; feedbackStatus: string; cancelReason: string; reminderAt: string;
+    priority: 'high' | 'medium' | 'low'; source: string; ownerId: string;
+  }>({
     name: '', phone: '', phones: [] as string[], property: '', budget: '', monthlyInstallment: '', deliveryPeriod: '',
     status: 'campaign', stage: 'new', feedback: '', feedbackStatus: 'follow-up', cancelReason: '',
     reminderAt: nextReminderInput(), priority: 'medium', source: '', ownerId: '',
+    // قيم جاهزة من نقطة الفتح (مثل «عملاء كامبين» ⇒ المصدر «كامبين» فيظهر في تبويبهم)
+    ...(preset || {}),
   });
   const [newPhone, setNewPhone] = useState('');
   const [error, setError] = useState('');
@@ -12186,12 +12537,12 @@ function AddClientModal({ currentUser, users, onClose, onSuccess }: any) {
           )}
           <input type="text" placeholder="القسط الشهري" value={form.monthlyInstallment} onChange={(e) => setForm({ ...form, monthlyInstallment: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
           <input type="text" placeholder="مدة الاستلام" value={form.deliveryPeriod} onChange={(e) => setForm({ ...form, deliveryPeriod: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" />
-          <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]">
+          <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as Client['status'] })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]">
             <option value="campaign" className="bg-gray-900">كامبين</option>
             <option value="facebook" className="bg-gray-900">فيسبوك</option>
             <option value="external" className="bg-gray-900">خارجي</option>
           </select>
-          <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]">
+          <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value as Client['stage'] })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]">
             <option value="new" className="bg-gray-900">جديد</option>
             <option value="contacted" className="bg-gray-900">تم التواصل</option>
             <option value="meeting" className="bg-gray-900">موعد معاينة</option>

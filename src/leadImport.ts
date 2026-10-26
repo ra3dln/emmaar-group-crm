@@ -1,5 +1,6 @@
 // ===== استيراد الأرقام من ملفات فيسبوك / إنجاز =====
 // كل الدوال هنا "نقية" (بدون واجهة) حتى يسهل اختبارها ومراجعتها.
+import { readXlsx } from './xlsx.ts';
 
 export type ImportedLead = {
   name: string;
@@ -196,14 +197,22 @@ const looksLikeHeader = (row: string[]): boolean => {
 };
 
 // --- 5) بناء المعاينة: تنظيف + كشف المكرر قبل أي إضافة ---
-export function buildPreview(table: string[][], existingPhones: string[]): ImportPreview {
+export function buildPreview(
+  table: string[][],
+  existingPhones: string[],
+  mappingOverride?: ImportPreview['mapping']
+): ImportPreview {
   const empty: ImportPreview = { rows: [], mapping: {}, total: 0, fresh: 0, duplicates: 0, invalid: 0 };
   if (!table.length) return empty;
 
   const hasHeader = looksLikeHeader(table[0]);
   const header = hasHeader ? table[0] : [];
   const body = hasHeader ? table.slice(1) : table;
-  const mapping = guessColumns(header, body);
+  // تعرّف تلقائي على الأعمدة — والمدير يقدر يصحّحها يدوياً (عمود الاسم/الرقم)
+  const mapping = {
+    ...guessColumns(header, body),
+    ...(mappingOverride || {}),
+  };
 
   const indexOf = (label?: string): number => {
     if (!label) return -1;
@@ -254,7 +263,15 @@ export function buildPreview(table: string[][], existingPhones: string[]): Impor
   return { rows, mapping, total: body.length, fresh: rows.length - duplicates - invalid, duplicates, invalid };
 }
 
-// --- 6) ملف وهمي كبير لتجربة التوزيع على الفريق ---
+// --- 6) قراءة أي شيت: CSV / TXT / إكسل (xlsx) ---
+// «رفع أي شيت»: بنقرأ الملف اللي بيختاره المدير — CSV أو TXT أو إكسل حقيقي.
+export async function readSheetTable(file: File): Promise<string[][]> {
+  const buffer = await file.arrayBuffer();
+  if (/\.(xlsx|xlsm)$/i.test(file.name)) return await readXlsx(buffer);
+  return parseTable(decodeText(buffer));
+}
+
+// --- 7) ملف وهمي كبير لتجربة التوزيع على الفريق ---
 // يحاكي كامبين حقيقية: ٣ حملات، ~٨٠٪ أرقام صحيحة، ~١٣٪ مكررة، ~٥٪ بلا رقم
 const FAKE_FIRST = ['أحمد', 'محمد', 'محمود', 'مصطفى', 'خالد', 'يوسف', 'عمر', 'كريم', 'هشام', 'شريف', 'منى', 'سارة', 'نورهان', 'هبة', 'أميرة', 'دينا', 'ياسمين', 'رنا', 'ملك', 'مي', 'عبد الله', 'عبد الرحمن', 'إسلام', 'طارق', 'وليد'];
 const FAKE_LAST = ['محمود', 'سامي', 'عبد الله', 'حسن', 'علي', 'إبراهيم', 'شريف', 'فؤاد', 'رمضان', 'السيد', 'مصطفى', 'جمال', 'فتحي', 'الشافعي', 'منصور'];
