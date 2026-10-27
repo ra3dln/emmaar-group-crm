@@ -123,6 +123,39 @@ export const sanitizeClientRecord = (client) => {
   return client;
 };
 
+// ===== فهرس آخر كلام على كل رقم =====
+// الرقم ممكن يكون اتكتب عليه كلام قبل ما ينزل على المندوب: مندوب تاني، أو مندوب
+// اتمسح حسابه (فبطاقته ما ظهرتش لحدّ). عشان الكومنت يبقى مع الرقم مين ما كان
+// كاتبه، الفهرس بيجمع بطاقات الفيدباك وسجلات المكالمات لكل الحسابات — مش نطاق
+// مندوب واحد — ويرجّع آخر كلام على كل رقم مع صاحبه ووقته وحالته.
+//
+// المفتاح: أرقام فقط (نفس تطبيع رقم التليفون في كل النظام).
+const digitsOf = (value) =>
+  String(value ?? '')
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/\D/g, '');
+
+export const commentsByPhone = (cards = [], logs = []) => {
+  const map = new Map();
+  const put = (phone, raw, at, by, status) => {
+    const key = digitsOf(phone);
+    if (!key) return;
+    const text = cleanCommentText(raw);
+    if (!text || isSystemOnlyText(text)) return;
+    const prev = map.get(key);
+    if (prev && String(prev.at || '') > String(at || '')) return;
+    map.set(key, { text, at: String(at || ''), by: String(by || ''), status: String(status || '') });
+  };
+  for (const card of cards || []) {
+    put(card?.clientPhone, card?.feedback, card?.date || card?.createdAt, card?.authorName || card?.by, card?.status);
+  }
+  for (const log of logs || []) {
+    put(log?.clientPhone, log?.comment, log?.at || log?.createdAt, log?.by || log?.authorName, log?.status);
+  }
+  return map;
+};
+
 // ===== تنظيف بطاقات الفيدباك اليومي (نفس الرقم + نفس النص + نفس الدقيقة = تكرار) =====
 // نفس الكلام في بطاقتين = تكرار. والبطاقة الآلية (زي «No answer») بنسيبها —
 // هي اللي فيها الحالة والنتيجة، والإخفاء بيحصل في العرض.

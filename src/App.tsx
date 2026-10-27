@@ -51,6 +51,7 @@ import {
   cleanCommentText,
   commentActivitiesOf,
   commentSignature,
+  commentsByPhone,
   dedupeComments,
   isCallResultText,
   isCommentActivity,
@@ -2321,6 +2322,17 @@ function App() {
       if (key) ownerByPhone.set(key, owner);
     }
 
+    // ===== الكومنت ينزل مع الرقم على المندوب =====
+    // الرقم ممكن يكون اتكتب عليه كلام قبل ما ينزل (مندوب تاني، أو مندوب اتمسح
+    // حسابه فبطاقته ما ظهرتش لحدّ). بنجمع آخر كلام على كل رقم من بطاقات الفيدباك
+    // وسجلات المكالمات (كل الحسابات) وبنضيفه في خط العميل لو ناقص — فالرقم
+    // بيوصل صاحبه الجديد بكلامه.
+    const phoneComments = commentsByPhone(dailyFeedbacks, callLogs);
+    const noteOfPhone = (phone: string) => {
+      const key = digits(phone);
+      return key ? phoneComments.get(key) || null : null;
+    };
+
     let all: Client[] = [];
     try {
       const parsed = JSON.parse(localStorage.getItem('crm_clients') || '[]');
@@ -2339,11 +2351,27 @@ function App() {
         if (owner === undefined) return c;
         touched = true;
         const ownerName = owner ? (users.find((u: User) => u.id === owner)?.name || 'سيلز آخر') : '';
+        // الكومنت المكتوب على الرقم: لو مش في خط العميل بنضيفه (مرة واحدة)
+        const note = noteOfPhone(c.phone);
+        const acts = c.activities || [];
+        const hasNote = !note || acts.some((a: any) => isCommentActivity(a) && cleanCommentText(a?.text) === note.text);
+        const noteActivity = note && !hasNote
+          ? [{
+              id: crypto.randomUUID(),
+              type: 'feedback',
+              text: note.text,
+              at: note.at || movedAt,
+              by: note.by,
+              ...(note.status ? { status: note.status } : {}),
+            }]
+          : [];
         return {
           ...c,
           userId: owner,
           assignedTo: owner,
           updatedAt: movedAt,
+          // «الفيدباك» = آخر كلام على العميل — يبان في الكارت من أول نظرة
+          feedback: note?.text || c.feedback,
           activities: [
             {
               id: crypto.randomUUID(),
@@ -2352,7 +2380,8 @@ function App() {
               at: movedAt,
               by: currentUser.name,
             },
-            ...(c.activities || []),
+            ...noteActivity,
+            ...acts,
           ],
         };
       });
@@ -2369,6 +2398,9 @@ function App() {
       clients: next,
       at: movedAt,
       by: currentUser.name,
+      // الكومنت المكتوب على الرقم قبل ما ينزل — ينزل معاه (من مندوب تاني أو
+      // من مندوب اتمسح حسابه، فبطاقته ما هيبانش لحدّ)
+      comments: phoneComments,
     });
     if (fresh.length) {
       next = [...fresh, ...next];
@@ -2379,6 +2411,27 @@ function App() {
       setClients(next);
       localStorage.setItem('crm_clients', JSON.stringify(next));
       void pushKey('crm_clients');
+    }
+
+    // ===== بطاقة الفيدباك بتنتقل مع الرقم =====
+    // بطاقة صاحبها حساب محذوف ما بيظهرش لحدّ (مش في قائمة حدّ). فلما الرقم ينزل
+    // على مندوب، البطاقة بتنتقل ليه — فيشوف الكومنت في «الفيدباك اليومي» بتاعه.
+    // بطاقة صاحبها لسه موجود بتفضل عنده (تاريخه هو).
+    if (ownerByPhone.size) {
+      let cardsChanged = false;
+      const nextCards = dailyFeedbacks.map((card: any) => {
+        const key = digits(card?.clientPhone);
+        const owner = key ? ownerByPhone.get(key) : undefined;
+        if (!owner || !key) return card;
+        if (users.some((u: User) => String(u.id) === String(card?.userId || ''))) return card;
+        cardsChanged = true;
+        return { ...card, userId: owner };
+      });
+      if (cardsChanged) {
+        setDailyFeedbacks(nextCards);
+        localStorage.setItem('crm_daily_feedback', JSON.stringify(nextCards));
+        void pushKey('crm_daily_feedback');
+      }
     }
     return synced;
   };
@@ -2669,6 +2722,7 @@ function App() {
       const feedbacks = JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]')
         .filter((f: DailyFeedback) => f.userId !== userId);
       localStorage.setItem('crm_daily_feedback', JSON.stringify(feedbacks));
+      void pushKey('crm_daily_feedback');
 
       const leads = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]')
         .filter((l: AssignedLead) => l.salesId !== userId && l.adminId !== userId);
@@ -2676,6 +2730,48 @@ function App() {
 
       // سجلات حضوره وانصرافه
       saveAttendance(getAttendance().filter((a: Attendance) => a.userId !== userId));
+    } else {
+      // ===== الأرقام والعملاء ترجع «غير مخصص» بدل ما تضيع مع الحساب =====
+      // حذف حساب المندوب ما يمسحش شغل الشركة: الأرقام ترجع لتوزيع الأرقام
+      // «غير مخصصة» ( ومعها كومنتاتها في خط العميل )، والعملاء يرجعوا بلا مالك
+      // لحد ما الإدارة توزّعهم. التذكيرات والحضور شخصية المندوب ⇒ بتتشال.
+      // (قبل التعديل كانت الأرقام بتفضل مربوطة بحساب مش موجود ⇒ مختفية عن الكل.)
+      const now = new Date().toISOString();
+      const leads: AssignedLead[] = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]')
+        .map((l: AssignedLead) => (String(l.salesId || '') === userId ? { ...l, salesId: '', assignedAt: now } : l));
+      localStorage.setItem('crm_assigned_leads', JSON.stringify(leads));
+
+      const clients: Client[] = JSON.parse(localStorage.getItem('crm_clients') || '[]')
+        .map((c: Client) => (
+          String(c.assignedTo || '') === userId || String(c.userId || '') === userId
+            ? { ...c, userId: '', assignedTo: '', updatedAt: now }
+            : c
+        ));
+      localStorage.setItem('crm_clients', JSON.stringify(clients));
+
+      // التذكيرات والحضور: شخصية المندوب — بتتشال
+      const reminders = JSON.parse(localStorage.getItem('crm_reminders') || '[]')
+        .filter((r: Reminder) => r.userId !== userId);
+      localStorage.setItem('crm_reminders', JSON.stringify(reminders));
+      saveAttendance(getAttendance().filter((a: Attendance) => a.userId !== userId));
+
+      // بطاقات الفيدباك (الكومنتات) بتفضل محفوظة مع أرقامها — مش بتتشال.
+      // ولما الرقم ينزل على مندوب، البطاقة بتنتقل ليه (في applyLeadOwners).
+
+      // التوزيع التلقائي: الحساب المحذوف ما يوزّعش عليه حدّ بعد كده
+      const rules = parseRules(JSON.parse(localStorage.getItem('crm_lead_auto_assign') || '[]'));
+      const nextRules = rules.map((rule) => (
+        rule.salesIds.includes(userId)
+          ? { ...rule, salesIds: rule.salesIds.filter((id) => id !== userId), updatedAt: now }
+          : rule
+      ));
+      if (nextRules.length !== rules.length || nextRules.some((rule, i) => rule !== rules[i])) {
+        localStorage.setItem('crm_lead_auto_assign', JSON.stringify(nextRules));
+        void pushKey('crm_lead_auto_assign');
+      }
+      void pushKey('crm_assigned_leads');
+      void pushKey('crm_clients');
+      void pushKey('crm_reminders');
     }
 
     // إزالة العضو من الفرق وحذف الفرق التي كان مشرفاً عليها
@@ -13394,7 +13490,7 @@ function ConfirmDeleteUserModal({ user, currentUser, onClose, onConfirm }: any) 
         </div>
 
         <button type="button" onClick={() => setDeleteRelatedData(!deleteRelatedData)}
-          className={`w-full flex items-center gap-3 rounded-[var(--r-md)] px-4 py-3 mb-4 border transition-colors text-right ${
+          className={`w-full flex items-center gap-3 rounded-[var(--r-md)] px-4 py-3 mb-2 border transition-colors text-right ${
             deleteRelatedData ? 'bg-red-500/15 border-red-500/40' : 'bg-[var(--tint-1)] border-[var(--border)]'
           }`}>
           <span className={`w-5 h-5 rounded-[var(--r-xs)] border flex items-center justify-center shrink-0 ${
@@ -13403,9 +13499,14 @@ function ConfirmDeleteUserModal({ user, currentUser, onClose, onConfirm }: any) 
             {deleteRelatedData && <Check className="w-3.5 h-3.5 text-[var(--text-strong)]" />}
           </span>
           <span className="text-sm text-[var(--text)]">
-            حذف بياناته أيضاً (العملاء، الأرقام، الفيدباك، التذكيرات)
+            حذف بياناته نهائياً كمان (العملاء، الأرقام، الفيدباك، التذكيرات)
           </span>
         </button>
+        <p className="text-[11px] text-[var(--text-dim)] mb-4 leading-relaxed">
+          {deleteRelatedData
+            ? 'تحذير: الأرقام والكومنتات بتتشال نهائياً ومش بترجع.'
+            : 'الأرقام ترجع «غير مخصصة» في توزيع الأرقام (مع كومنتاتها)، والعملاء يرجعوا بلا مالك لحد ما توزّعهم. التذكيرات والحضور بس اللي بيتشالوا.'}
+        </p>
 
         <div className="flex gap-3">
           <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}

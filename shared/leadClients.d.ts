@@ -15,4 +15,6 @@ export declare function buildLeadClients(options?: {
   extraPhones?: any[];
   at?: string;
   by?: string;
+  // آخر كلام على كل رقم (المفتاح = أرقام الرقم) — بينزل مع الرقم على المندوب
+  comments?: Map<string, { text?: string; at?: string; by?: string; status?: string }> | Record<string, any> | null;
 }): any[];

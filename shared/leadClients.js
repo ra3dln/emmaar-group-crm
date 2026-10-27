@@ -10,6 +10,7 @@
 // الملف نقي (بلا شبكة ولا واجهة) ليشتغل في المتصفح والسيرفر بنفس الكود.
 
 import { phoneKeyOf } from './autoAssign.js';
+import { cleanCommentText, isSystemOnlyText } from './comments.js';
 
 // بادئة معرّف العميل التلقائي — تميّزه عن العميل اليدوي (معرّف عشوائي)
 export const LEAD_CLIENT_ID_PREFIX = 'crm-lead-';
@@ -67,17 +68,37 @@ export const clientPhoneKeys = (clients = []) => {
   return out;
 };
 
+// ===== آخر كلام كُتب على الرقم =====
+// الرقم ممكن يكون اتكتب عليه كلام قبل ما ينزل على المندوب (مندوب تاني، أو حساب
+// اتمسح). الكومنت ده لازم ينزل مع الرقم: بنضيفه في خط العميل الزمني وبنحطه في
+// خانة «الفيدباك» عشان المندوب الجديد يشوفه من أول لحظة.
+const noteOf = (comments, key) => {
+  if (!comments) return null;
+  const raw = typeof comments.get === 'function' ? comments.get(key) : comments[key];
+  if (!raw) return null;
+  const text = cleanCommentText(raw?.text ?? raw?.note ?? raw);
+  if (!text || isSystemOnlyText(text)) return null;
+  return {
+    text,
+    at: String(raw?.at || ''),
+    by: String(raw?.by || ''),
+    status: String(raw?.status || ''),
+  };
+};
+
 // يبني عملاء جدد من الأرقام الموزَّعة التي ما عندها عميل لسه.
 //   leads       : الأرقام الموزَّعة (salesId = صاحب الرقم)
 //   clients     : العملاء الموجودون — أرقامهم محجوزة (رقم واحد = مالك واحد)
 //   extraPhones : أرقام إضافية محجوزة (مثل لقطة السيرفر) فلا يتكرر السجل
 //   by          : اسم من نفّذ الإسناد (يكتب في الخط الزمني للعميل)
+//   comments    : آخر كلام على كل رقم (Map بالمفتاح = أرقام الرقم)
 export function buildLeadClients({
   leads = [],
   clients = [],
   extraPhones = [],
   at = new Date().toISOString(),
   by = '',
+  comments = null,
 } = {}) {
   const taken = clientPhoneKeys(clients);
   for (const phone of asList(extraPhones)) {
@@ -100,6 +121,8 @@ export function buildLeadClients({
       String(lead?.campaignAt || '') ||
       campaignAtFromText(description) ||
       String(lead?.createdAt || at);
+    // الكومنت اللي اتكتب على الرقم قبل ما ينزل — بينزل معاه
+    const note = noteOf(comments, key);
     created.push({
       id: leadClientIdFor(lead.phone),
       userId: owner,
@@ -113,7 +136,7 @@ export function buildLeadClients({
       deliveryPeriod: '',
       status: 'campaign',
       stage: 'new',
-      feedback: '',
+      feedback: note?.text || '',
       priority: 'high',
       source: description ? `رقم موزّع — ${description}` : 'رقم موزّع',
       ...(lead?.formName ? { formName: String(lead.formName) } : {}),
@@ -129,6 +152,18 @@ export function buildLeadClients({
           at,
           by,
         },
+        ...(note
+          ? [
+              {
+                id: `${LEAD_CLIENT_ID_PREFIX}${key}-note`,
+                type: 'feedback',
+                text: note.text,
+                at: note.at || at,
+                by: note.by,
+                ...(note.status ? { status: note.status } : {}),
+              },
+            ]
+          : []),
       ],
     });
   }

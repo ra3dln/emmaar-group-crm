@@ -38,5 +38,14 @@ export declare function isCommentActivity(activity: any): boolean;
 export declare function commentSignature(text: any, at: any): string;
 export declare function dedupeComments(items: any[]): any[];
 export declare function commentActivitiesOf(client: any): any[];
+
+// فهرس آخر كلام على كل رقم (مع صاحبه ووقته وحالته)
+export declare type PhoneComment = {
+  text: string;
+  at: string;
+  by: string;
+  status: string;
+};
+export declare function commentsByPhone(cards?: any[], logs?: any[]): Map<string, PhoneComment>;
 export declare function sanitizeClientRecord<T>(client: T): T;
 export declare function sanitizeDailyFeedbackCards(cards: any[]): any[];

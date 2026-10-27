@@ -102,9 +102,13 @@ check('مفيش مسار تحويل يدوي (onConvert)', !app.includes('onConv
 check('مفيش دالة التحويل اليدوي', !app.includes('handleConvertLeadToClient'));
 
 // ===== ٧) الربط في الواجهة: التوزيع بيصنع العميل =====
+// نحصر جسم الدالة نفسها (من أولها لآخرها) — مش نافذة بأحرف ثابتة، عشان
+// إضافة جديدة جوّاها ما تبوّظش الفحص.
 const applyBlock = (() => {
   const i = app.indexOf('const applyLeadOwners');
-  return i === -1 ? '' : app.slice(i, i + 4000);
+  if (i === -1) return '';
+  const end = app.indexOf('const removeLeadClient', i);
+  return end === -1 ? app.slice(i, i + 8000) : app.slice(i, end);
 })();
 check('توزيع الأرقام بيستدعي تحويل العميل التلقائي', /buildLeadClients\(\{/.test(applyBlock));
 check(
