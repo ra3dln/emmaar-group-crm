@@ -46,6 +46,6 @@ export declare type PhoneComment = {
   by: string;
   status: string;
 };
-export declare function commentsByPhone(cards?: any[], logs?: any[]): Map<string, PhoneComment>;
+export declare function commentsByPhone(cards?: any[], logs?: any[], users?: any[]): Map<string, PhoneComment>;
 export declare function sanitizeClientRecord<T>(client: T): T;
 export declare function sanitizeDailyFeedbackCards(cards: any[]): any[];

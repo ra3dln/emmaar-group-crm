@@ -58,7 +58,7 @@ check('العميل الجديد من غير كومنت: خانة الفيدبا
 
 // ===== ٣) الواجهة: التوزيع بينقل الكومنت مع الرقم =====
 const app = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
-check('التوزيع بيجمع كومنتات كل الأرقام', /commentsByPhone\(dailyFeedbacks, callLogs\)/.test(app));
+check('التوزيع بيجمع كومنتات كل الأرقام', /commentsByPhone\(dailyFeedbacks, callLogs(, users)?\)/.test(app));
 check('العميل بياخد الكومنت الناقص في خطه', /const noteActivity = note && !hasNote/.test(app));
 check('خانة الفيدباك بتتحدّث بالكومنت', /feedback: note\?\.text \|\| c\.feedback/.test(app));
 check('العميل الجديد بياخد الكومنت معاه', /comments: phoneComments/.test(app));
@@ -74,6 +74,16 @@ check('حذف الحساب: بطاقات الفيدباك بتفضل محفوظ�
 check('حذف الحساب: التذكيرات بتتشال', /crm_reminders/.test(defaultPath));
 check('حذف الحساب: المحذوف يتشال من قواعد التوزيع التلقائي', /rule\.salesIds\.filter\(\(id\) => id !== userId\)/.test(defaultPath));
 check('حذف نهائي (اختياري): لسه بيمسح الأرقام والكومنتات', /\.filter\(\(f: DailyFeedback\) => f\.userId !== userId\)/.test(deleteBlock));
+
+// ===== ٥) اسم كاتب الكومنت يبان جنب الكومنت =====
+const commentsSrc = fs.readFileSync(path.join(root, 'shared/comments.js'), 'utf8');
+check('اسم الكاتب بيتقري من الحسابات لو مش متسجّل', /nameOf\(card\?\.userId\)/.test(commentsSrc));
+check('الكارت بيعرض اسم كاتب آخر كومنت', /className="cc-author"/.test(app) && /commentAuthorName\(last, users\)/.test(app));
+check('قائمة العملاء بتعرض الكاتب مع آخر ملاحظة', /آخر ملاحظة\{commentAuthorName\(last, users\)/.test(app));
+check('لوحة المراحل بتعرض الكاتب مع آخر كومنت', /آخر كومنت\$\{lastAuthor \? ` — \$\{lastAuthor\}` : ''\}/.test(app));
+check('تفاصيل العميل بتعرض الكاتب تحت كل كومنت', /commentAuthorName\(a, users\)/.test(app));
+check('اسم الكاتب بيتحسب من الاسم المحفوظ أو من معرّف الكاتب', /const commentAuthorName = \(activity: any, users: any\[\] = \[\]\)/.test(app) && /مندوب سابق/.test(app));
+check('سجل تعليقات العميل بيعرض الكاتب (من الكومنت ومن بطاقة الفيدباك)', /by: commentAuthorName\(activity, users\)/.test(app) && /by: nameOfUser\(feedback\.userId\)/.test(app));
 
 console.log(`\n${failed ? '❌' : '✅'} نجحت ${passed} فحوصات${failed ? ` — فشل ${failed}` : ''}`);
 if (failed) process.exit(1);

@@ -2327,7 +2327,7 @@ function App() {
     // حسابه فبطاقته ما ظهرتش لحدّ). بنجمع آخر كلام على كل رقم من بطاقات الفيدباك
     // وسجلات المكالمات (كل الحسابات) وبنضيفه في خط العميل لو ناقص — فالرقم
     // بيوصل صاحبه الجديد بكلامه.
-    const phoneComments = commentsByPhone(dailyFeedbacks, callLogs);
+    const phoneComments = commentsByPhone(dailyFeedbacks, callLogs, users);
     const noteOfPhone = (phone: string) => {
       const key = digits(phone);
       return key ? phoneComments.get(key) || null : null;
@@ -3609,6 +3609,7 @@ function App() {
           ))}
           {activeTab === 'clients' && isSalesView && <ClientsView
             currentUser={currentUser}
+            users={scopedUsers}
             onRefresh={loadData}
             clients={manualClients}
             leads={manualLeads}
@@ -3638,7 +3639,7 @@ function App() {
             setFeedbackPreset({ clientId: client.id, clientName: client.name, clientPhone: client.phone });
             setShowAddFeedback(true);
           }} />}
-          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} numbers={workNumbers} leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} alertMap={alertMap} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} onCall={(c: any) => setCallClient(c)} onLeadViewed={(id: string) => {
+          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} users={scopedUsers} numbers={workNumbers} leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} alertMap={alertMap} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} onCall={(c: any) => setCallClient(c)} onLeadViewed={(id: string) => {
             const target = assignedLeads.find((l: AssignedLead) => l.id === id);
             if (!target || target.status !== 'new') return;
             writeAssignedLeads((all) => all.map((l: AssignedLead) =>
@@ -3669,7 +3670,7 @@ function App() {
             localStorage.setItem('crm_reminders', JSON.stringify(JSON.parse(localStorage.getItem('crm_reminders') || '[]').filter((r: Reminder) => r.id !== id)));
             void pushKey('crm_reminders');
           }} onAdd={() => setShowAddReminder(true)} />}
-          {activeTab === 'daily-feedback' && isSalesView && <DailyFeedbackView feedbacks={dailyFeedbacks} clients={clients} currentUser={currentUser} callLogs={callLogs.filter((l: CallLog) => l.salesId === currentUser.id)} onDelete={(id: string) => {
+          {activeTab === 'daily-feedback' && isSalesView && <DailyFeedbackView feedbacks={dailyFeedbacks} clients={clients} currentUser={currentUser} users={users} callLogs={callLogs.filter((l: CallLog) => l.salesId === currentUser.id)} onDelete={(id: string) => {
             setDailyFeedbacks(dailyFeedbacks.filter(f => f.id !== id));
             localStorage.setItem('crm_daily_feedback', JSON.stringify(JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]').filter((f: DailyFeedback) => f.id !== id)));
             void pushKey('crm_daily_feedback');
@@ -3787,7 +3788,7 @@ function App() {
             dailyFeedbacks={currentUser.role === 'admin' ? fullFeedbacks : dailyFeedbacks}
             onClose={() => setSelectedUserFeedback(null)}
           />}
-        {selectedClient && <ClientDetailModal client={selectedClient} callLogs={currentUser.role === 'admin' ? fullCallLogs : callLogs} onClose={() => setSelectedClient(null)} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
+        {selectedClient && <ClientDetailModal client={selectedClient} users={users} callLogs={currentUser.role === 'admin' ? fullCallLogs : callLogs} onClose={() => setSelectedClient(null)} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
         {callClient && <CallFlowModal
           client={callClient}
           user={currentUser}
@@ -3873,6 +3874,7 @@ function App() {
         {statusBoard && (
           <StatusBoardView
             statusId={statusBoard}
+            users={scopedUsers}
             numbers={workNumbers}
             leads={assignedLeads}
             alertMap={alertMap}
@@ -5444,6 +5446,20 @@ const lastCommentOf = (c: any): ClientActivity | null => {
   );
 };
 
+// ===== اسم كاتب الكومنت =====
+// كل كومنت بيتسجّل باسم صاحبه (by) ومعرّفه (authorId). لو الاسم مش موجود
+// بنلفيه من الحسابات (الاسم بيتغيّر مع الوقت)، ولو الحساب اتمسح بنكتب
+// «مندوب سابق» — عشان الكومنت يفضل معروف مين كتبه.
+const commentAuthorName = (activity: any, users: any[] = []): string => {
+  const by = String(activity?.by || '').trim();
+  if (by) return by;
+  const authorId = String(activity?.authorId || '').trim();
+  if (!authorId) return '';
+  const found = (users || []).find((u: any) => String(u?.id) === authorId);
+  if (found?.name) return String(found.name);
+  return 'مندوب سابق';
+};
+
 // قائمة الحالات المنسدلة: زر يعرض الحالة بلونها المضيء، ويفتح قائمة منسدلة بـ٩ حالات
 // (بدل الشريط المسطّح الملاصق للاسم). القائمة تُرسم عبر Portal لتخرج من حدود الكارت/الجدول.
 function StatusMenu({ value, onPick, label = 'تسجيل فيدباك', className = '', stopPropagation = true }:
@@ -5622,7 +5638,7 @@ function QuickNoteButton({ active, onToggle }: { active: boolean; onToggle: () =
 // الهاتف + الأزرار)، لأن المراحل كانت تعرض سطرين بلا وسيلة لتسجيل فيدباك.
 // صندوق الفيدباك (حالة + كومنت إلزامي) داخلي هنا، والحفظ يتحرك معه المرحلة تلقائياً،
 // فالسيلز يسجّل الفيدباك من المراحل بلا رجوع لتبويب العملاء.
-function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onSetStage, onRefresh, onCall, alertMap }: any) {
+function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenComments, onSetStage, onRefresh, onCall, alertMap }: any) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState('');
   const [commentText, setCommentText] = useState('');
@@ -5634,6 +5650,8 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
   const sourceText = sourceLabelOf(client);
   const comments = commentCountOf(client);
   const last = lastCommentOf(client);
+  // اسم كاتب آخر كومنت — يبان جنب الكومنت نفسه
+  const lastAuthor = commentAuthorName(last, users);
   // ===== «محتاج إجراء»: التذكير فات موعده والمندوب مخدش خطوة بعده =====
   // الكارت بيتلوّن أصفر (في كل المراحل) لحد ما المندوب يتصرف، وبعدها يرجع
   // لونه الأصلي (لون المرحلة) زي ما كان.
@@ -5729,7 +5747,11 @@ function ClientFeedbackCard({ client, currentUser, onSelect, onOpenComments, onS
           </div>
 
           {last?.text && (
-            <p className="cc-lastfb"><FeedbackChip status={last.status} alert={needsAction} /> {last.text}</p>
+            <p className="cc-lastfb">
+              <FeedbackChip status={last.status} alert={needsAction} />
+              {lastAuthor && <span className="cc-author" title="كاتب الكومنت">{lastAuthor}</span>}
+              <span className="cc-lastfb-text">{last.text}</span>
+            </p>
           )}
 
           <div className="cc-phone-row">
@@ -5975,10 +5997,15 @@ function CommentsBoardModal({ clients = [], callLogs = [], onClose }: any) {
 // ===== سجل كل تعليقات عميل واحد =====
 // يُفتح بالضغط على كارت الفيدباك أو زر الكومنتات — يعرض كل الكومنتات/المكالمات
 // مرتّبة بالأحدث، ومجمّعة باليوم، مع الوقت واسم الكاتب وحالة الفيدباك.
-function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }: any) {
+function ClientCommentsModal({ client, users = [], callLogs = [], feedbacks = [], onClose }: any) {
   const entries = useMemo(() => {
     const digits = normalizeDigits(String(client?.phone || '')).replace(/\D/g, '');
     const name = normalizeArabicText(String(client?.name || ''));
+    // اسم كاتب كل سطر: من الاسم المحفوظ، ولا من الحسابات (بطاقة الفيدباك ما بتخزّنش الاسم)
+    const nameOfUser = (id: any) => {
+      const found = (users || []).find((u: any) => String(u?.id) === String(id || ''));
+      return found?.name ? String(found.name) : 'مندوب سابق';
+    };
 
     const list: Array<{ id: string; at: string; text: string; by?: string; status?: string; kind: string; result?: string }> = [];
 
@@ -5988,7 +6015,7 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
         id: `act-${activity.id}`,
         at: activity.at,
         text: activity.text,
-        by: activity.by,
+        by: commentAuthorName(activity, users),
         status: activity.status,
         kind: activity.type,
       });
@@ -6004,6 +6031,7 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
         id: `fb-${feedback.id}`,
         at: feedback.date || feedback.createdAt,
         text: fbText,
+        by: nameOfUser(feedback.userId),
         status: feedback.status,
         kind: 'feedback',
         result: feedback.callStatus,
@@ -6021,7 +6049,7 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
         id: `log-${log?.id}`,
         at: String(log?.createdAt || ''),
         text: logText,
-        by: String(log?.salesName || ''),
+        by: String(log?.salesName || '') || nameOfUser(log?.userId || log?.salesId),
         kind: 'call',
         result: log?.result,
       });
@@ -6031,7 +6059,7 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
     // نفس الكلام بينكتب في أكتر من مكان (حدث على العميل + بطاقة فيدباك في «الفيدباك
     // اليومي»)، فكان نفس الكومنت بيتكرّر مرتين أو ثلاث. هنا ندمجهم في سطر واحد.
     return dedupeComments(list).sort((a, b) => String(b.at).localeCompare(String(a.at)));
-  }, [client, feedbacks, callLogs]);
+  }, [client, feedbacks, callLogs, users]);
 
   const days = useMemo(() => {
     const map = new Map<string, typeof entries>();
@@ -6135,7 +6163,7 @@ function ClientCommentsModal({ client, callLogs = [], feedbacks = [], onClose }:
 // قائمة العملاء للمندوب: الأرقام الواردة من الإدارة + عملاؤه في **قائمة واحدة** بلا أي تقسيم،
 // وكل كارت يحمل شريطاً لونياً وشارة توضح مصدر العميل (Facebook / Campaign / External…)
 // مع صندوق اختيارات سريع جمب الاسم: new / follow up / closed deal.
-function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedbacks = [], alertMap, searchTerm, onSearch, onSelect, onAdd, onAddNumber, onCall, onLeadViewed, onSetStage, onRefresh }: any) {
+function ClientsView({ currentUser, clients, users = [], leads = [], callLogs = [], feedbacks = [], alertMap, searchTerm, onSearch, onSelect, onAdd, onAddNumber, onCall, onLeadViewed, onSetStage, onRefresh }: any) {
   const [view, setView] = useState<'cards' | 'table'>(() => (localStorage.getItem('crm_clients_view') === 'table' ? 'table' : 'cards'));
   const [showComments, setShowComments] = useState(false);
   const [commentsClient, setCommentsClient] = useState<Client | null>(null);
@@ -6574,7 +6602,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                   {!open && !isLead && last?.text && (
                     <div className="ct-lastnote" onClick={() => onSelect(client)}>
                       <FeedbackChip status={last.status} alert={!!alertMap?.get(digitsOfPhone(client?.phone))} />
-                      {' '}آخر ملاحظة: {last.text}
+                      {' '}آخر ملاحظة{commentAuthorName(last, users) ? ` — ${commentAuthorName(last, users)}` : ''}: {last.text}
                     </div>
                   )}
                 </Fragment>
@@ -6607,6 +6635,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
                 key={`client-${client!.id}`}
                 client={client}
                 currentUser={currentUser}
+                users={users}
                 alertMap={alertMap}
                 onSelect={onSelect}
                 onOpenComments={() => setCommentsClient(client)}
@@ -6622,7 +6651,7 @@ function ClientsView({ currentUser, clients, leads = [], callLogs = [], feedback
       <AnimatePresence>
         {showComments && <CommentsBoardModal clients={clients} callLogs={callLogs} onClose={() => setShowComments(false)} />}
         {commentsClient && (
-          <ClientCommentsModal client={commentsClient} callLogs={callLogs} feedbacks={feedbacks} onClose={() => setCommentsClient(null)} />
+          <ClientCommentsModal client={commentsClient} users={users} callLogs={callLogs} feedbacks={feedbacks} onClose={() => setCommentsClient(null)} />
         )}
       </AnimatePresence>
     </div>
@@ -6683,7 +6712,9 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
                   userClients.map((client: Client) => {
                     const src = SOURCE_KINDS[sourceKindOf(`${client.source} ${client.status}`)];
                     const comments = commentCountOf(client);
-                    const last = (client.activities || []).slice(-1)[0];
+                    // آخر كومنت حقيقي (مش آخر حدث — الحدث ممكن يكون لوج اتصال)
+                    const last = lastCommentOf(client);
+                    const lastAuthor = commentAuthorName(last, users);
                     const cur = quickStageOf(client.stage);
                     return (
                       <div key={client.id} className={`pipe-client ${src.cls}`}>
@@ -6693,7 +6724,7 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
                           <span className="pipe-c-info">
                             <b>{client.name}</b>
                             <small dir="ltr">{client.phone}</small>
-                            <small className="pipe-c-note">{last?.text ? `آخر كومنت: ${last.text}` : 'لا كومنتات بعد'}</small>
+                            <small className="pipe-c-note">{last?.text ? `آخر كومنت${lastAuthor ? ` — ${lastAuthor}` : ''}: ${last.text}` : 'لا كومنتات بعد'}</small>
                           </span>
                           <span className="comments-pill"><MessageSquare className="w-3.5 h-3.5" /><b>{comments}</b></span>
                         </button>
@@ -7066,7 +7097,7 @@ function LeadsView({
   );
 }
 
-function PipelineView({ clients, numbers = [], leads = [], alertMap, onUpdateStage, currentUser, onSelectClient, onRefresh, onLeadViewed, onCall }: any) {
+function PipelineView({ clients, users = [], numbers = [], leads = [], alertMap, onUpdateStage, currentUser, onSelectClient, onRefresh, onLeadViewed, onCall }: any) {
   // كل رقم في نطاقي: العميل بحالته، والرقم الموزّع بحالة آخر فيدباك عليه.
   // بدون كده أعمدة المراحل كانت تعرض صفراً رغم وجود أرقام في التوزيع.
   // كل بطاقة عميل تحمل نفس كارت تبويب «العملاء» (بشريط الفيدباك بتسع حالات وصندوق
@@ -7109,6 +7140,7 @@ function PipelineView({ clients, numbers = [], leads = [], alertMap, onUpdateSta
                       key={`client-${record.client.id}`}
                       client={record.client}
                       currentUser={currentUser}
+                      users={users}
                       alertMap={alertMap}
                       onSelect={onSelectClient}
                       onOpenComments={onSelectClient}
@@ -7137,7 +7169,7 @@ function PipelineView({ clients, numbers = [], leads = [], alertMap, onUpdateSta
 
 // ===== شريط التذكير الرنّان: نفس شكل الإشعار الأصلي + أزرار الإسكات والإتمام والتأجيل =====
 // ===== بند ٤: صفحة حالة واحدة — كل الأرقام اللي عليها الحالة دي =====
-function StatusBoardView({ statusId, numbers = [], leads = [], alertMap, currentUser, onClose, onSelect, onSetStage, onRefresh, onLeadViewed, onCall }: any) {
+function StatusBoardView({ statusId, users = [], numbers = [], leads = [], alertMap, currentUser, onClose, onSelect, onSetStage, onRefresh, onLeadViewed, onCall }: any) {
   const meta = FEEDBACK_STATUS_BY_ID[statusId];
   // نفس قاعدة لوحة الحالات: كل رقم بحالته (عميل مسجّل أو رقم في التوزيع)
   const items: any[] = (numbers || []).filter(
@@ -7173,6 +7205,7 @@ function StatusBoardView({ statusId, numbers = [], leads = [], alertMap, current
                   key={`client-${record.client.id}`}
                   client={record.client}
                   currentUser={currentUser}
+                  users={users}
                   alertMap={alertMap}
                   onSelect={onSelect}
                   onOpenComments={onSelect}
@@ -8512,7 +8545,7 @@ function RemindersView({ reminders, onLog, onDelay, onDelete, onAdd }: any) {
 // ===== الفيدباك اليومي للمندوب: **كارت لكل رقم**، والكومنتات مرصوصة تحت بعضها =====
 // أى كومنت يكتبه المندوب على أى عميل (من تبويب العملاء أو من الاتصال أو من إضافة فيدباك)
 // ينزل هنا فوراً منسوباً لكاتبه — حتى لو كان العميل مسجلاً باسم الإدارة أو باسم مندوب آخر.
-function DailyFeedbackView({ feedbacks, clients, currentUser, callLogs = [] }: any) {
+function DailyFeedbackView({ feedbacks, clients, currentUser, users = [], callLogs = [] }: any) {
   const [historyClient, setHistoryClient] = useState<Client | null>(null);
   const norm = (value: any) => normalizeDigits(String(value || '')).replace(/\D/g, '');
   // فيدباكي أنا وحدي: الفيدباك منسوب لصاحبه (userId)، والربط بالرقم كان يجعل
@@ -8625,6 +8658,7 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, callLogs = [] }: a
         {historyClient && (
           <ClientCommentsModal
             client={historyClient}
+            users={users}
             callLogs={callLogs}
             feedbacks={feedbacks}
             onClose={() => setHistoryClient(null)}
@@ -14501,7 +14535,7 @@ const ACTIVITY_ICONS: Record<string, string> = {
   whatsapp: '', call: '', public: '🔗', note: '',
 };
 
-function ClientDetailModal({ client, onClose, onSuccess, onCall, callLogs = [] }: any) {
+function ClientDetailModal({ client, users = [], onClose, onSuccess, onCall, callLogs = [] }: any) {
   const activities: ClientActivity[] = client.activities || [];
   // فيدباك العميل وكومنتاته — تظهر هنا لحظة الضغط على الكارت (بدل ما تفضل مخفية)
   // كلام المندوب فقط: لا لوجات (اتصال/واتساب/تذكير) ولا كومنت مكرر.
@@ -14577,7 +14611,9 @@ function ClientDetailModal({ client, onClose, onSuccess, onCall, callLogs = [] }
                   <p className="text-[10.5px] text-[var(--text-dim)] mt-1 flex items-center gap-2 flex-wrap">
                     <FeedbackChip status={a.status} />
                     {a.type === 'comment' && <span className="text-[var(--brand)] font-bold">كومنت</span>}
-                    {a.by && <span>{a.by}</span>}
+                    {commentAuthorName(a, users) && (
+                      <span className="font-bold text-[var(--text-muted)]">{commentAuthorName(a, users)}</span>
+                    )}
                     <span dir="ltr">{formatDateTime(a.at)}</span>
                   </p>
                 </div>

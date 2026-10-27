@@ -130,14 +130,22 @@ export const sanitizeClientRecord = (client) => {
 // مندوب واحد — ويرجّع آخر كلام على كل رقم مع صاحبه ووقته وحالته.
 //
 // المفتاح: أرقام فقط (نفس تطبيع رقم التليفون في كل النظام).
+// `users` اختياري: بطاقة الفيدباك ما بتخزّنش اسم كاتبها (بس معرّفه) — فنلفيه
+// من الحسابات عشان الاسم يبان جنب الكومنت.
 const digitsOf = (value) =>
   String(value ?? '')
     .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
     .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
     .replace(/\D/g, '');
 
-export const commentsByPhone = (cards = [], logs = []) => {
+export const commentsByPhone = (cards = [], logs = [], users = []) => {
   const map = new Map();
+  const nameOf = (id) => {
+    const key = String(id || '').trim();
+    if (!key) return '';
+    const found = (users || []).find((u) => String(u?.id) === key);
+    return found?.name ? String(found.name) : '';
+  };
   const put = (phone, raw, at, by, status) => {
     const key = digitsOf(phone);
     if (!key) return;
@@ -148,10 +156,22 @@ export const commentsByPhone = (cards = [], logs = []) => {
     map.set(key, { text, at: String(at || ''), by: String(by || ''), status: String(status || '') });
   };
   for (const card of cards || []) {
-    put(card?.clientPhone, card?.feedback, card?.date || card?.createdAt, card?.authorName || card?.by, card?.status);
+    put(
+      card?.clientPhone,
+      card?.feedback,
+      card?.date || card?.createdAt,
+      card?.authorName || card?.by || nameOf(card?.userId),
+      card?.status
+    );
   }
   for (const log of logs || []) {
-    put(log?.clientPhone, log?.comment, log?.at || log?.createdAt, log?.by || log?.authorName, log?.status);
+    put(
+      log?.clientPhone,
+      log?.comment,
+      log?.at || log?.createdAt,
+      log?.by || log?.authorName || nameOf(log?.userId || log?.salesId),
+      log?.status
+    );
   }
   return map;
 };

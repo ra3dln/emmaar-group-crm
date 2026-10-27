@@ -1892,6 +1892,25 @@ html[data-mode="light"] .fs-item-en { color: color-mix(in srgb, var(--fs) 85%, #
   max-width: 100%;
 }
 
+/* اسم كاتب آخر كومنت — جنب الكومنت نفسه */
+.cc-author {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--text-dim);
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* نص آخر كومنت — بيقصّ لو طويل (الاسم قبله ما ياخدش مكانه) */
+.cc-lastfb-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .clients-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
