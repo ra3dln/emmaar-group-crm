@@ -173,7 +173,12 @@ const commentsOfTarget = (
     String((users || []).find((u: any) => String(u?.id) === String(userId))?.name || 'المندوب');
   const out: Array<{ id: string; by: string; at: string; text: string; status?: string; result?: string; nextAt?: string }> = [];
 
-  const client = (clients || []).find((c: any) => String(c?.id) === String(target?.id));
+  // عميل الهدف: بالمعرّف، وبالرقم كمان — لأن رقم التوزيع المعرّفه «crm-lead-<رقم>»
+  // قد يكون لسه lead في الشاشة، والعميل اللي خطّه الزمني فيه الكومنتات القديمة
+  // (من مندوب اتمسح حسابه) هو نفسه الرقم.
+  const client =
+    (clients || []).find((c: any) => String(c?.id) === String(target?.id)) ||
+    (clients || []).find((c: any) => digitsOfPhone(c?.phone) === phone);
   // كومنتات العميل: بلا لوجات وبلا تكرار (shared/comments.js) — ما عدا نص نتيجة
   // الاتصال نفسه («No answer» / «تم الرد»)، فهو الكومنت اللي بيسجّله المندوب
   // مع الإجراء فلازم يظهر في «آخر التعليقات».

@@ -117,5 +117,10 @@ check('الرقم بيطلع باسم كاتب الكومنت', workNumbers[0]?.
 check('كارت صفحة الأرقام بيعرض الاسم جنب الملاحظة', /row\.noteBy && <span className="cc-author">\{row\.noteBy\}: <\/span>/.test(app));
 check('كارت الرقم في باقي القوائم بيعرض الملاحظة واسمها', /record\?\.salesNoteBy && <span className="cc-author">\{record\.salesNoteBy\}<\/span>/.test(app));
 
+// ===== ٧) نافذة «Add Action»: آخر التعليقات بتلاقي الكومنت القديم =====
+check('نافذة الإجراء بتدوّر على العميل بالرقم كمان', /digitsOfPhone\(c\?\.phone\) === phone/.test(app));
+check('نافذة الإجراء بتاخد الكومنتات من خط العميل', /const clientActs = Array\.isArray\(\(client as any\)\?\.activities\)/.test(app));
+check('اسم الكاتب في آخر التعليقات', /by: String\(a\?\.by \|\| nameOf\(a\?\.authorId\)\)/.test(app));
+
 console.log(`\n${failed ? '❌' : '✅'} نجحت ${passed} فحوصات${failed ? ` — فشل ${failed}` : ''}`);
 if (failed) process.exit(1);
