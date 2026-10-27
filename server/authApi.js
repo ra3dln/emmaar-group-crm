@@ -31,6 +31,8 @@ import {
   signSession,
   verifyPassword,
 } from './auth.js';
+// حكم «مين صاحب النظام» — نفس الملف في الواجهة، فيبقى الحكم واحداً في المكانين
+import { isOwnerAccount } from '../shared/roles.js';
 
 // حد محاولات الدخول (يمنع تخمين كلمة المرور)
 const ATTEMPT_WINDOW_MS = 10 * 60_000;
@@ -104,6 +106,9 @@ export function createAuthHandler({ storage, env = process.env }) {
       r: user.role,
       n: user.username,
       sv: sessionVersionOf(user),
+      // علامة صاحب النظام (أعلى صلاحية) — تُحفظ في الجلسة فيبقى قانوناً
+      // حتى لو رتبته المخزَّنة اتغيّرت في نسخة قديمة من أي جهاز
+      o: isOwnerAccount(user) ? 1 : 0,
     });
     res.setHeader('Set-Cookie', sessionCookie(token, { secure: isSecureRequest(req) }));
     return reply(res, 200, { ok: true, user: publicUser(user) });
@@ -161,7 +166,7 @@ export function createAuthHandler({ storage, env = process.env }) {
         // تجديد انزلاقي: كل فتح للتطبيق يعيد ضبط مدة الجلسة ١٨٠ يوماً من جديد،
         // فالجهاز الذي يُستخدم لا ينتهي أبداً، ولا يُطلب من صاحبه دخول مفاجئ.
         res.setHeader('Set-Cookie', sessionCookie(
-          signSession(env, { u: user.id, r: user.role, n: user.username, sv: sessionVersionOf(user) }),
+          signSession(env, { u: user.id, r: user.role, n: user.username, sv: sessionVersionOf(user), o: isOwnerAccount(user) ? 1 : 0 }),
           { secure: isSecureRequest(req) }
         ));
         return reply(res, 200, { ok: true, user: publicUser(user) });
@@ -230,7 +235,9 @@ export function createAuthHandler({ storage, env = process.env }) {
             u &&
             String(u.username || '').trim().toLowerCase() === username &&
             u.isActive !== false &&
-            (loginType === 'admin' ? isManagerRole(u.role) : u.role === 'sales' || isManagerRole(u.role))
+            (loginType === 'admin'
+              ? isManagerRole(u.role) || isOwnerAccount(u)
+              : u.role === 'sales' || isManagerRole(u.role) || isOwnerAccount(u))
         );
 
         const check = candidate ? verifyPassword(password, candidate.password) : { ok: false };

@@ -45,7 +45,7 @@ import {
   type AutoAssignRule,
   type LeadAssignment,
 } from '../shared/autoAssign.js';
-import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount, worksAsSales } from '../shared/roles.js';
+import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount, isOwnerAccount, worksAsSales } from '../shared/roles.js';
 import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor, LEAD_CLIENT_ID_PREFIX } from '../shared/leadClients.js';
 import {
   cleanCommentText,
@@ -365,10 +365,10 @@ const rankClass = (role?: string): string =>
       : role === 'developer'
         ? 'rank-chip rank-dev'
         : 'rank-chip rank-sales';
-// حساب «المطوّر» رتبته إدارية فعلياً (كل الصلاحيات + تغيير كلمات المرور)،
-// لكنه يُعرَض في كل مكان كحساب سيلز عادي — بطلب صريح من صاحب النظام.
-const displayRoleOf = (user?: { role?: string; developer?: boolean } | null): string =>
-  user && user.developer ? 'sales' : (user?.role || 'sales');
+// حساب صاحب النظام (المطوّر): رتبته في القاعدة إدارية وكل الصلاحيات، ويُعرَض
+// في قوائم الحسابات بلقبه «System Dev» — فهو صاحب النظام وأعلى صلاحية فيه.
+const displayRoleOf = (user?: { role?: string; developer?: boolean; username?: string } | null): string =>
+  isOwnerAccount(user) ? 'developer' : (user?.role || 'sales');
 // الرتبة التي يراها صاحب الحساب عن نفسه: المطوّر يرى «System Dev»
 // بينما يبقى معروضاً كسيلز عادي في قوائم الحسابات عند الإدارة.
 const selfRoleOf = (user?: { role?: string; developer?: boolean } | null): string =>
@@ -380,12 +380,11 @@ const isManagerRole = (role?: string): boolean => role === 'admin' || role === '
 // ===== نطاق بيانات الحساب — مصدر واحد للحقيقة =====
 // القاعدة نفسها في shared/roles.js (dataScopeOf) عشان تتختبر لوحدها وتبقى واحدة
 // في المتصفح: null = يرى كل بيانات الشركة، والمجموعة = الحسابات المسموح له بها.
-//   • المدير التنفيذي (admin): كل بيانات الشركة — هو صاحب النظام ومَن يدير التوزيع.
-//   • حساب «المطوّر» (إداري في القاعدة، سيلز في الشغل): بياناته هو فقط، مثل أي
-//     سيلز. كان دوره الإداري في القاعدة يمنحه نطاقاً كاملاً، فيرى أرقام كل
-//     المندوبين وفيدباكهم مختلطة في حسابه (وهو الخلط المُبلَّغ عنه: حساب محمد
-//     وحساب SHEROQ). شغله الإداري (إدارة الحسابات والإعدادات والدخول إلى حساب
-//     غيره) ما زال شغّالاً — فقط نطاق بياناته رجع لبياناته.
+//   • حساب صاحب النظام (المطوّر): أعلى صلاحية — كل بيانات الشركة + كل الصلاحيات
+//     الإدارية + الدخول إلى أي حساب. الحكم عليه بالاسم/العلامة في الكود مش
+//     بالرتبة المخزَّنة، فأي نسخة قديمة من سجل الحساب ما تنقصش صلاحيته.
+//   • المدير التنفيذي (admin): كل بيانات الشركة — هو مَن يدير التوزيع.
+//   • الإداري الذي يعمل سيلزاً (مثل فريدة) و اختار «بياناته فقط»: بياناته هو.
 //   • قائد الفريق: فريقه (لو عنده فريق فعلي — فريق فارغ ما يبقاش «كل الحسابات»).
 //   • السيلز: نفسه فقط.
 // «بياناته فقط» ما تُطبَّق على الإدارة إلا لو اختارها بنفسه من «تعديل الحساب».
@@ -1848,7 +1847,10 @@ function App() {
     // لو تغيّرت صلاحية الحساب أثناء فتح الصفحة، نرجع لتبويب مسموح بدل شاشة فاضية
     // قوائم السلبرز + الإدارة معاً لكل من يعمل سيلزاً (المطوّر أو إداري يستقبل أرقاماً)
     const devMenus = worksAsSales(currentUser) && !impersonator;
-    const guardRole = impersonator && worksAsSales(currentUser) ? 'sales' : currentUser.role;
+    // صاحب النظام (المطوّر) رتبته «إداري» دائماً — لا تُنقصه نسخة قديمة من السجل
+    const guardRole = impersonator
+      ? (worksAsSales(currentUser) ? 'sales' : currentUser.role)
+      : (isOwnerAccount(currentUser) ? 'admin' : currentUser.role);
     if (!isTabAllowed(guardRole, activeTab, devMenus)) {
       setActiveTab(guardRole === 'sales' || devMenus ? 'dashboard' : 'admin-users');
       return;
@@ -2061,10 +2063,10 @@ function App() {
     // الإدارة (CEO) ترى الكل، وقائد الفريق يرى فريقه فقط بشرط وجود فريق فعلي
     // (فريق فارغ ما يبقاش معناه «كل الحسابات»).
     //
-    // **استثناء المطوّر**: حسابه إداري في القاعدة (ليقدر يدير الحسابات) لكنه يُعرَض
-    // في كل الواجهة كسيلز عادي. كان دوره الإداري يمنحه نطاقاً كاملاً — فيرى أرقام كل
-    // المندوبين وفيدباكهم (وهو الخلط المُبلَّغ عنه: حساب محمد وحساب SHEROQ).
-    // نطاقه الآن بياناته هو فقط، ولو احتاج يشوف شغل غيره يستخدم «الدخول إلى الحساب».
+    // **حساب صاحب النظام (المطوّر)**: أعلى صلاحية — نطاقه كل بيانات الشركة
+    // (workAsSales ما بيقيّدهوش) ومعاه كل الصلاحيات الإدارية. الحكم عليه
+    // بالاسم/العلامة في shared/roles.js مش بالرتبة المخزَّنة، فأي جهاز قديم
+    // بنسخة accounts أقدم ما ينقصش صلاحيته.
     const myScopeIds: Set<string> | null = dataScopeOf(currentUser, allUsers);
     const inMyScope = (id?: string) => !myScopeIds || (!!id && myScopeIds.has(id));
 
@@ -2073,7 +2075,7 @@ function App() {
     setAssignedLeads(allAssignedLeads.filter((l: AssignedLead) => inMyScope(l.salesId)));
     // المخزون الكامل — لحسابات الإدارة فقط (لوحات أرقام الكامبين).
     // حساب السيلز ما بيحمّلوش (مفيش داعي، وهو الممنوع أصلاً: خلط شغل الزملاء).
-    const isAdminAccount = currentUser.role !== 'sales';
+    const isAdminAccount = currentUser.role !== 'sales' || isOwnerAccount(currentUser);
     setFullLeads(isAdminAccount ? allAssignedLeads : []);
     setFullClients(isAdminAccount ? allClients : []);
     setFullFeedbacks(isAdminAccount ? allFeedbacks : []);
@@ -2150,7 +2152,7 @@ function App() {
     // اللوحات الإدارية (توزيع الأرقام والحصص) تقرأ fullLeads: كانت تتحدّث بعد المزامنة
     // فقط، فيبدو التوزيع اليدوي وإلغاء التوزيع كأنهما لم يُحفَظا حتى يعمل ريفرش.
     // نفس شرط loadData: أي حساب غير سيلز يحمل المخزون الكامل.
-    if (currentUser?.role !== 'sales') setFullLeads(next);
+    if (currentUser?.role !== 'sales' || isOwnerAccount(currentUser)) setFullLeads(next);
     // نُرجع وعد الرفع حتى ينتظر من يحتاج إشعاراً بعد وصول التوزيع للسيرفر
     return pushKey('crm_assigned_leads');
   };
@@ -2864,10 +2866,14 @@ function App() {
   // (الإدارة تشوفه زي أي مندوب)، أما صاحبه فيرى القوائمتين.
   // كل من يعمل سيلزاً يرى قوائم السلبرز والإدارة معاً: المطوّر، أو إداري يستقبل أرقاماً
   const developerMenus = worksAsSales(currentUser) && !impersonator;
-  const menuRole = impersonator && worksAsSales(currentUser) ? 'sales' : currentUser.role;
+  const menuRole = impersonator
+    ? (worksAsSales(currentUser) ? 'sales' : currentUser.role)
+    : (isOwnerAccount(currentUser) ? 'admin' : currentUser.role);
   const navGroups = getTabGroups(menuRole, developerMenus);
   // يرى واجهات السيلز والإدارة معاً (بلا لقب «مطوّر» — اللقب يتبع الرتبة)
   const isDeveloper = worksAsSales(currentUser);
+  // صاحب النظام (المطوّر): أعلى صلاحية — كل شاشات الإدارة مفتوحة له دائماً
+  const ownerFull = isOwnerAccount(currentUser);
   const isSalesView = currentUser.role === 'sales' || isDeveloper;
   const activeTabMeta = navGroups.flatMap((g) => g.items).find((t) => t.id === activeTab);
   const userInitial = (currentUser.name || '؟').trim().charAt(0);
@@ -3696,27 +3702,27 @@ function App() {
           }} onAdd={() => setShowAddFeedback(true)} />}
           {activeTab === 'reports' && isSalesView && <ReportsView clients={clients} feedbacks={dailyFeedbacks} reminders={reminders} />}
           {activeTab === 'calculator' && <InstallmentCalculatorView />}
-          {activeTab === 'admin-users' && currentUser.role !== 'sales' && <AdminUsersView users={scopedUsers} currentUser={currentUser} onSelect={setSelectedUserFeedback} onAdd={() => setShowAddUser(true)} onEdit={setEditingUser} onDelete={setDeletingUser} onImpersonate={handleImpersonate} />}
+          {activeTab === 'admin-users' && (currentUser.role !== 'sales' || ownerFull) && <AdminUsersView users={scopedUsers} currentUser={currentUser} onSelect={setSelectedUserFeedback} onAdd={() => setShowAddUser(true)} onEdit={setEditingUser} onDelete={setDeletingUser} onImpersonate={handleImpersonate} />}
           {/* «الفيدباك اليومي لكل سيلز» = لوحة إدارة: تُبنى على مخزون الشركة الكامل،
               لا على نطاق الحساب (وإلا تظهر فاضية لحساب إداري محدود النطاق مثل المطوّر). */}
-          {activeTab === 'admin-feedback' && currentUser.role !== 'sales' && <AdminFeedbackView
-            users={(currentUser.role === 'admin' ? users : scopedUsers).filter((u: User) => {
+          {activeTab === 'admin-feedback' && (currentUser.role !== 'sales' || ownerFull) && <AdminFeedbackView
+            users={(currentUser.role === 'admin' || ownerFull ? users : scopedUsers).filter((u: User) => {
               // حساب المطوّر إداري في القاعدة لكنه بيشتغل سيلز — لازم يظهر معاهم
               const role = effectiveRoleOf(u);
               return role === 'sales' || role === 'supervisor';
             })}
-            dailyFeedbacks={currentUser.role === 'admin' ? fullFeedbacks : scopedFeedbacks}
-            clients={currentUser.role === 'admin' ? fullClients : scopedClients}
+            dailyFeedbacks={currentUser.role === 'admin' || ownerFull ? fullFeedbacks : scopedFeedbacks}
+            clients={currentUser.role === 'admin' || ownerFull ? fullClients : scopedClients}
             // الأرقام الموزّعة اللي لسه ما اتحولتش لعميل تتحسب برضه في «أرقامه»
-            leads={currentUser.role === 'admin' ? fullLeads : assignedLeads}
-            callLogs={currentUser.role === 'admin' ? fullCallLogs : scopedCallLogs}
+            leads={currentUser.role === 'admin' || ownerFull ? fullLeads : assignedLeads}
+            callLogs={currentUser.role === 'admin' || ownerFull ? fullCallLogs : scopedCallLogs}
             onSelect={setSelectedUserFeedback}
           />}
           {/* كل عملاء الشركة: العدد + كارت لكل عميل يفتح التفاصيل كاملة */}
           {/* لوحات أرقام الكامبين على المخزون الكامل (fullClients/fullLeads): هي لوحة
               إدارة تدير أرقام الكامبين لكل المندوبين — ما تتأثر بنطاق الحساب.
               أما لوحة السيلز (عملائي/المراحل/الفيدباك) فتبقى بنطاق الحساب وحده. */}
-          {activeTab === 'admin-clients' && currentUser.role !== 'sales' && <AdminClientsView
+          {activeTab === 'admin-clients' && (currentUser.role !== 'sales' || ownerFull) && <AdminClientsView
             clients={fullClients}
             leads={fullLeads}
             users={scopedUsers}
@@ -3727,7 +3733,7 @@ function App() {
             onImport={() => setShowImportClients(true)}
           />}
           {/* شيت الفورمات: كل فورم لوحده مع تصدير أرقامه وفيدباكه العام */}
-          {activeTab === 'admin-forms' && currentUser.role !== 'sales' && <AdminFormsSheetView clients={fullClients} leads={fullLeads} />}
+          {activeTab === 'admin-forms' && (currentUser.role !== 'sales' || ownerFull) && <AdminFormsSheetView clients={fullClients} leads={fullLeads} />}
           {/* الأرقام الجديدة التي وصلت للمندوب من الكامبينات — الكارت يفتح التفاصيل */}
           {activeTab === 'new-leads' && isSalesView && <NewLeadsViewForSales
             assignedLeads={assignedLeads.filter((l: AssignedLead) =>
@@ -3746,7 +3752,7 @@ function App() {
               ));
             }}
           />}
-          {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={fullLeads} users={scopedUsers} currentUser={currentUser} activeForms={activeCampaignForms} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
+          {activeTab === 'admin-leads' && (currentUser.role !== 'sales' || ownerFull) && <AdminLeadsView assignedLeads={fullLeads} users={scopedUsers} currentUser={currentUser} activeForms={activeCampaignForms} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
             // الحذف يقع على القائمة الكاملة المحفوظة لا على المعروض في الذاكرة:
             // الحساب محدود النطاق يحمل أرقامه وحده، والكتابة من نسخته المعروضة
             // كانت تمسح أرقام بقية الفريق من قاعدة البيانات.
@@ -3758,11 +3764,11 @@ function App() {
             writeAssignedLeads((all) => all.filter((l: AssignedLead) => !target.has(l.id)));
             ids.forEach((id: string) => removeLeadClient(id));
           }} onAssign={handleAssignLeads} onSave={() => writeAssignedLeads((all) => all)} autoRules={autoAssignRules} onSaveAutoRule={handleSaveAutoRule} onRebalanceForm={handleRebalanceForm} />}
-          {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={scopedUsers} />}
-          {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
+          {activeTab === 'admin-attendance' && (currentUser.role !== 'sales' || ownerFull) && <AdminAttendanceView users={scopedUsers} />}
+          {activeTab === 'admin-analytics' && (currentUser.role !== 'sales' || ownerFull) && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
           {activeTab === 'chat' && isSalesView && <SalesChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} readOnly={!!impersonator} />}
-          {activeTab === 'admin-chat' && currentUser.role !== 'sales' && <AdminChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} onGroupRead={handleMarkGroupRead} />}
-          {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} />}
+          {activeTab === 'admin-chat' && (currentUser.role !== 'sales' || ownerFull) && <AdminChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} onGroupRead={handleMarkGroupRead} />}
+          {activeTab === 'admin-settings' && (currentUser.role === 'admin' || ownerFull) && <AdminSettingsView currentUser={currentUser} />}
         </AnimatePresence>
         </main>
         {isSalesView && (
@@ -3787,13 +3793,13 @@ function App() {
         {showImportLeads && <ImportLeadsModal users={users} clients={clients} assignedLeads={assignedLeads} currentUser={currentUser} onClose={() => setShowImportLeads(false)} onSuccess={loadData} />}
         {showImportClients && <ImportClientsModal users={users} clients={fullClients} assignedLeads={fullLeads} currentUser={currentUser} activeForms={activeCampaignForms} onClose={() => setShowImportClients(false)} onSuccess={loadData} />}          {selectedUserFeedback && <UserFeedbackModal
             user={selectedUserFeedback}
-            clients={currentUser.role === 'admin' ? fullClients : clients}
-            leads={currentUser.role === 'admin' ? fullLeads : assignedLeads}
-            callLogs={currentUser.role === 'admin' ? fullCallLogs : callLogs}
-            dailyFeedbacks={currentUser.role === 'admin' ? fullFeedbacks : dailyFeedbacks}
+            clients={currentUser.role === 'admin' || ownerFull ? fullClients : clients}
+            leads={currentUser.role === 'admin' || ownerFull ? fullLeads : assignedLeads}
+            callLogs={currentUser.role === 'admin' || ownerFull ? fullCallLogs : callLogs}
+            dailyFeedbacks={currentUser.role === 'admin' || ownerFull ? fullFeedbacks : dailyFeedbacks}
             onClose={() => setSelectedUserFeedback(null)}
           />}
-        {selectedClient && <ClientDetailModal client={selectedClient} users={users} callLogs={currentUser.role === 'admin' ? fullCallLogs : callLogs} onClose={() => setSelectedClient(null)} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
+        {selectedClient && <ClientDetailModal client={selectedClient} users={users} callLogs={currentUser.role === 'admin' || ownerFull ? fullCallLogs : callLogs} onClose={() => setSelectedClient(null)} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
         {callClient && <CallFlowModal
           client={callClient}
           user={currentUser}
@@ -9312,8 +9318,8 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, leads = [], callLog
                 <div>
                   <h4 className="font-bold text-[var(--text-strong)]">{user.name}</h4>
                   {/* الرتبة الحقيقية: الإداري الذي يعمل سيلزاً (فريدة) يظهر «CEO»،
-                      وحساب المطوّر يبقى يظهر «سيلز» كما هو. */}
-                  <p className="text-sm text-[var(--text-muted)]">{isDeveloperAccount(user) ? 'سيلز' : user.role === 'admin' ? 'CEO' : effectiveRoleOf(user) === 'supervisor' ? 'مشرف' : 'سيلز'}</p>
+                      وحساب صاحب النظام (المطوّر) يظهر «مالك النظام» — أعلى صلاحية. */}
+                  <p className="text-sm text-[var(--text-muted)]">{isOwnerAccount(user) ? 'مالك النظام — أعلى صلاحية' : user.role === 'admin' ? 'CEO' : effectiveRoleOf(user) === 'supervisor' ? 'مشرف' : 'سيلز'}</p>
                 </div>
               </div>
               
@@ -9390,18 +9396,21 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
     setView(next);
     localStorage.setItem('crm_admin_users_tab', next);
   };
-  const isAdmin = currentUser?.role === 'admin';
+  const isAdmin = currentUser?.role === 'admin' || isOwnerAccount(currentUser);
   // سحب أرقام الكامبين متاح للإدارة كلها: CEO و Team Leader.
   // السيرفر يسمح للرتبتين بنفس الصلاحية (isManagerRole في api/lead-source)،
   // فقائد الفريق يستطيع لصق التوكن (الكود) وسحب أرقام كامبين لتوزيعها على فريقه.
-  const canPullCampaigns = currentUser?.role === 'admin' || currentUser?.role === 'supervisor';
+  const canPullCampaigns = currentUser?.role === 'admin' || currentUser?.role === 'supervisor' || isOwnerAccount(currentUser);
   // حماية: لا يُحذف حساب CEO الرئيسي، ولا يستطيع قائد الفريق حذف أو تعديل الـ CEO
   // حساب الإدارة الأساسي (admin) يمكنه حذف حسابات المدراء (supervisor) وحسابات الإدارة الأخرى
-  const isMainAdmin = currentUser?.role === 'admin' && currentUser?.username === 'admin';
+  // حساب صاحب النظام (المطوّر) = أعلى صلاحية: نفس صلاحيات admin الأساسي (عدا حسابه
+  // نفسه وحساب CEO الرئيسي اللي محمي), حتى لو رتبته المخزَّنة اتغيّرت.
+  const isOwner = isOwnerAccount(currentUser);
+  const isMainAdmin = (currentUser?.role === 'admin' && currentUser?.username === 'admin') || isOwner;
   const canDelete = (user: User) => {
     if (user.id === currentUser.id) return false;
     if (user.role === 'admin' && user.username === 'admin' && currentUser.username === 'admin') return false; // لا يحذف نفسه
-    // admin الرئيسي يمكنه حذف أي حساب ماعدا نفسه وحساب admin الرئيسي إن وجد آخر
+    // admin الرئيسي (وصاحب النظام) يمكنه حذف أي حساب ماعدا نفسه وحساب admin الرئيسي إن وجد آخر
     if (isMainAdmin) {
       // لا يسمح بحذف حساب admin الرئيسي نفسه
       if (user.username === 'admin' && user.role === 'admin') return false;
@@ -9414,7 +9423,9 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
     return true;
   };
   const canEdit = (user: User) =>
-    user.id !== currentUser.id ? !(currentUser.role === 'supervisor' && user.role === 'admin') : true;
+    user.id !== currentUser.id
+      ? !(currentUser.role === 'supervisor' && !isOwner && user.role === 'admin')
+      : true;
   // ===== الدخول لحساب أي مستخدم (بدون كلمة مرور) =====
   // الإدارة بتدخل حسابات السيلز عادي. وحساب الـ CEO (admin) محمي من الدخول عليه
   // — إلا حساب «المطوّر» (system dev): أعلى صلاحية في النظام، فيدخل أي حساب
@@ -9423,7 +9434,7 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
     if (!onImpersonate) return false;
     if (user.id === currentUser.id) return false;
     if (!user.isActive) return false;
-    if (isDeveloperAccount(currentUser)) return true;
+    if (isOwnerAccount(currentUser)) return true;
     return user.role !== 'admin' || !!user.developer;
   };
 
@@ -13249,16 +13260,20 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
     // «إداري وسيلز في نفس الوقت»: يبقى رتبته كما هي ويستقبل أرقاماً أيضاً
     receivesLeads: user.receivesLeads === true,
     // نطاق البيانات: يحسم هل الحساب يرى أرقام وفيدباك غيره
-    dataScope: (user.dataScope === 'own'
-      ? 'own'
-      : user.dataScope === 'all'
-        ? 'all'
-        : user.role === 'admin'
+    // حساب صاحب النظام (المطوّر) أعلى صلاحية — نطاقه كل الشركة دايماً،
+    // فمش بيتقيّد بإعداد ولا برتبة مخزَّنة.
+    dataScope: (isOwnerAccount(user)
+      ? 'all'
+      : user.dataScope === 'own'
+        ? 'own'
+        : user.dataScope === 'all'
           ? 'all'
-          : 'own') as 'own' | 'all',
+          : user.role === 'admin'
+            ? 'all'
+            : 'own') as 'own' | 'all',
   });
-  // الإدارة فقط ترى وتغيّر كلمات المرور
-  const canSeePasswords = currentUser.role === 'admin';
+  // الإدارة فقط ترى وتغيّر كلمات المرور (وحساب صاحب النظام إداري كامل)
+  const canSeePasswords = currentUser.role === 'admin' || isOwnerAccount(currentUser);
   const [newPassword, setNewPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
@@ -13460,7 +13475,9 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
               <option value="all" className="bg-gray-900">كل البيانات — أرقام وفيدباك كل الفريق</option>
             </select>
             <p className="text-xs text-[var(--text-dim)] mt-1">
-              «بياناته فقط» هو الصحيح لأي إداري يشتغل كسيلز: يمنعه من رؤية أرقام غيره وفيدباكهم.
+              {isOwnerAccount(user)
+                ? 'حساب صاحب النظام: نطاقه كل بيانات الشركة دائماً — أعلى صلاحية في النظام.'
+                : '«بياناته فقط» هو الصحيح لأي إداري يشتغل كسيلز: يمنعه من رؤية أرقام غيره وفيدباكهم.'}
             </p>
           </div>
 

@@ -321,6 +321,41 @@ try {
   }
   check('تخمين كلمة المرور بالتجربة المتكررة محدود (429)', limited);
 
+  // ===== ١٠) حساب صاحب النظام (المطوّر): أعلى صلاحية على السيرفر =====
+  // سجل الحساب هنا رتبته 'sales' عمداً (سيناريو نسخة قديمة من جهاز غيّرت الرتبة):
+  // الحكم لازم يكون على «صاحب النظام» نفسه مش على الرتبة المخزَّنة.
+  const OWNER = {
+    id: 'dev-001',
+    username: 'mohamed',
+    name: 'محمد',
+    role: 'sales',
+    developer: true,
+    isActive: true,
+    password: hashPassword('OwnerPass1234'),
+  };
+  seed([DEFAULT_ADMIN, SALES, OWNER]);
+  const ownerAdminGate = await login({ username: 'mohamed', password: 'OwnerPass1234', loginType: 'admin' });
+  check(
+    'صاحب النظام يدخل من بوابة الإدارة حتى لو رتبته المخزَّنة ' + "'sales'",
+    ownerAdminGate.status === 200,
+    JSON.stringify(ownerAdminGate.json)
+  );
+  const ownerCookie = cookieOf(ownerAdminGate);
+  const ownerSalesGate = await login({ username: 'mohamed', password: 'OwnerPass1234', loginType: 'sales' });
+  check('صاحب النظام يدخل من بوابة المندوبين أيضاً', ownerSalesGate.status === 200);
+  const ownerLead = await call('/api/lead-source', { cookie: ownerCookie });
+  check('صاحب النظام يقدر يدخل إعدادات سحب الأرقام (مدير)', ownerLead.status !== 403, String(ownerLead.status));
+  const ownerStore = await call('/api/store', { cookie: ownerCookie });
+  check(
+    'صاحب النظام يرى كلمات المرور (صلاحية الإدارة)',
+    ownerStore.status === 200 && JSON.stringify(ownerStore.json.data.crm_users).includes('password')
+  );
+  // الإدارة العادية (رتبة admin) تبقى ريحة: السيلز العادي لا يمر من بوابة الإدارة
+  const salesOnAdminGate = await login({ username: 'ahmed', password: 'AhmedPass123', loginType: 'admin' });
+  check('السيلز العادي ما يدخلش من بوابة الإدارة', salesOnAdminGate.status === 401);
+  const salesLead = await call('/api/lead-source', { cookie: cookieOf(await login({ username: 'ahmed', password: 'AhmedPass123', loginType: 'sales' })) });
+  check('السيلز العادي مرفوض من إعدادات سحب الأرقام (403)', salesLead.status === 403, String(salesLead.status));
+
   console.log(`\n✅ كل اختبارات الحماية نجحت (${passed}).`);
 } catch (error) {
   console.error('\n❌ فشل اختبار الحماية:', error.message);

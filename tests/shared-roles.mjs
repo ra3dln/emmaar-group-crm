@@ -14,6 +14,7 @@ import {
   isAdminAccount,
   isDeveloperAccount,
   isManagerAccount,
+  isOwnerAccount,
 } from '../shared/roles.js';
 import { isAssignableSales } from '../shared/autoAssign.js';
 
@@ -56,8 +57,10 @@ check('نطاق بياناته «بياناته فقط» كما اختار', [..
 check('الإداري الذي يعمل سيلزاً يستقبل أرقاماً', isAssignableSales(exec) === true);
 
 // ===== ٣) نطاق البيانات =====
+// حساب صاحب النظام (المطوّر) = أعلى صلاحية: نطاقه كل بيانات الشركة، بطلب صريح
+// من مالك الموقع. والحكم عليه بالاسم/العلامة في الكود مش بالرتبة المخزَّنة.
 check('الإدارة (CEO) ترى كل الشركة', dataScopeOf(ceo, all) === null);
-check('حساب المطوّر محدود ببياناته هو', [...(dataScopeOf(dev, all) || [])].join(',') === 'dev-1');
+check('حساب صاحب النظام (المطوّر) يرى كل بيانات الشركة', dataScopeOf(dev, all) === null);
 check('السيلز لا يرى غيره', [...(dataScopeOf(sales, all) || [])].join(',') === 'sales-1');
 check(
   'قائد الفريق يرى فريقه',
@@ -71,6 +74,11 @@ check(
 check(
   'إعداد صريح «كل الشركة» يفتح النطاق',
   dataScopeOf({ ...dev, dataScope: 'all' }, all) === null
+);
+check(
+  'حساب صاحب النظام ما يتقيّدش بنطاق مخزَّن (نسخة قديمة من جهاز)',
+  dataScopeOf({ ...dev, dataScope: 'own' }, all) === null &&
+    dataScopeOf({ ...dev, role: 'sales', dataScope: 'own' }, all) === null
 );
 check('حساب بلا معرّف = نطاق فارغ', [...(dataScopeOf({ role: 'sales' }, all) || [])].length === 0);
 
@@ -105,8 +113,8 @@ check(
     /const all = Array\.from\(map\.values\(\)\)/.test(app)
 );
 check(
-  'بطاقة الفيدباك تكتب CEO للإداري الذي يعمل سيلزاً و«سيلز» للمطوّر',
-  /isDeveloperAccount\(user\) \? 'سيلز' : user\.role === 'admin' \? 'CEO'/.test(app)
+  'بطاقة الفيدباك تكتب CEO للإداري الذي يعمل سيلزاً و«مالك النظام» لحساب صاحب النظام',
+  /isOwnerAccount\(user\) \? 'مالك النظام — أعلى صلاحية' : user\.role === 'admin' \? 'CEO'/.test(app)
 );
 check('عنوان الإدارة في الشريط «إعمار جروب»', app.includes('إعمار جروب — إدارة العملاء'));
 
@@ -115,7 +123,7 @@ check('عنوان الإدارة في الشريط «إعمار جروب»', app
 // سيلز آخر أو سحبه من العهدة كأنه لم يُحفظ حتى يعمل المستخدم ريفرش.
 check(
   'تعديل التوزيع يحدّث لوحات الإدارة فوراً (بلا ريفرش)',
-  /localStorage\.setItem\('crm_assigned_leads'[\s\S]{0,700}if \(currentUser\?\.role !== 'sales'\) setFullLeads\(next\);/.test(app)
+  /localStorage\.setItem\('crm_assigned_leads'[\s\S]{0,700}if \(currentUser\?\.role !== 'sales' \|\| isOwnerAccount\(currentUser\)\) setFullLeads\(next\);/.test(app)
 );
 
 // ===== ٦) حساب المطوّر (system dev): أعلى صلاحية — يدخل أي حساب ومنهم الـ CEO =====
@@ -124,7 +132,7 @@ check(
 // (اللي مكنش ينفع حد يدخل عليه غيره).
 check(
   'حساب المطوّر يدخل أي حساب (منهم الـ CEO)',
-  /if \(isDeveloperAccount\(currentUser\)\) return true;/.test(app)
+  /if \(isOwnerAccount\(currentUser\)\) return true;/.test(app)
 );
 check(
   'الإدارة العادية ما تدخلش حساب الـ CEO',
@@ -141,6 +149,48 @@ check(
 check(
   'نص التلميح يوضّح إن حساب الـ CEO متاح لحساب المطوّر فقط',
   /حساب إداري — الدخول متاح لحساب المطوّر/.test(app)
+);
+
+// ===== ٧) حساب صاحب النظام (المطوّر): أعلى صلاحية في النظام =====
+// الطلب: «ده حسابي وأنا مالك الموقع ومطوّره ⇒ أعلى صلاحية» — فالحساب نفسه
+// (مش بس الانتحال) لازم يشوف كل بيانات الشركة وله كل الصلاحيات الإدارية،
+// والحكم عليه لازم ما يتأثرش برتبة مخزَّنة في نسخة قديمة من أي جهاز.
+const roles = fs.readFileSync('shared/roles.js', 'utf8');
+check('حساب صاحب النظام معروف بالاسم/العلامة', isOwnerAccount(dev) === true);
+check('الحساب العادي مش صاحب نظام', isOwnerAccount(ceo) === false && isOwnerAccount(sales) === false);
+check('الاسم المحفوظ برضه بيعني صاحب النظام', isOwnerAccount({ username: 'mohamed' }) === true);
+check('حساب صاحب النظام أعلى صلاحية إدارية', isAdminAccount(dev) === true);
+check('حساب صاحب النظام لسه بيستقبل أرقاماً ويظهر مع الفريق', effectiveRoleOf(dev) === 'sales' && isManagerAccount(dev) === false);
+check(
+  'نطاق صاحب النظام كل الشركة (مش بس بياناته)',
+  dataScopeOf(dev, all) === null
+);
+check(
+  'الحكم على صاحب النظام في الكود مش في السجل',
+  /export const isOwnerAccount = \(user\) =>/.test(roles) &&
+    /isDeveloperAccount\(user\) \|\| user\?\.owner === true/.test(roles) &&
+    /if \(isOwnerAccount\(user\)\) return null;/.test(roles)
+);
+check(
+  'الواجهة تفتح كل شاشات الإدارة لحساب صاحب النظام',
+  /const ownerFull = isOwnerAccount\(currentUser\);/.test(app) &&
+    (app.match(/currentUser\.role !== 'sales' \|\| ownerFull/g) || []).length >= 5 &&
+    /currentUser\.role === 'admin' \|\| ownerFull/.test(app)
+);
+check(
+  'حساب صاحب النظام يبقى إدارياً حتى لو رتبته المخزَّنة اتغيّرت',
+  /isOwnerAccount\(currentUser\) \? 'admin' : currentUser\.role/.test(app) &&
+    /currentUser\.role !== 'sales' \|\| isOwnerAccount\(currentUser\)/.test(app)
+);
+check(
+  'حساب صاحب النظام يقدر يحذف ويعدّل حسابات الإدارة (عدا حسابه نفسه والـ CEO)',
+  /const isMainAdmin = \(currentUser\?\.role === 'admin' && currentUser\?\.username === 'admin'\) \|\| isOwner;/.test(app) &&
+    /if \(user\.username === 'admin' && user\.role === 'admin'\) return false;/.test(app)
+);
+check(
+  'حساب صاحب النظام معروض بلقبه «مالك النظام» في قائمة الحسابات',
+  /isOwnerAccount\(user\) \? 'مالك النظام — أعلى صلاحية'/.test(app) &&
+    /isOwnerAccount\(user\) \? 'developer' : \(user\?\.role \|\| 'sales'\)/.test(app)
 );
 
 console.log(`\n✅ نجحت ${passed} فحوصات لحساب المطوّر`);

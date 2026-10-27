@@ -267,8 +267,8 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
           version: db.version,
           isEmpty: Object.keys(db.data || {}).length === 0,
           // إصدار الجلسات لا يغادر السيرفر أبداً، وكلمات المرور لا تُرى إلا للإدارة
-          // (رتبة admin — صلاحية عرض كلمات مرور السيلز المطلوبة صراحةً)
-          data: stripUserSecrets(db.data || {}, { keepPasswords: session?.r === 'admin' }),
+          // (رتبة admin — أو حساب صاحب النظام صاحب أعلى صلاحية)
+          data: stripUserSecrets(db.data || {}, { keepPasswords: session?.r === 'admin' || session?.o === 1 }),
         });
       }
 
@@ -297,7 +297,7 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
             mergeKeepingRecords(key, value, data[key], tombstones())
           );
           return key === 'crm_users'
-            ? preserveUserPasswords(merged, data.crm_users, { canManage: session?.r === 'admin' })
+            ? preserveUserPasswords(merged, data.crm_users, { canManage: session?.r === 'admin' || session?.o === 1 })
             : merged;
         };
 
