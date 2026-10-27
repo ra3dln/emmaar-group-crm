@@ -85,5 +85,37 @@ check('تفاصيل العميل بتعرض الكاتب تحت كل كومنت'
 check('اسم الكاتب بيتحسب من الاسم المحفوظ أو من معرّف الكاتب', /const commentAuthorName = \(activity: any, users: any\[\] = \[\]\)/.test(app) && /مندوب سابق/.test(app));
 check('سجل تعليقات العميل بيعرض الكاتب (من الكومنت ومن بطاقة الفيدباك)', /by: commentAuthorName\(activity, users\)/.test(app) && /by: nameOfUser\(feedback\.userId\)/.test(app));
 
+// ===== ٦) صفحة «الأرقام»: آخر كومنت + اسم كاتبه على الكارت =====
+const { feedbackByPhone, buildWorkNumbers } = await import('../src/feedbackBuckets.ts');
+const snapshots = feedbackByPhone(
+  [{ clientPhone: '01011112222', feedback: 'قالى اتواصل معاه الساعة 8', date: '2026-10-24T12:25', userId: 'u-shimaa' }],
+  [{ clientPhone: '01033334444', comment: 'مردش هكلمه تانى', createdAt: '2026-10-26T09:18', salesName: 'Hassan' }],
+  [{ id: 'u-shimaa', name: 'Shimaa' }, { id: 'u-hassan', name: 'Hassan' }]
+);
+check('الفهرس بيسجّل اسم كاتب الملاحظة', snapshots.get('01011112222')?.noteBy === 'Shimaa', JSON.stringify(snapshots.get('01011112222')));
+check('اسم الكاتب من سجل المكالمة', snapshots.get('01033334444')?.noteBy === 'Hassan');
+
+// رقم نزل على سيلز وعميله قديم فيه كومنت — لازم الكارت يطلع بالكومنت واسم كاتبه
+const workNumbers = buildWorkNumbers(
+  [{
+    id: 'crm-lead-01011112222',
+    name: 'أحمد',
+    phone: '01011112222',
+    stage: 'contacted',
+    activities: [
+      { id: 'a1', type: 'feedback', text: 'قالى اتواصل معاه الساعة 8', at: '2026-10-24T12:25', by: 'Shimaa' },
+      { id: 'a2', type: 'created', text: 'الرقم نزل', at: '2026-10-23T08:00', by: 'الإدارة' },
+    ],
+  }],
+  [],
+  snapshots,
+  { includeUnassigned: false }
+);
+check('الرقم بيطلع بآخر كومنت', workNumbers[0]?.salesNote === 'قالى اتواصل معاه الساعة 8', JSON.stringify(workNumbers[0]?.salesNote));
+check('الرقم بيطلع باسم كاتب الكومنت', workNumbers[0]?.salesNoteBy === 'Shimaa', JSON.stringify(workNumbers[0]?.salesNoteBy));
+
+check('كارت صفحة الأرقام بيعرض الاسم جنب الملاحظة', /row\.noteBy && <span className="cc-author">\{row\.noteBy\}: <\/span>/.test(app));
+check('كارت الرقم في باقي القوائم بيعرض الملاحظة واسمها', /record\?\.salesNoteBy && <span className="cc-author">\{record\.salesNoteBy\}<\/span>/.test(app));
+
 console.log(`\n${failed ? '❌' : '✅'} نجحت ${passed} فحوصات${failed ? ` — فشل ${failed}` : ''}`);
 if (failed) process.exit(1);

@@ -61,19 +61,29 @@ export type PhoneSnapshot = {
   status: string;
   cancelReason: string;
   note: string;
+  // اسم كاتب آخر كلام على الرقم (يتبان جنب الملاحظة)
+  noteBy?: string;
   at: string;
 };
 
 export const feedbackByPhone = (
   feedbacks: any[] = [],
-  callLogs: any[] = []
+  callLogs: any[] = [],
+  users: any[] = []
 ): Map<string, PhoneSnapshot> => {
   const map = new Map<string, PhoneSnapshot>();
   // آخر كلام كتبه المندوب على كل رقم — منفصل عن الحالة، لأن لوج النظام
   // (زي «No answer») مالوش كلام، ومن حقّه ما يمسحش كلام المندوب اللي قبله.
-  const notes = new Map<string, { note: string; at: string }>();
+  const notes = new Map<string, { note: string; at: string; by: string }>();
+  // اسم الكاتب: من سجل المكالمة (محفوظ) أو من بطاقة الفيدباك (بالمعرّف بس)
+  const nameOf = (id: any) => {
+    const key = String(id || '').trim();
+    if (!key) return '';
+    const found = (users || []).find((u: any) => String(u?.id) === key);
+    return found?.name ? String(found.name) : '';
+  };
 
-  const putNote = (phone: any, raw: any, at: string) => {
+  const putNote = (phone: any, raw: any, at: string, by = '') => {
     const key = digitsOfPhone(phone);
     if (!key) return;
     const text = cleanCommentText(raw);
@@ -81,7 +91,7 @@ export const feedbackByPhone = (
     if (!text || isSystemOnlyText(text)) return;
     const prev = notes.get(key);
     if (prev && String(prev.at) > String(at)) return;
-    notes.set(key, { note: text, at });
+    notes.set(key, { note: text, at, by: String(by || '') });
   };
 
   const put = (phone: any, snapshot: PhoneSnapshot) => {
@@ -110,7 +120,7 @@ export const feedbackByPhone = (
       note: '',
       at: String(log?.createdAt || ''),
     });
-    putNote(log?.clientPhone, log?.comment, String(log?.createdAt || ''));
+    putNote(log?.clientPhone, log?.comment, String(log?.createdAt || ''), String(log?.salesName || ''));
   }
 
   for (const feedback of feedbacks || []) {
@@ -121,13 +131,16 @@ export const feedbackByPhone = (
       note: '',
       at,
     });
-    putNote(feedback?.clientPhone, feedback?.feedback, at);
+    putNote(feedback?.clientPhone, feedback?.feedback, at, nameOf(feedback?.userId));
   }
 
   // الملاحظة = آخر كلام مندوب على الرقم (وليس آخر لوج)
   for (const [key, entry] of map) {
     const note = notes.get(key);
-    if (note) entry.note = note.note;
+    if (note) {
+      entry.note = note.note;
+      entry.noteBy = note.by;
+    }
   }
 
   return map;
@@ -196,6 +209,8 @@ export type WorkNumber = {
   // آخر كلامكتبه المندوب على الرقم (من الفيدباك أو من المكالمة) — كلام صافي
   // من غير لوجات. بيظهر على كارت الرقم في صفحة «الأرقام».
   salesNote?: string;
+  // اسم كاتب آخر كلام على الرقم — يتبان جنب الملاحظة على كارت الرقم
+  salesNoteBy?: string;
   leadId?: string;
   client?: any;
   // الرقم اتفتح فعلاً (مندوب فتحه من التوزيع / العميل عليه نشاط) — للمعلومات فقط:
@@ -264,6 +279,8 @@ export const buildWorkNumbers = (
       ),
       note: String(lastActivity?.text || client?.feedback || ''),
       salesNote: String(lastActivity?.text || ''),
+      // اسم كاتب آخر كلام (من خط العميل الزمني) — الاسم محفوظ مع الكومنت
+      salesNoteBy: String(lastActivity?.by || ''),
       client,
       opened: openedBySales || commentActs.length > 0 || !lead,
       // وقت نزول الرقم: توزيعه على المندوب (وإلا وقت استيراده)
@@ -293,6 +310,8 @@ export const buildWorkNumbers = (
       cancelReason: String(snapshot?.cancelReason || ''),
       note: String(snapshot?.note || lead?.description || ''),
       salesNote: String(snapshot?.note || ''),
+      // اسم كاتب الملاحظة (من سجل المكالمة أو من بطاقة الفيدباك)
+      salesNoteBy: String(snapshot?.noteBy || ''),
       leadId: String(lead?.id || ''),
       // الرقم الموزَّع اتفتح = المندوب فتحه من شاشة التوزيع (status = viewed)
       opened:

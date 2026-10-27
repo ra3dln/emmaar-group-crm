@@ -2989,7 +2989,7 @@ function App() {
   // لوحة «حالات عملائي» و«المراحل» كانتا تعدّان العملاء المسجّلين فقط، فأرقام
   // التوزيع — وهي شغل المندوب الحقيقي — ما كانتش بتتعدّ والرقم يفضل صفر ثابت.
   const workNumbers = (() => {
-    const snapshots = feedbackByPhone(scopedFeedbacks, scopedCallLogs);
+    const snapshots = feedbackByPhone(scopedFeedbacks, scopedCallLogs, users);
     const myLeads = scopedLeads.filter(
       (l: AssignedLead) => inMyScope(l.salesId) && !otherClientPhones.has(phoneKeyOf(l.phone))
     );
@@ -6319,7 +6319,7 @@ function ClientsView({ currentUser, clients, users = [], leads = [], callLogs = 
   // والأرقام الواردة التي لم تُحوّل لعميل لا علاقة لها بالإلغاء فتختفي.
   // إلغاء الأرقام الموزّعة محفوظ في بطاقات الفيدباك/المكالمات بالهاتف، فيُقرأ من فهرس
   // الهاتف كي يشمل الفلتر كل الأرقام — لا العملاء المسجّلين فقط.
-  const phoneSnapshots = feedbackByPhone(feedbacks, callLogs);
+  const phoneSnapshots = feedbackByPhone(feedbacks, callLogs, users);
   const leadCancelReasonOf = (lead: AssignedLead) =>
     String(phoneSnapshots.get(digitsOf(lead.phone))?.cancelReason || '');
   const leadIsCancelled = (lead: AssignedLead) =>
@@ -6808,6 +6808,14 @@ function LeadFeedCard({ lead, record, onLeadViewed, onCall, cancelled = false, c
         <p className="cc-note">
           وصل من {sourceText}{lead?.createdAt ? ` — ${formatDateTime(time.at)}` : ''}
         </p>
+
+        {/* آخر كلام اتكتب على الرقم (قبل ما ينزل) — واسم كاتبه */}
+        {record?.note && (
+          <p className="cc-lastfb">
+            {record?.salesNoteBy && <span className="cc-author">{record.salesNoteBy}</span>}
+            <span className="cc-lastfb-text">{record.note}</span>
+          </p>
+        )}
       </div>
 
       <div className="cc-actions" onClick={(e) => e.stopPropagation()}>
@@ -6896,6 +6904,8 @@ type LeadRow = {
   dateLabel: string;
   formName: string;
   note: string;
+  // اسم كاتب آخر كلام على الرقم — يتبان جنب الملاحظة
+  noteBy?: string;
   isLead: boolean;
   // رقم جديد ما اتصلناش فيه خالص (يدخل في فلتر «Cold Calls»)
   cold?: boolean;
@@ -6933,7 +6943,12 @@ function EngazLeadCard({ row, onOpen, onCall }: { row: LeadRow; onOpen: () => vo
       <div className="eg-card-main">
         <div className="eg-name">{row.name}</div>
         <div className="eg-phone" dir="ltr">{row.phone}</div>
-        {row.note && <p className="eg-note">{row.note}</p>}
+        {row.note && (
+          <p className="eg-note">
+            {row.noteBy && <span className="cc-author">{row.noteBy}: </span>}
+            {row.note}
+          </p>
+        )}
       </div>
 
       <div className="eg-card-side">
@@ -7005,6 +7020,7 @@ function LeadsView({
         dateLabel: campaignStamp(time.at),
         formName: formNameOf(record),
         note: String(n?.salesNote || '') || leadNoteOf(lead || client || {}),
+        noteBy: String(n?.salesNoteBy || ''),
         isLead: !client,
         cold,
         fresh,
