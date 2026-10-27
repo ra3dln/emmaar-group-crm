@@ -9415,9 +9415,17 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
   };
   const canEdit = (user: User) =>
     user.id !== currentUser.id ? !(currentUser.role === 'supervisor' && user.role === 'admin') : true;
-  // الدخول لحساب سيلز متاح للإدارة فقط، وبدون أي كلمة مرور
-  const canImpersonate = (user: User) =>
-    !!onImpersonate && user.id !== currentUser.id && (user.role !== 'admin' || !!user.developer) && user.isActive;
+  // ===== الدخول لحساب أي مستخدم (بدون كلمة مرور) =====
+  // الإدارة بتدخل حسابات السيلز عادي. وحساب الـ CEO (admin) محمي من الدخول عليه
+  // — إلا حساب «المطوّر» (system dev): أعلى صلاحية في النظام، فيدخل أي حساب
+  // متاح (ومنهم حساب الـ CEO) ويشوف كل البيانات بعيون الحساب ده.
+  const canImpersonate = (user: User) => {
+    if (!onImpersonate) return false;
+    if (user.id === currentUser.id) return false;
+    if (!user.isActive) return false;
+    if (isDeveloperAccount(currentUser)) return true;
+    return user.role !== 'admin' || !!user.developer;
+  };
 
   // ===== بحث حسابات السيلز =====
   // يفلتر الكروت فوراً بالاسم أو اسم المستخدم أو الرقم أو الفريق أو الرتبة،
@@ -9514,7 +9522,9 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
                     title={
                       canImpersonate(user)
                         ? `الدخول إلى حساب ${user.name} — ترى النظام بعيونه بدون كلمة مرور`
-                        : user.isActive ? 'غير متاح لهذا الحساب' : 'الحساب موقوف — لا يمكن الدخول إليه'
+                        : user.isActive
+                          ? (user.role === 'admin' ? 'حساب إداري — الدخول متاح لحساب المطوّر (system dev) فقط' : 'غير متاح لهذا الحساب')
+                          : 'الحساب موقوف — لا يمكن الدخول إليه'
                     }
                     className="icon-btn is-brand disabled:opacity-30 disabled:cursor-not-allowed"
                   >

@@ -118,4 +118,29 @@ check(
   /localStorage\.setItem\('crm_assigned_leads'[\s\S]{0,700}if \(currentUser\?\.role !== 'sales'\) setFullLeads\(next\);/.test(app)
 );
 
+// ===== ٦) حساب المطوّر (system dev): أعلى صلاحية — يدخل أي حساب ومنهم الـ CEO =====
+// الطلب: «حساب محمد يقدر يدخل عادي لحسابات الـ CEO كاملة» — يعني الانتحال
+// (الدخول لحساب غيره بدون كلمة مرور) متاح لحساب المطوّر حتى مع حساب الـ CEO
+// (اللي مكنش ينفع حد يدخل عليه غيره).
+check(
+  'حساب المطوّر يدخل أي حساب (منهم الـ CEO)',
+  /if \(isDeveloperAccount\(currentUser\)\) return true;/.test(app)
+);
+check(
+  'الإدارة العادية ما تدخلش حساب الـ CEO',
+  /return user\.role !== 'admin' \|\| !!user\.developer;/.test(app)
+);
+check(
+  'حساب المطوّر ما يدخلش على نفسه',
+  /if \(user\.id === currentUser\.id\) return false;/.test(app)
+);
+check(
+  'الحساب الموقوف ما ينفعش الدخول عليه',
+  /if \(!user\.isActive\) return false;/.test(app)
+);
+check(
+  'نص التلميح يوضّح إن حساب الـ CEO متاح لحساب المطوّر فقط',
+  /حساب إداري — الدخول متاح لحساب المطوّر/.test(app)
+);
+
 console.log(`\n✅ نجحت ${passed} فحوصات لحساب المطوّر`);
