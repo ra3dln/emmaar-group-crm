@@ -36,6 +36,7 @@ const CHANNEL_DEFAULTS = {
   token: '', // توكن المستخدم (للاستكشاف)
   pages: [], // [{ id, name, token }] — توكن كل صفحة (يُكتشف تلقائياً)
   forms: [], // [{ id, pageId, name }] — النماذج المختارة
+  extraForms: [], // [name] — فورمات مبنية من رفع شيت (أسماء فقط، لا تُسحب منها أرقام)
   formCursors: {}, // [{ formId: آخر وقت سحب }] — مؤشر مستقل لكل فورم
   intervalMinutes: 5,
   cursorTime: 0, // آخر وقت سُحبت عنده أرقام من ميتا
@@ -701,6 +702,8 @@ const publicChannel = (config = {}) => ({
   sheetUrl: config.sheetUrl || '',
   pages: (config.pages || []).map((p) => ({ id: p.id, name: p.name })),
   forms: (config.forms || []).map((f) => ({ id: f.id, pageId: f.pageId, name: f.name })),
+  // فورمات مبنية من رفع شيت — أسماء فقط (تظهر في القوائم المسندلة بلا سحب)
+  extraForms: (config.extraForms || []).map((name) => String(name || '').trim()).filter(Boolean),
   intervalMinutes: config.intervalMinutes || DEFAULTS.intervalMinutes,
   perSalesLimit: Number(config.perSalesLimit) || 0,
   hasToken: !!config.token,
@@ -1027,6 +1030,17 @@ export function applyChannelPatch(config, body = {}) {
         pageId: typeof f.pageId === 'string' ? String(f.pageId) : '',
         name: String(f.name || f.id),
       }));
+  }
+  // فورمات إضافية (من رفع شيت): أسماء فقط — تُحفظ في الإعدادات فتظهر في القوائم
+  // المسندلة، ولا تدخل في السحب التلقائي (لا معرّف ميتا لها).
+  if (Array.isArray(body.extraForms)) {
+    patch.extraForms = [
+      ...new Set(
+        body.extraForms
+          .map((f) => String(typeof f === 'string' ? f : f?.name || '').trim())
+          .filter(Boolean)
+      ),
+    ];
   }
   if (typeof body.token === 'string' && body.token.trim()) patch.token = body.token.trim();
   if (body.clearToken) {

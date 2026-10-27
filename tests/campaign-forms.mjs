@@ -57,6 +57,22 @@ check(
 );
 check('إعداد بلا فورمات لا يرمي', activeFormNamesOf({}).length === 0 && activeFormNamesOf(null).length === 0);
 
+// ===== ٢.٥) فورمات مبنية من رفع شيت (أسماء فقط) =====
+const withExtra = activeFormNamesOf({
+  forms: [{ id: '1', name: 'فورم أكتوبر' }],
+  extraForms: ['عملاء أكتوبر', 'عملاء أكتوبر', '   '],
+  instagram: { extraForms: ['عملاء إنستجرام'] },
+});
+check(
+  'الفورمات الإضافية بتظهر مع المفعّلة',
+  withExtra.length === 3 &&
+    withExtra.includes('عملاء أكتوبر') &&
+    withExtra.includes('عملاء إنستجرام') &&
+    withExtra.includes('فورم أكتوبر'),
+  JSON.stringify(withExtra)
+);
+check('إعداد بلا فورمات إضافية لا يرمي', activeFormNamesOf({ extraForms: [] }).length === 0);
+
 // ===== ٣) اسم الفورم يُحفظ مع الرقم =====
 const built = buildAssignments({
   fetched: [
@@ -95,5 +111,26 @@ check('«عملاء كامبين» تستقبل الفورمات المفعّل�
 check('قائمة الفورمات المسندلة في «عملاء كامبين»', app.includes('id="campaign-form-select"'));
 check('قائمة الفورمات المسندلة في «توزيع الأرقام»', app.includes('id="lead-form-select"'));
 check('التحديث التلقائي عند تفعيل فورم وحفظه', app.includes("new Event(ACTIVE_FORMS_EVENT)"));
+
+// ===== ٥) السيرفر/API بيحفظوا الفورمات الإضافية (من رفع الشيت) =====
+// أسماء فقط — بلا معرّف ميتا — فالسحب التلقائي ما يحاولش يجلب منها أرقام.
+const { applyChannelPatch, publicConfig } = await import('../server/leadSource.js');
+const patched = applyChannelPatch({ forms: [{ id: '1', name: 'فورم أكتوبر' }] }, {
+  channel: 'facebook',
+  extraForms: ['عملاء أكتوبر', 'عملاء أكتوبر', '  '],
+});
+check(
+  'الفورم الإضافي اتحفظ في إعدادات القناة',
+  Array.isArray(patched.extraForms) && patched.extraForms.length === 1 && patched.extraForms[0] === 'عملاء أكتوبر',
+  JSON.stringify(patched.extraForms)
+);
+check(
+  'الفورم الإضافي بيظهر في الإعدادات العامة (بلا معرّف ميتا)',
+  publicConfig(patched).extraForms.includes('عملاء أكتوبر')
+);
+check(
+  'إعدادات القناة ما اتغيرتش نماذج ميتا',
+  (patched.forms || []).length === 1 && (patched.forms || [])[0]?.id === '1'
+);
 
 console.log(`\n✅ نجحت ${passed} فحوصات لأسماء الفورمات وقوائمها`);

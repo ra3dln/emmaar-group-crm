@@ -144,12 +144,83 @@ check(
 check(
   'الحفظ بيسجّل عميل جديد ورفعه للسيرفر',
   /localStorage\.setItem\('crm_clients', JSON\.stringify\(\[\.\.\.added, \.\.\.existing\]\)\)/.test(app) &&
-    /void pushKey\('crm_clients'\)/.test(app)
+    /pushKey\('crm_clients'\)/.test(app)
 );
 check(
   'العميل المرفوع بيتسجّل ككامبين (يظهر في تبويب عملاء كامبين)',
-  /source: formName \? `كامبين — \$\{formName\}` : 'كامبين — شيت مرفوع'/.test(app) &&
+  /source: finalForm \? `كامبين — \$\{finalForm\}` : 'كامبين — شيت مرفوع'/.test(app) &&
     /status: 'campaign'/.test(app)
+);
+
+// ===== ٧) كشف عمود الهاتف بالقياس (مش باسم العمود) =====
+// العمود المسمّى «رقم» ممكن يكون تسلسلي (1، 2، 3) — وهو اللي كان بيخلي
+// كل أرقام الشيت «غير صالحة» مع إن الأرقام سليمة.
+const serialSheet = [
+  ['الاسم', 'رقم', 'رقم الهاتف'],
+  ['أحمد', '1', '01011112222'],
+  ['منى', '2', '01133334444'],
+  ['سارة', '3', '01255556666'],
+];
+const serialPreview = buildPreview(serialSheet, []);
+check(
+  'عمود «رقم» التسلسلي ما اتاخدش',
+  serialPreview.mapping.phone === 'رقم الهاتف',
+  serialPreview.mapping.phone
+);
+check(
+  'الأرقام السليمة اتعرفت (مش كلها غير صالحة)',
+  serialPreview.invalid === 0 && serialPreview.fresh === 3,
+  `invalid=${serialPreview.invalid} fresh=${serialPreview.fresh}`
+);
+const realSheet = [
+  ['الاسم', 'رقم'],
+  ['أحمد', '01011112222'],
+  ['منى', '01133334444'],
+];
+check(
+  'عمود «رقم» اللي فيه تليفونات صحيح يفضل زي ما هو',
+  buildPreview(realSheet, []).mapping.phone === 'رقم',
+  buildPreview(realSheet, []).mapping.phone
+);
+const noHeaderSheet = [['أحمد', '01011112222'], ['منى', '01133334444']];
+const noHeader = buildPreview(noHeaderSheet, []);
+check(
+  'شيت بلا عناوين: العمود الصح اتعرف',
+  noHeader.invalid === 0 && noHeader.rows[0]?.phone === '01011112222',
+  `invalid=${noHeader.invalid}`
+);
+
+// ===== ٨) الفورم الجديد: بنفس اسم الملف + حفظه في الإعدادات =====
+const { formNameFromFileName, withExtraFormName } = await import('../src/leadForms.ts');
+check(
+  'اسم الفورم = اسم الملف بدون الامتداد',
+  formNameFromFileName('عملاء أكتوبر.xlsx') === 'عملاء أكتوبر',
+  formNameFromFileName('عملاء أكتوبر.xlsx')
+);
+check(
+  'اسم ملف بلا امتداد يفضل زي ما هو',
+  formNameFromFileName('عملاء') === 'عملاء'
+);
+check('إضافة اسم فورم جديد', withExtraFormName(['أ'], 'ب').length === 2);
+check('نفس الاسم مرتين ما يتكررش', withExtraFormName(['أ'], 'أ').length === 1);
+check('اسم فاضي ما بيضيفش فورم', withExtraFormName(['أ'], '   ').length === 1);
+
+check(
+  'النافذة بتحفظ الفورم في إعدادات السحب',
+  /saveExtraFormName\(finalForm\)/.test(app) && /formNameFromFileName\(file\.name\)/.test(app)
+);
+check(
+  'النافذة بتسجّل الأرقام في «توزيع الأرقام» (غير مخصصة)',
+  /pushKey\('crm_assigned_leads'\)/.test(app) && /salesId: ''/.test(app) && /status: 'new'/.test(app)
+);
+check(
+  'النافذة بتستنى نتيجة الرفع قبل ما تقفل',
+  /const \[clientsOk, leadsOk\] = await Promise\.all/.test(app)
+);
+check(
+  'إضافة العميل للإدارة: نموذج مبسّط (اسم + رقم)',
+  /const simple = isAdmin/.test(app) && /\{!simple && \(/.test(app) &&
+    /reminderAt: simple \? '' : nextReminderInput\(\)/.test(app)
 );
 
 console.log(`\n✅ نجحت ${passed} فحوصات لإضافة عميل يدوي ورفع الشيت`);

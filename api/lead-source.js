@@ -100,6 +100,10 @@ const statelessChannel = (config = {}) => ({
   forms: Array.isArray(config.forms)
     ? config.forms.map((f) => ({ id: f.id, pageId: f.pageId, name: f.name || f.id }))
     : [],
+  // فورمات مبنية من رفع شيت (أسماء فقط) — تظهر في القوائم المسندلة
+  extraForms: Array.isArray(config.extraForms)
+    ? config.extraForms.map((name) => String(name || '').trim()).filter(Boolean)
+    : [],
   hasToken: !!config.token,
   // ميعاد انتهاء التوكن (ثواني) — للمتصفح ليحسب «أيام متبقية» وينبّه قبل الانتهاء
   tokenExpiresAt: Number(config.tokenExpiresAt) || 0,

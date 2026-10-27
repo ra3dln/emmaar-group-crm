@@ -31,7 +31,8 @@ import {
 } from './arabicNumbers';
 import { buildXlsx, downloadBlob } from './xlsx';
 import { matchLeadSearch } from './leadSearch';
-import { formNameOf, formKeyOf, activeFormNamesOf, isSelectedFormRecord, UNKNOWN_FORM } from './campaignForms';
+import { formNameOf, formKeyOf, activeFormNamesOf, isSelectedFormRecord, UNKNOWN_FORM, ACTIVE_FORMS_EVENT } from './campaignForms';
+import { formNameFromFileName, saveExtraFormName } from './leadForms';
 import {
   AUTO_ASSIGN_KEY,
   activeRuleFor,
@@ -5256,7 +5257,7 @@ const sourceKindOf = (text: string): keyof typeof SOURCE_KINDS => {
 // ===== أسماء الفورمات المفعّلة (من إعدادات سحب الأرقام) =====
 // «عملاء كامبين» و«توزيع الأرقام» يقرآن قائمتهما المسندلة من هنا: الفورم الجديد
 // يظهر فيهما بمجرد تفعيله وحفظ الإعدادات، حتى قبل وصول أي رقم منه.
-const ACTIVE_FORMS_EVENT = 'crm-forms-updated';
+// (اسم الحدث نفسه معرّف في campaignForms.ts حتى تشترك فيه نافذة رفع الشيت.)
 
 const useActiveCampaignForms = (enabled: boolean) => {
   const [forms, setForms] = useState<string[]>([]);
@@ -9859,8 +9860,10 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
   const [ownerId, setOwnerId] = useState(String(currentUser?.id || ''));
+  // اسم الفورم = اسم الملف بدون الامتداد افتراضياً — والمدير يقدر يغيّره
   const [formName, setFormName] = useState('');
-  const [result, setResult] = useState<{ added: number; duplicates: number; invalid: number } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState<{ added: number; duplicates: number; invalid: number; leads: number; form: string } | null>(null);
 
   // كل الأرقام الموجودة بالفعل (عملاء أو أرقام موزّعة) — عشان نكشف المكرر
   const existingPhones = [
@@ -9884,6 +9887,8 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
       setTable(rows);
       setPreview(built);
       setFileName(file.name);
+      // اسم الفورم = اسم الملف بدون الامتداد — ويظهر في القوائم بنفس الاسم
+      setFormName(formNameFromFileName(file.name));
       setStage('preview');
     } catch (e: any) {
       setError(e?.message || 'تعذّر قراءة الملف — تأكد أنه بصيغة CSV أو إكسل');
@@ -9896,9 +9901,12 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
   };
   const headerCells = (table[0] || []).map((cell, index) => ({ label: cell || `العمود ${index + 1}`, index }));
 
-  const handleSave = () => {
-    if (!preview) return;
+  // ===== الحفظ: فورم بنفس اسم الملف + عميل لكل سطر + الأرقام في «توزيع الأرقام» =====
+  const handleSave = async () => {
+    if (!preview || saving) return;
+    setError('');
     const now = new Date().toISOString();
+    const finalForm = formName.trim();
     const existing: Client[] = JSON.parse(localStorage.getItem('crm_clients') || '[]');
     const known = new Set(existing.map((c: Client) => phoneKeyOf(c.phone)).filter(Boolean));
     const added: Client[] = [];
@@ -9920,8 +9928,8 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
         stage: 'new',
         feedback: '',
         priority: 'medium',
-        source: formName ? `كامبين — ${formName}` : 'كامبين — شيت مرفوع',
-        ...(formName ? { formName } : {}),
+        source: finalForm ? `كامبين — ${finalForm}` : 'كامبين — شيت مرفوع',
+        ...(finalForm ? { formName: finalForm } : {}),
         userId: ownerId,
         assignedTo: ownerId,
         createdAt: now,
@@ -9935,10 +9943,59 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
       setError('كل أرقام الملف موجودة بالفعل — مش في جديد');
       return;
     }
+    setSaving(true);
+    // ===== ١) الفورم: بنفس اسم الملف، محفوظ في إعدادات السحب =====
+    // لازم يتحفظ قبل السجلات: الأرقام المسجّلة باسم فورم غير مفعّل بتتخفي من
+    // «عملاء كامبين» و«توزيع الأرقام». فإحنا بنوقف الحفظ كله لو الحفظ فشل.
+    if (finalForm) {
+      const formSaved = await saveExtraFormName(finalForm);
+      if (!formSaved) {
+        setSaving(false);
+        setError('تعذّر حفظ الفورم في إعدادات السحب — لم يُسجّل أي عميل. اتأكد من الاتصال وجرّب تاني.');
+        return;
+      }
+    }
+    // ===== ٢) العملاء =====
     localStorage.setItem('crm_clients', JSON.stringify([...added, ...existing]));
-    void pushKey('crm_clients');
+    // ===== ٣) نفس الأرقام في «توزيع الأرقام» — غير مخصصة، فالإدارة توزّعها بنفسها =====
+    const newLeads: AssignedLead[] = added.map((client) => ({
+      id: crypto.randomUUID(),
+      adminId: String(currentUser?.id || ''),
+      salesId: '',
+      name: client.name,
+      phone: client.phone,
+      description: `رفع شيت: ${fileName}`,
+      status: 'new',
+      createdAt: now,
+      ...(finalForm ? { formName: finalForm } : {}),
+    }));
+    // ندمج مع المخزون المحلي كاملاً (مش المسحوف في الشاشة) ونشيل أي رقم مكرر
+    let stored: AssignedLead[] = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
+      stored = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      stored = [];
+    }
+    const byId = new Map<string, AssignedLead>();
+    for (const lead of [...stored, ...(assignedLeads || [])]) {
+      byId.set(String(lead.id), lead);
+    }
+    const newPhones = new Set(added.map((client) => phoneKeyOf(client.phone)));
+    const kept = [...byId.values()].filter((lead) => !newPhones.has(phoneKeyOf(lead.phone)));
+    localStorage.setItem('crm_assigned_leads', JSON.stringify([...newLeads, ...kept]));
+    // ===== ٤) الرفع للسيرفر: ننتظر النتيجة عشان ما يفضل السجل على جهاز واحد =====
+    const [clientsOk, leadsOk] = await Promise.all([
+      pushKey('crm_clients'),
+      pushKey('crm_assigned_leads'),
+    ]);
+    setSaving(false);
     onSuccess();
-    setResult({ added: added.length, duplicates: preview.duplicates, invalid: preview.invalid });
+    if (!clientsOk || !leadsOk) {
+      setError('اتسجّل على الشاشة دي بس ماوصلش للسيرفر — جرّب ترفع الملف تاني.');
+      return;
+    }
+    setResult({ added: added.length, duplicates: preview.duplicates, invalid: preview.invalid, leads: newLeads.length, form: finalForm });
     setStage('done');
   };
 
@@ -10072,15 +10129,21 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
                   </select>
                 </label>
                 <label className="text-xs text-[var(--text-muted)]">
-                  فورم الكامبين (اختياري)
-                  <select
+                  فورم الكامبين (بنفس اسم الملف)
+                  <input
+                    type="text"
+                    list="crm-form-names"
                     value={formName}
                     onChange={(e) => setFormName(e.target.value)}
+                    placeholder="اسم الملف بدون امتداد"
                     className="w-full mt-1 bg-[var(--bg)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-sm text-[var(--text)]"
-                  >
-                    <option value="">— بدون فورم —</option>
-                    {(activeForms || []).map((name: string) => <option key={name} value={name}>{name}</option>)}
-                  </select>
+                  />
+                  <datalist id="crm-form-names">
+                    {(activeForms || []).map((name: string) => <option key={name} value={name} />)}
+                  </datalist>
+                  <span className="block mt-1 text-[11px] text-[var(--text-dim)]">
+                    بينحفظ في إعدادات سحب الأرقام ⇒ يظهر فوراً في «عملاء كامبين» و«توزيع الأرقام».
+                  </span>
                 </label>
               </div>
             </div>
@@ -10124,9 +10187,9 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
             )}
 
             <div className="flex gap-2">
-              <button onClick={handleSave} disabled={!preview.fresh}
+              <button onClick={() => void handleSave()} disabled={!preview.fresh || saving}
                 className="flex-1 gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-40">
-                حفظ {preview.fresh} عميل في «عملاء كامبين»
+                {saving ? 'جارٍ الحفظ...' : `حفظ ${preview.fresh} عميل + ${preview.fresh} رقم في «توزيع الأرقام»`}
               </button>
               <button onClick={onClose} className="px-5 py-3 rounded-[var(--r-md)] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)]">
                 إلغاء
@@ -10145,7 +10208,14 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
               اتسجّل <span className="text-emerald-400">{result.added}</span> عميل جديد
             </p>
             <p className="text-xs text-[var(--text-muted)]">
-              اتجاهل {result.duplicates} مكرر و{result.invalid} رقم غير صالح — وظهر كل العملاء في «عملاء كامبين».
+              اتجاهل {result.duplicates} مكرر و{result.invalid} رقم غير صالح.
+            </p>
+            <p className="text-xs text-[var(--text-muted)]">
+              و<b className="text-[var(--text)]">{result.leads}</b> رقم اتسجّل في «توزيع الأرقام» غير مخصص
+              {result.form ? <> — والفورم <b className="text-[var(--text)]">{result.form}</b> اتحفظ في إعدادات السحب</> : null}.
+            </p>
+            <p className="text-xs text-[var(--text-muted)]">
+              وظهر كل العملاء في «عملاء كامبين».
             </p>
             <button onClick={onClose} className="gradient-primary text-[var(--text-strong)] px-8 py-3 rounded-[var(--r-md)] font-bold">
               تمام
@@ -11340,6 +11410,7 @@ const LEAD_SOURCE_DEFAULTS = {
   token: '',
   pages: [] as any[],
   forms: [] as any[],
+  extraForms: [] as string[],
   intervalMinutes: 5,
   cursorTime: 0,
   assignCursor: 0,
@@ -12326,6 +12397,10 @@ function AddClientModal({ currentUser, users, onClose, onSuccess, preset }: any)
   // بلا قائمة اختيار مندوب (كانت تطلب منه اختيار سيلز قبل الحفظ).
   // الإداري الذي يعمل سيلزاً (المطوّر/فريدة) يسجّل العميل باسمه هو بلا قائمة مندوبين
   const isAdmin = currentUser?.role !== 'sales' && !worksAsSales(currentUser);
+  // ===== نموذج مبسّط للإدارة =====
+  // الإدارة بتضيف عميل بالاسم والرقم بس — حقول السيلز (الفيدباك وحالة المتابعة
+  // والتذكير وسبب الإلغاء) ما بتفرقش معاها، فبتتخفي والنموذج يبقى بسيط.
+  const simple = isAdmin;
   // المدير يضيف العميل لمندوب بعينه حتى يظهر للفريق (الإدارة مالها تبويب عملاء خاص)
   const reps = (users || []).filter((u: User) => ['sales', 'supervisor'].includes(effectiveRoleOf(u)));
   const [form, setForm] = useState<{
@@ -12337,7 +12412,11 @@ function AddClientModal({ currentUser, users, onClose, onSuccess, preset }: any)
   }>({
     name: '', phone: '', phones: [] as string[], property: '', budget: '', monthlyInstallment: '', deliveryPeriod: '',
     status: 'campaign', stage: 'new', feedback: '', feedbackStatus: 'follow-up', cancelReason: '',
-    reminderAt: nextReminderInput(), priority: 'medium', source: '', ownerId: '',
+    // الإدارة (النموذج المبسّط): بلا تذكير تلقائي — التذكير مهمة السيلز
+    reminderAt: simple ? '' : nextReminderInput(),
+    priority: 'medium', source: '',
+    // الإدارة تسجّل العميل باسمها افتراضياً (اختيار مندوب اختياري)
+    ownerId: simple ? String(currentUser?.id || '') : '',
     // قيم جاهزة من نقطة الفتح (مثل «عملاء كامبين» ⇒ المصدر «كامبين» فيظهر في تبويبهم)
     ...(preset || {}),
   });
@@ -12499,7 +12578,7 @@ function AddClientModal({ currentUser, users, onClose, onSuccess, preset }: any)
           {isAdmin && (
             <select value={form.ownerId} onChange={(e) => setForm({ ...form, ownerId: e.target.value })}
               className="w-full bg-[var(--tint-1)] border border-[var(--brand-primary-soft)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required>
-              <option value="" className="bg-gray-900">👤 السيلز المسؤول عن العميل</option>
+              <option value={String(currentUser?.id || '')} className="bg-gray-900">👤 الإدارة (أنا)</option>
               {reps.map((u: User) => (
                 <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
               ))}
@@ -12507,7 +12586,14 @@ function AddClientModal({ currentUser, users, onClose, onSuccess, preset }: any)
           )}
           <input type="text" placeholder="الاسم *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
           <input type="tel" placeholder="رقم الهاتف الرئيسي *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
-          
+          {simple && (
+            <p className="text-[11px] text-[var(--text-dim)] -mt-1">
+              النموذج مبسّط للإدارة: اسم + رقم. متابعة العميل وفيدباكه وتذكيره من شغل السيلز.
+            </p>
+          )}
+
+          {!simple && (
+          <>
           <div>
             <label className="block text-sm text-[var(--text)] mb-2">أرقام إضافية</label>
             <div className="flex gap-2">
@@ -12595,6 +12681,8 @@ function AddClientModal({ currentUser, users, onClose, onSuccess, preset }: any)
               </p>
             </div>
           </div>
+          </>
+          )}
           {error && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-[var(--r-md)] px-3 py-2">{error}</p>}
           <button type="submit" disabled={saving || (form.feedbackStatus === 'cancellation' && !form.cancelReason)} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-60">
             {saving ? 'جارٍ الحفظ...' : createdId ? 'إعادة المحاولة' : 'إضافة'}

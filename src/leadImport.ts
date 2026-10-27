@@ -152,6 +152,21 @@ const headerMatches = (header: string, word: string): boolean => {
   return header.includes(word) && (word.length >= 4 || word === header);
 };
 
+// رقم العمود من اسمه (أو «العمود ٣» لما مافيش عناوين)
+const columnIndexOf = (header: string[], label?: string): number => {
+  if (!label) return -1;
+  if (label.startsWith('العمود ')) return Number(label.replace('العمود ', '')) - 1;
+  return header.findIndex((cell) => cell === label);
+};
+
+// كام قيم العمود دي أرقام تليفون فعلاً (0..1)
+const phoneScoreOf = (body: string[][], index: number): number => {
+  if (index < 0) return 0;
+  const values = body.map((row) => row[index] || '').filter((value) => value !== '');
+  if (!values.length) return 0;
+  return values.filter(isPhoneLike).length / values.length;
+};
+
 export function guessColumns(header: string[], body: string[][]): ImportPreview['mapping'] {
   const columns: ImportPreview['mapping'] = {};
   const used = new Set<number>();
@@ -168,21 +183,25 @@ export function guessColumns(header: string[], body: string[][]): ImportPreview[
     }
   }
 
-  // لو مافيش عمود هاتف واضح: نبحث عن العمود الذي أغلب قيمه أرقام
-  if (!columns.phone && body.length) {
+  // ===== عمود الهاتف: لازم قيمه تشبه تليفون فعلاً =====
+  // عمود مسمّى «رقم» ممكن يكون تسلسلي (1، 2، 3) مش تليفون — وهو اللي كان
+  // بيخلي كل أرقام الشيت «غير صالحة» مع إن الأرقام سليمة. فبنقيس قيم العمود
+  // اللي اتعرف عليه، ولو مش أرقام بنختار العمود اللي أرقامه صح.
+  const hintedIndex = columnIndexOf(header, columns.phone);
+  if (phoneScoreOf(body, hintedIndex) < 0.5) {
     let bestIndex = -1;
     let bestScore = 0;
-    const width = Math.max(...body.map((row) => row.length));
+    const width = Math.max(...body.map((row) => row.length), 0);
     for (let i = 0; i < width; i += 1) {
-      const values = body.map((row) => row[i] || '').filter((value) => value !== '');
-      if (!values.length) continue;
-      const score = values.filter(isPhoneLike).length / values.length;
+      const score = phoneScoreOf(body, i);
       if (score > bestScore) {
         bestScore = score;
         bestIndex = i;
       }
     }
-    if (bestIndex >= 0 && bestScore >= 0.5) columns.phone = `العمود ${bestIndex + 1}`;
+    if (bestIndex >= 0 && bestScore >= 0.5) {
+      columns.phone = header[bestIndex] ? header[bestIndex] : `العمود ${bestIndex + 1}`;
+    }
   }
 
   return columns;

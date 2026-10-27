@@ -6,6 +6,10 @@
 
 export const UNKNOWN_FORM = 'بدون اسم فورم';
 
+// حدث يتغير عند تفعيل/حفظ فورم — القوائم المسندلة (عملاء كامبين + توزيع الأرقام)
+// تتحدّث فوراً بلا إعادة تحميل الصفحة.
+export const ACTIVE_FORMS_EVENT = 'crm-forms-updated';
+
 export type FormNamedRecord = { source?: string; description?: string; formName?: string };
 
 // الفاصل بين حقول الوصف هو «•» فقط؛ فلا نقطع الاسم عند «|» أو «-».
@@ -36,6 +40,8 @@ export const formKeyOf = (record: FormNamedRecord | null | undefined): string =>
 // ===== الفورمات المفعّلة في إعدادات سحب الأرقام =====
 // القناتان (فيسبوك وإنستجرام) لكل منهما نماذجه، والقائمة تجمعهما بلا تكرار
 // حتى تظهر كل الفورمات المفعّلة في القوائم المسندلة قبل وصول أي رقم منها.
+// Plus فورمات إضافية (أسماء فقط) من رفع الشيتات: تُحفظ في الإعدادات لتظهر في
+// القوائم، ولا تُسحب منها أرقام (لا معرّف ميتا لها) فلا يتعطّل السحب التلقائي.
 export const activeFormNamesOf = (config: any): string[] => {
   const list = [
     ...(Array.isArray(config?.forms) ? config.forms : []),
@@ -44,6 +50,13 @@ export const activeFormNamesOf = (config: any): string[] => {
   const names = new Set<string>();
   for (const item of list) {
     const name = String(item?.name || '').trim();
+    if (name) names.add(name);
+  }
+  for (const extra of [
+    ...(Array.isArray(config?.extraForms) ? config.extraForms : []),
+    ...(Array.isArray(config?.instagram?.extraForms) ? config.instagram.extraForms : []),
+  ]) {
+    const name = String(extra?.name || extra || '').trim();
     if (name) names.add(name);
   }
   return [...names];
