@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 
-const { feedbackBucketOf, latestFeedbackStatusOf, buildWorkNumbers, feedbackByPhone, isColdNumber, isFreshNumber } =
+const { feedbackBucketOf, latestFeedbackStatusOf, buildWorkNumbers, feedbackByPhone, isColdNumber, isFreshNumber, coldPhonesOf } =
   await import('../src/feedbackBuckets.ts');
 
 let passed = 0;
@@ -170,21 +170,29 @@ const split = buildWorkNumbers(
   )
 );
 const calledPhones = new Set(['01000000005']);
-const cold = split.filter((n) => isColdNumber(n, calledPhones));
+// «Cold Calls» = اتصلنا فيه وآخر محاولة «لم يرد» — مش بالوقت.
+// (القاعدة القديمة كانت وقتية: بعد ٢٤ ساعة أي رقم ما اتصلناش فيه بيبقى «بارد»،
+//  فكانت الأرقام الجديدة بتزاح من Fresh Leads وتدخل Cold Calls.)
+const coldPhones = coldPhonesOf([{ clientPhone: '01000000005', result: 'no-answer', createdAt: AT }]);
+const cold = split.filter((n) => isColdNumber(n, coldPhones));
 const fresh = split.filter((n) => isFreshNumber(n, calledPhones));
-check('«Cold Calls» = القديم اللي ما اتصلناش بيه (٢)', cold.length === 2, `وجد ${cold.length}`);
-check('«Fresh Leads» = الجديد اللي نزل حالاً (٢)', fresh.length === 2, `وجد ${fresh.length}`);
+check('«Cold Calls» = اتصلنا فيه وما ردّنا (١)', cold.length === 1, `وجد ${cold.length}`);
+check('«Fresh Leads» = الأرقام اللي ما اتصلناش فيها خالص (٤)', fresh.length === 4, `وجد ${fresh.length}`);
 check(
   'الرقم الواحد ما بيحسبش في الاتنين',
   cold.every((n) => !fresh.some((f) => f.key === n.key))
 );
 check(
-  'الرقم اللي اتصلنا بيه مش بارد ومش جديد',
-  !cold.some((n) => n.phone === '01000000005') && !fresh.some((n) => n.phone === '01000000005')
+  'الرقم اللي اتصلنا بيه وما ردّنا = بارد (مش جديد)',
+  cold.some((n) => n.phone === '01000000005') && !fresh.some((n) => n.phone === '01000000005')
 );
 check(
-  'الرقم اللي اتفتح من التوزيع نزل حالاً يبقى Fresh (مش بارد)',
+  'الرقم اللي اتفتح من التوزيع (-opening) بيفضل Fresh لحد ما يتصل بيه',
   fresh.some((n) => n.phone === '01000000006') && !cold.some((n) => n.phone === '01000000006')
+);
+check(
+  'الرقم القديم اللي ما اتصلناش فيه بيفضل Fresh (مش بارد)',
+  fresh.some((n) => n.phone === '01000000004') && !cold.some((n) => n.phone === '01000000004')
 );
 check(
   'العميل اللي عليه فيدباك حالته follow-up (مش بارد ولا جديد)',

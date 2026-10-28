@@ -87,27 +87,25 @@ check(
 // ===== ٣‑ب) «Fresh Leads» و«Cold Calls» مبادلينش الأرقام =====
 check(
   '«Fresh Leads» و«Cold Calls» عدّادين منفصلين في لوحة الأرقام',
-  /const coldCalls = scopeNumbers\.filter\(\(record: any\) => isColdNumber\(record, calledPhones\)\)\.length/.test(dash) &&
+  /const coldCalls = scopeNumbers\.filter\(\(record: any\) => isColdNumber\(record, coldPhones\)\)\.length/.test(dash) &&
     /const freshLeads = scopeNumbers\.filter\(\(record: any\) => isFreshNumber\(record, calledPhones\)\)\.length/.test(dash) &&
     /card\.id === 'fresh-stage'\s*\n\s*\? freshLeads/.test(dash)
 );
 check(
-  '«Cold Calls» = نزل من زمان وما اتصلناش · «Fresh Leads» = نزل حالاً',
+  '«Cold Calls» = اتصلنا فيه وما ردّنا · «Fresh Leads» = ما اتصلناش فيه خالص',
   /export const isColdNumber = \(/.test(buckets) &&
     /export const isFreshNumber = \(/.test(buckets) &&
+    /export const coldPhonesOf = \(/.test(buckets) &&
     /if \(bucket !== 'fresh-stage'\) return false;/.test(buckets) &&
     /if \(calledPhones\.has\(digitsOfPhone\(record\?\.phone\)\)\) return false;/.test(buckets) &&
-    /return !isFreshArrival\(record, now\);/.test(buckets) &&
-    /return isFreshArrival\(record, now\);/.test(buckets)
+    /return coldPhones\.has\(phone\);/.test(buckets)
 );
 check(
-  '«الجديد» = نزل في آخر ٢٤ ساعة (مش بس اتفتح)',
-  /export const FRESH_WINDOW_MS = 24 \* 60 \* 60 \* 1000;/.test(buckets) &&
-    /record\?\.assignedAt \|\| record\?\.createdAt/.test(buckets)
-);
-check(
-  'الرقم اللي اتفتح من التوزيع (= viewed) بيفضل جديد لو نزل حالاً',
-  /lead\?\.status === 'viewed' \|\| lead\?\.status === 'contacted' \|\| !!lead\?\.viewedAt/.test(buckets)
+  'الفرق بالحالة مش بالوقت — الأرقام الجديدة ما تزاحش لـ Cold Calls',
+  !/return !isFreshArrival\(record, now\);/.test(buckets) &&
+    !/return isFreshArrival\(record, now\);/.test(buckets) &&
+    /const coldPhones = coldPhonesOf\(callLogs \|\| \[\]\);/.test(dash) &&
+    /const coldCalls = scopeNumbers\.filter\(\(record: any\) => isColdNumber\(record, coldPhones\)\)\.length/.test(dash)
 );
 check(
   'وقت نزول الرقم (توزيعه) بيتحسب مع الرقم',

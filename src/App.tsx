@@ -64,6 +64,7 @@ import {
   FEEDBACK_STATUS_TO_STAGE,
   LEAD_STATUS_TO_FEEDBACK_STATUS,
   buildWorkNumbers,
+  coldPhonesOf,
   digitsOfPhone,
   feedbackBucketOf,
   feedbackByPhone,
@@ -5035,8 +5036,10 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
   const calledPhones = new Set<string>(
     (callLogs || []).map((l: any) => digitsOfPhone(l?.clientPhone)).filter(Boolean)
   );
-  const coldCalls = scopeNumbers.filter((record: any) => isColdNumber(record, calledPhones)).length;
-  // «Fresh Leads» = الأرقام الجديدة (نازلة حالاً) اللي ما اتصلناش بيها
+  // «Cold Calls» = اتصلنا فيه وآخر محاولة «لم يرد» (مش بالوقت)
+  const coldPhones = coldPhonesOf(callLogs || []);
+  const coldCalls = scopeNumbers.filter((record: any) => isColdNumber(record, coldPhones)).length;
+  // «Fresh Leads» = الأرقام الجديدة اللي ما اتصلناش فيها خالص
   const freshLeads = scopeNumbers.filter((record: any) => isFreshNumber(record, calledPhones)).length;
   const [todayRecord, setTodayRecord] = useState<Attendance | undefined>(() => getTodayCheckIn(currentUser.id));
   const myHistory = getAttendance().filter((a: Attendance) => a.userId === currentUser.id).sort((a: Attendance, b: Attendance) => b.checkInAt.localeCompare(a.checkInAt)).slice(0, 7);
@@ -7170,6 +7173,9 @@ function LeadsView({
     const calledKeys = new Set<string>(
       (callLogs || []).map((l: any) => digitsOfPhone(l?.clientPhone)).filter(Boolean)
     );
+    // «Cold Calls» = اتصلنا فيه وآخر محاولة «لم يرد» — مش بالوقت (عشان الأرقام
+    // الجديدة ما تزاحش من Fresh Leads).
+    const coldKeys = coldPhonesOf(callLogs || []);
     const out: LeadRow[] = [];
     for (const n of numbers || []) {
       const client = n?.client;
@@ -7181,7 +7187,7 @@ function LeadsView({
       const bucket = String(n?.bucket || 'fresh-stage');
       // «Fresh Leads» = رقم نزل حالاً · «Cold Calls» = رقم نزل من زمان وما اتصلناش.
       // والاتنين منفصلين: الرقم الواحد ما بيحسبش في الاتنين.
-      const cold = isColdNumber({ ...n, phone: n?.phone || record?.phone, bucket }, calledKeys);
+      const cold = isColdNumber({ ...n, phone: n?.phone || record?.phone, bucket }, coldKeys);
       // «Fresh Leads» = رقم نزل حالاً (مش بارد) · «Cold Calls» = نزل من زمان (مش جديد)
       const fresh = isFreshNumber({ ...n, phone: n?.phone || record?.phone, bucket }, calledKeys);
       const time = campaignTimeOf(record);

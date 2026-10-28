@@ -147,17 +147,19 @@ export const feedbackByPhone = (
 };
 
 // ===== «Cold Calls» vs «Fresh Leads» =====
-// Fresh Leads = الأرقام الجديدة: اللي نازلة على السيلز حالاً (آخر ٢٤ ساعة) وما
-//   اتصلنا بيها بعد — دي الشغل الجديد اللي نزل دلوقتي.
-// Cold Calls = باقي الأرقام اللي ما اتصلنا بيها: نازلة من أيام ولسه في المسبح.
-// والاتنين مبنيين على نفس البيانات، بسهم **مش نفس الأرقام** — والفرق واضح في العدّادات.
 //
-// ملاحظة: فتح تبويب «أرقام جديدة» بيعلّم الأرقام «تم العرض» (والعرض ده بيتمّ
-// على كل الأرقام مرة واحدة)، فكان العرض كافي إن الرقم يطلع من Fresh Leads
-// ويفوت Cold Calls — والأرقام الجديدة بتقعد في البارد. فالفرق بقى بالوقت
-// (نزل امبارح = بارد) مش بالعرض.
+// Fresh Leads = الأرقام الجديدة اللي **لسه ما اتصلنا فيها خالص** (نزلت على
+//   المندوب وما اتصرفش فيها) — دي شغله الجديد. الرقم بيفضل هنا لحد ما
+//   يتصل بيه أو يتحدد موعد.
+//
+// Cold Calls = الأرقام اللي **اتصلنا فيها وآخر محاولة «لم يرد»** — يعني ساعتها
+//   باردة (زي ENGAZ). واللي اتصلنا فيه وردّوا مكانه «متابعة» مش بارد.
+//
+// ⚠️ القاعدة القديمة كانت **وقتية**: أي رقم ما اتصلناش فيه بعد ٢٤ ساعة كان
+//   بيبقى «بارد» — فكانت الأرقام الجديدة (اللي نزلت امبارح) بتزاح من
+//   Fresh Leads وتدخل Cold Calls من غير ما حد يتصل. ده الغلط المُبلَّغ عنه.
+//   الفرق دلوقتي بالحالة (اتصلنا؟ ردّ؟) مش بالوقت.
 
-// نافذة «الجديد»: رقم نزل خلال آخر ٢٤ ساعة = رقم جديد
 export const FRESH_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // وقت نزول الرقم: وقت توزيعه على المندوب، وإلا وقت استيراده
@@ -174,7 +176,25 @@ export const isFreshArrival = (record: any, now: number = Date.now()): boolean =
   return now - at <= FRESH_WINDOW_MS;
 };
 
-// «Fresh Leads»: رقم جديد ما اتصلناش بيه
+// الأرقام اللي **آخر اتصال فيها «لم يرد»** → هي الـ Cold Calls (ساعتها باردة).
+// لو اتصلنا فيه بعد كده وردّ → مش بارد (يبقى متابعة).
+export const coldPhonesOf = (callLogs: any[] = []): Set<string> => {
+  const latest = new Map<string, { at: string; result: string }>();
+  for (const l of callLogs || []) {
+    const p = digitsOfPhone(l?.clientPhone);
+    if (!p) continue;
+    const at = String(l?.createdAt || l?.date || l?.at || '');
+    const cur = latest.get(p);
+    if (!cur || at >= cur.at) latest.set(p, { at, result: String(l?.result || '') });
+  }
+  const out = new Set<string>();
+  for (const [p, rec] of latest) {
+    if (rec.result === 'no-answer') out.add(p);
+  }
+  return out;
+};
+
+// «Fresh Leads»: رقم في مرحلة جديدة **ما اتصلناش فيه خالص** (لسه شغل جديد)
 export const isFreshNumber = (
   record: any,
   calledPhones: Set<string>,
@@ -183,19 +203,23 @@ export const isFreshNumber = (
   const bucket = String(record?.bucket || feedbackBucketOf(record));
   if (bucket !== 'fresh-stage') return false;
   if (calledPhones.has(digitsOfPhone(record?.phone))) return false;
-  return isFreshArrival(record, now);
+  return true;
 };
 
-// «Cold Calls»: رقم ما اتصلناش بيه ونزل من زمان
+// «Cold Calls»: اتصلنا فيه وآخر محاولة «لم يرد» (أو حالته «لم يرد»)
+// بنظره: الأرقام اللي حالتها «متابعة/مقابلة» مكانها الحقيقي — مش بارد.
 export const isColdNumber = (
   record: any,
-  calledPhones: Set<string>,
+  coldPhones: Set<string>,
   now: number = Date.now()
 ): boolean => {
   const bucket = String(record?.bucket || feedbackBucketOf(record));
+  const phone = digitsOfPhone(record?.phone);
+  if (!phone) return false;
+  // حالة «لم يرد» صراحةً = بارد
+  if (bucket === 'no-answer') return true;
   if (bucket !== 'fresh-stage') return false;
-  if (calledPhones.has(digitsOfPhone(record?.phone))) return false;
-  return !isFreshArrival(record, now);
+  return coldPhones.has(phone);
 };
 
 export type WorkNumber = {
