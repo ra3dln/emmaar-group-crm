@@ -246,5 +246,14 @@ check(
     /openNextActionPicker/.test(app) &&
     /\.cc-next\.is-empty/.test(css)
 );
+check(
+  'كارت الرقم (لوحة الأرقام) يعرض الإجراء القادم كمان',
+  /function LeadFeedCard\(\{ lead, record, onLeadViewed, onCall, cancelled = false, cancelReason = '', nextActionMap \}/.test(app) &&
+    /nextActionMap=\{nextActionMap\}/.test(app)
+);
+check(
+  '«Add Action» (نافذة الاتصال) بتكتب الموعد على سجل العميل',
+  /nextActionAt: new Date\(payload\.nextCallAt\)\.toISOString\(\)/.test(app)
+);
 
 console.log(`\n✅ نجحت ${passed} فحوصات لـ«الإجراء القادم».`);

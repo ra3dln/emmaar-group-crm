@@ -3230,6 +3230,14 @@ function App() {
           callStatus: payload.result === 'answered' ? 'called' : 'no-answer',
           cardId: log.id,
           status: pickedStatus,
+          // ===== «الإجراء القادم» (موعد الاتصال القادم) ===== 
+          // بيتكتب على سجل العميل نفسه فيبان سطر «الإجراء القادم» على الكارت
+          ...(payload.nextCallAt
+            ? {
+                nextActionAt: new Date(payload.nextCallAt).toISOString(),
+                nextActionNote: payload.result === 'answered' ? 'متابعة اتصال (تم الرد)' : 'إعادة اتصال (لم يرد)',
+              }
+            : {}),
           ...(pickedStatus === 'cancellation' && payload.cancelReason ? { cancelReason: payload.cancelReason } : {}),
         });
       }
@@ -3951,6 +3959,7 @@ function App() {
             numbers={workNumbers}
             leads={assignedLeads}
             alertMap={alertMap}
+            nextActionMap={nextActionMap}
             currentUser={currentUser}
             onSetStage={handleUpdateClientStage}
             onRefresh={loadData}
@@ -6763,6 +6772,7 @@ function ClientsView({ currentUser, clients, users = [], leads = [], callLogs = 
                 key={`lead-${lead!.id}`}
                 lead={lead}
                 record={item}
+                nextActionMap={nextActionMap}
                 onLeadViewed={onLeadViewed}
                 onCall={onCall}
                 cancelled={leadIsCancelled(lead!)}
@@ -6906,13 +6916,15 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
 // (مالوش عميل بعد يتحمّل الكومنت)، بس بالشكل نفسه — عشان تبويب «المراحل»
 // وصفحة الحالة (follow up وغيره) يبانوا زي «العملاء» بالحرف، والرقم بيبان
 // بنفس الشكل في كل مكان.
-function LeadFeedCard({ lead, record, onLeadViewed, onCall, cancelled = false, cancelReason = '' }: any) {
+function LeadFeedCard({ lead, record, onLeadViewed, onCall, cancelled = false, cancelReason = '', nextActionMap }: any) {
   const src = SOURCE_KINDS[sourceKindOf(String(lead?.description || record?.note || ''))];
   const SrcIcon = src.Icon;
   const sourceText = formatLeadDescription(lead?.description || '') || 'رقم وارد';
   const name = record?.name || lead?.name || 'بدون اسم';
   const phone = record?.phone || lead?.phone || '';
   const time = campaignTimeOf(lead || record);
+  // ===== «الإجراء القادم»: موعد محدد (يوم + ساعة) على كارت الرقم =====
+  const nextAction: NextAction | null = nextActionMap?.get(digitsOfPhone(phone)) || null;
   return (
     <motion.article
       initial={{ opacity: 0, y: 6 }}
@@ -6953,6 +6965,17 @@ function LeadFeedCard({ lead, record, onLeadViewed, onCall, cancelled = false, c
           <p className="cc-lastfb">
             {record?.salesNoteBy && <span className="cc-author">{record.salesNoteBy}</span>}
             <span className="cc-lastfb-text">{record.note}</span>
+          </p>
+        )}
+
+        {/* ===== «الإجراء القادم» على كارت الرقم (يوم + ساعة) ===== */}
+        {nextAction && (
+          <p className={`cc-next ${nextAction.overdue ? 'is-late' : ''} ${nextAction.done ? 'is-done' : ''}`} title={nextAction.note || 'الإجراء القادم'}>
+            <CalendarClock className="w-3 h-3" />
+            <span className="cc-next-label">الإجراء القادم</span>
+            <b className="cc-next-time">{formatDateTime(nextAction.at)}</b>
+            {nextAction.overdue && <span className="cc-next-late">اتأخر</span>}
+            {nextAction.done && <span className="cc-next-done">تم</span>}
           </p>
         )}
       </div>
@@ -7309,6 +7332,7 @@ function PipelineView({ clients, users = [], numbers = [], leads = [], alertMap,
                       key={`lead-${record.leadId || record.key || record.id}`}
                       record={record}
                       lead={leadById.get(String(record.leadId))}
+                      nextActionMap={nextActionMap}
                       onLeadViewed={onLeadViewed}
                       onCall={onCall}
                     />
@@ -7325,7 +7349,7 @@ function PipelineView({ clients, users = [], numbers = [], leads = [], alertMap,
 
 // ===== شريط التذكير الرنّان: نفس شكل الإشعار الأصلي + أزرار الإسكات والإتمام والتأجيل =====
 // ===== بند ٤: صفحة حالة واحدة — كل الأرقام اللي عليها الحالة دي =====
-function StatusBoardView({ statusId, users = [], numbers = [], leads = [], alertMap, currentUser, onClose, onSelect, onSetStage, onRefresh, onLeadViewed, onCall }: any) {
+function StatusBoardView({ statusId, users = [], numbers = [], leads = [], alertMap, nextActionMap, currentUser, onClose, onSelect, onSetStage, onRefresh, onLeadViewed, onCall }: any) {
   const meta = FEEDBACK_STATUS_BY_ID[statusId];
   // نفس قاعدة لوحة الحالات: كل رقم بحالته (عميل مسجّل أو رقم في التوزيع)
   const items: any[] = (numbers || []).filter(
@@ -7374,6 +7398,7 @@ function StatusBoardView({ statusId, users = [], numbers = [], leads = [], alert
                   key={`lead-${record.leadId || record.key || record.id}`}
                   record={record}
                   lead={leadById.get(String(record.leadId))}
+                  nextActionMap={nextActionMap}
                   onLeadViewed={onLeadViewed}
                   onCall={onCall}
                 />
