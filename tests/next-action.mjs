@@ -239,5 +239,12 @@ check(
     /cc-next-done">تم/.test(app) &&
     /\.cc-next\.is-done/.test(css)
 );
+check(
+  'العميل اللي مالوش موعد: زر واضح «حدّد الإجراء القادم» على الكارت',
+  /حدّد الإجراء القادم \(يوم \+ ساعة\)/.test(app) &&
+    /cc-next is-empty/.test(app) &&
+    /openNextActionPicker/.test(app) &&
+    /\.cc-next\.is-empty/.test(css)
+);
 
 console.log(`\n✅ نجحت ${passed} فحوصات لـ«الإجراء القادم».`);

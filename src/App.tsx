@@ -5720,6 +5720,8 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
   const [syncError, setSyncError] = useState('');
   // «الإجراء القادم» — يوم + ساعة (اختياري): يكتب تذكيراً يبان على الكارت
   const [nextActionAt, setNextActionAt] = useState('');
+  // مرجع حقل الموعد — عشان زر «حدّد الإجراء القادم» يفتح الصندوق ويركّز عليه
+  const nextActionRef = useRef<HTMLInputElement | null>(null);
   const src = SOURCE_KINDS[sourceKindOf(`${client?.source} ${client?.status}`)];
   const SrcIcon = src.Icon;
   const sourceText = sourceLabelOf(client);
@@ -5754,6 +5756,12 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
       picked === 'no-answer' ? NO_ANSWER_COMMENT : picked === 'cancellation' ? cancelReasonLabelOf(keptReason) : ''
     );
   };
+  // فتح الصندوق مع التركيز على حقل «الإجراء القادم» (من زر «حدّد الإجراء القادم»)
+  const openNextActionPicker = () => {
+    openComposer();
+    setTimeout(() => nextActionRef.current?.focus(), 30);
+  };
+
   const closeComposer = () => {
     setOpen(false);
     setStatus('');
@@ -5855,7 +5863,7 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
             <QuickNoteButton active={open} onToggle={() => (open ? closeComposer() : openComposer())} />
           </div>
 
-          {nextAction && (
+          {nextAction ? (
             <p className={`cc-next ${nextAction.overdue ? 'is-late' : ''} ${nextAction.done ? 'is-done' : ''}`} title={nextAction.note || 'الإجراء القادم'}>
               <CalendarClock className="w-3 h-3" />
               <span className="cc-next-label">الإجراء القادم</span>
@@ -5863,6 +5871,13 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
               {nextAction.overdue && <span className="cc-next-late">اتأخر</span>}
               {nextAction.done && <span className="cc-next-done">تم</span>}
             </p>
+          ) : (
+            // زر واضح عشان الموعد يتحدد في خطوة واحدة (من غير ما يفتح الصندوق الأول)
+            <button type="button" className="cc-next is-empty" onClick={(e) => { e.stopPropagation(); openNextActionPicker(); }}
+              title="حدّد موعد الإجراء القادم (يوم + ساعة) — يظهر على الكارت">
+              <CalendarClock className="w-3 h-3" />
+              حدّد الإجراء القادم (يوم + ساعة)
+            </button>
           )}
 
           {facts.length > 0 && (
@@ -5946,6 +5961,7 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
               <button type="button" onClick={() => setNextActionAt(nextActionQuickValue('dayAfter'))}>بعد غد</button>
             </span>
             <input
+              ref={nextActionRef}
               type="datetime-local"
               value={nextActionAt}
               onChange={(e) => setNextActionAt(e.target.value)}

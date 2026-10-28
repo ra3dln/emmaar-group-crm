@@ -1951,6 +1951,21 @@ html[data-mode="light"] .fs-item-en { color: color-mix(in srgb, var(--fs) 85%, #
   font-weight: 700;
   color: #86efac;
 }
+/* لسه مفيش موعد: زر واضح حدّد الموعد (يوم + ساعة) */
+.cc-next.is-empty {
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-sm);
+  padding: 2px 7px;
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--text-dim);
+  width: fit-content;
+}
+.cc-next.is-empty:hover {
+  color: #7dd3fc;
+  border-color: var(--brand-primary-soft);
+}
 
 /* اختيار «الإجراء القادم» في صندوق الفيدباك (كارت العميل) */
 .feedback-composer .fc-next {
