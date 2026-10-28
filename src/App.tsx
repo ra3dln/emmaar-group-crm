@@ -73,7 +73,7 @@ import {
 } from './feedbackBuckets';
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
 import { alertMapOf, clientActionState, leadAlertState, actedAfterReminder } from './reminders';
-import { buildNextActionReminder, nextActionMapOf, type NextAction } from './nextAction';
+import { buildNextActionReminder, nextActionByPhoneOf, nextActionMapOf, type NextAction } from './nextAction';
 import { installBackGuard } from './backNav';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import {
@@ -3086,6 +3086,8 @@ function App() {
   // مبني على التذكيرات: أقرب تذكير مفتوح للعميل = الإجراء القادم.
   // لو فات موعده من غير خطوة → يبقى ظاهر «اتأخر» (نفس منطق «محتاج إجراء»).
   const nextActionMap = nextActionMapOf(scopedClients, scopedReminders, scopedCallLogs, nowTick);
+  // نفس الخريطة من التذكيرات بس (من غير عميل مسجّل) — لكارت الرقم في صفحة الأرقام
+  const nextActionByPhone = nextActionByPhoneOf(scopedReminders, nowTick);
 
   // المستحق الآن — الأحدث أولاً (نفس ترتيب تبويب التذكيرات)
   // التذكير اللي اتعمل عليه إجراء (مكالمة أو كومنت) بيخرج من القائمة فوراً،
@@ -3675,6 +3677,7 @@ function App() {
               leads={assignedLeads}
               callLogs={callLogs}
               alertMap={alertMap}
+              nextActionMap={nextActionByPhone}
               filter={leadsFilter}
               onFilter={setLeadsFilter}
               onBack={() => setLeadsOpen(false)}
@@ -7075,6 +7078,9 @@ type LeadRow = {
   fresh?: boolean;
   // التذكير فات موعده والمندوب مخدش خطوة → الكارت أصفر (مطلوب إجراء)
   alertDue?: string;
+  // «الإجراء القادم»: موعد محدد (يوم + ساعة) من التذكير — يتبان على الكارت
+  nextActionAt?: string;
+  nextActionOverdue?: boolean;
   client?: any;
   lead?: any;
 };
@@ -7105,6 +7111,15 @@ function EngazLeadCard({ row, onOpen, onCall }: { row: LeadRow; onOpen: () => vo
       <div className="eg-card-main">
         <div className="eg-name">{row.name}</div>
         <div className="eg-phone" dir="ltr">{row.phone}</div>
+        {/* ===== «الإجراء القادم»: التذكير + وقته (يوم + ساعة) ===== */}
+        {row.nextActionAt && (
+          <div className={`eg-next ${row.nextActionOverdue ? 'is-late' : ''}`}>
+            <CalendarClock className="w-3.5 h-3.5 shrink-0" />
+            <span className="eg-next-label">Next Action</span>
+            <b className="eg-next-time" dir="ltr">{campaignStamp(row.nextActionAt)}</b>
+            {row.nextActionOverdue && <span className="eg-next-late">اتأخر</span>}
+          </div>
+        )}
         {row.note && (
           <p className="eg-note">
             {row.noteBy && <span className="cc-author">{row.noteBy}: </span>}
@@ -7140,7 +7155,7 @@ function EngazLeadCard({ row, onOpen, onCall }: { row: LeadRow; onOpen: () => vo
 // الحالة (زي ENGAZ)، وضغط أي حالة بيصفّي الأرقام، والضغط على رقم بيفتح نافذة
 // الإجراء (الحالة + الكومنت + التذكير + آخر التعليقات).
 function LeadsView({
-  currentUser, numbers = [], leads = [], callLogs = [], alertMap, filter = '', onFilter, onOpen, onBack,
+  currentUser, numbers = [], leads = [], callLogs = [], alertMap, nextActionMap, filter = '', onFilter, onOpen, onBack,
 }: any) {
   const [query, setQuery] = useState('');
   const [field, setField] = useState<'all' | 'name' | 'phone' | 'form'>('all');
@@ -7172,6 +7187,11 @@ function LeadsView({
       const time = campaignTimeOf(record);
       // التذكير فات موعده والمندوب مخدش خطوة → الرقم «محتاج إجراء» (أصفر)
       const alertDue = String(alertMap?.get(digitsOfPhone(n?.phone || record?.phone)) || '');
+      // ===== «الإجراء القادم»: أقرب تذكير مفتوح للرقم (يوم + ساعة) =====
+      // من التذكير نفسه: لو حطّينا تذكير للعميل/الرقم، يظهر وقته على الكارت.
+      const next = nextActionMap?.get(digitsOfPhone(n?.phone || record?.phone)) || null;
+      const nextActionAt = String(next?.at || client?.nextActionAt || '');
+      const nextActionOverdue = !!next?.overdue;
       out.push({
         key: String(n?.key || key || ''),
         name: String(n?.name || record?.name || 'بدون اسم'),
@@ -7187,12 +7207,14 @@ function LeadsView({
         cold,
         fresh,
         alertDue,
+        nextActionAt,
+        nextActionOverdue,
         client,
         lead,
       });
     }
     return out;
-  }, [numbers, leads, callLogs, alertMap]);
+  }, [numbers, leads, callLogs, alertMap, nextActionMap]);
 
   // العدّادات: كل الأرقام + كل حالة (الباردة اتفتحت وما اتصلناش — منفصلة عن الجديدة)
   const counts = useMemo(() => {

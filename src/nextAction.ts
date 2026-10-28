@@ -131,3 +131,39 @@ export const nextActionMapOf = (
   }
   return out;
 };
+
+// ===== خريطة «الإجراءUpcoming» من التذكيرات بس =====
+// (من غير ما يكون فيه عميل مسجّل — كارت الرقم في صفحة الأرقام)
+// المفتاح = أرقام الرقم، والقيمة = أقرب تذكير مفتوح (المعروض على الكارت).
+// الترتيب: الأقرب **المستقبلي** هو «الإجراء القادم»؛ ولو مفيش مستقبلي
+// (كل التذكيرات فاتت) بيتبان أقدم واحد متأخر مع شارة «اتأخر».
+export const nextActionByPhoneOf = (
+  reminders: any[] = [],
+  now: number = Date.now()
+): Map<string, NextAction> => {
+  const upcoming = new Map<string, NextAction>();
+  const overdue = new Map<string, NextAction>();
+  for (const r of reminders || []) {
+    if (!r || r.isCompleted) continue;
+    const at = String(r?.dateTime || '');
+    const t = timeOf(at);
+    if (!t) continue;
+    const phone = digitsOfPhone(r?.clientPhone);
+    if (!phone) continue;
+    const action: NextAction = {
+      at,
+      note: String(r?.note || ''),
+      overdue: t <= now,
+      done: false,
+      chosen: false,
+    };
+    const bucket = t > now ? upcoming : overdue;
+    const current = bucket.get(phone);
+    // الأقرب وقتاً داخل كل مجموعة
+    if (!current || t < timeOf(current.at)) bucket.set(phone, action);
+  }
+  const out = new Map<string, NextAction>();
+  for (const [phone, action] of overdue) out.set(phone, action);
+  for (const [phone, action] of upcoming) out.set(phone, action);
+  return out;
+};

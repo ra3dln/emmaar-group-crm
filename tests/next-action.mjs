@@ -15,7 +15,7 @@ const app = read('src/App.tsx');
 const css = read('src/index.css');
 const types = read('src/types.ts');
 
-const { nextActionOf, nextActionMapOf, buildNextActionReminder } = await import('../src/nextAction.ts');
+const { nextActionOf, nextActionMapOf, nextActionByPhoneOf, buildNextActionReminder } = await import('../src/nextAction.ts');
 
 let passed = 0;
 const check = (name, ok, extra = '') => {
@@ -254,6 +254,41 @@ check(
 check(
   '«Add Action» (نافذة الاتصال) بتكتب الموعد على سجل العميل',
   /nextActionAt: new Date\(payload\.nextCallAt\)\.toISOString\(\)/.test(app)
+);
+
+// ===== ٦) كارت الرقم (ENGAZ): «Next Action» من التذكير =====
+const byPhone = nextActionByPhoneOf(
+  [
+    reminder({ id: 'old', dateTime: iso(NOW - 2 * HOUR) }),      // متأخر
+    reminder({ id: 'far', dateTime: iso(NOW + 9 * HOUR) }),       // مستقبلي بعيد
+    reminder({ id: 'soon', dateTime: iso(NOW + 3 * HOUR) }),      // مستقبلي قريب
+    reminder({ id: 'done', dateTime: iso(NOW + 1 * HOUR), isCompleted: true }),
+  ],
+  NOW
+);
+check(
+  'كارت الرقم: الأقرب المستقبلي هو «الإجراء القادم»',
+  byPhone.get('01001234567')?.at === iso(NOW + 3 * HOUR) &&
+    byPhone.get('01001234567')?.overdue === false
+);
+check(
+  'كارت الرقم: تذكير مكمّل ما بيتبانش',
+  !Array.from(byPhone.values()).some((a) => a.at === iso(NOW + 1 * HOUR))
+);
+check(
+  'كارت الرقم: لو مفيش مستقبلي، أقدم متأخر يبان مع «اتأخر»',
+  (() => {
+    const m = nextActionByPhoneOf([reminder({ dateTime: iso(NOW - 2 * HOUR) })], NOW);
+    const a = m.get('01001234567');
+    return !!a && a.overdue === true && a.at === iso(NOW - 2 * HOUR);
+  })()
+);
+check(
+  'الكارت (ENGAZ) يعرض سطر «Next Action» بالوقت',
+  /eg-next-label">Next Action/.test(app) &&
+    /campaignStamp\(row\.nextActionAt\)/.test(app) &&
+    /nextActionOverdue,/.test(app) &&
+    /\.eg-next \{/.test(css)
 );
 
 console.log(`\n✅ نجحت ${passed} فحوصات لـ«الإجراء القادم».`);
