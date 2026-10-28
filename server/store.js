@@ -22,6 +22,8 @@ import {
   stripUserSecrets,
 } from './auth.js';
 import { sanitizeClientRecord, sanitizeDailyFeedbackCards } from '../shared/comments.js';
+// حكم «مين حساب المطوّر» — نفس الملف في الواجهة (shared/roles.js)
+import { isDeveloperAccount } from '../shared/roles.js';
 
 const KEY_PATTERN = /^crm_[a-z_]+$/;
 // صور العقارات تُخزَّن داخل نفس قاعدة البيانات (base64)، فحجم الطلب الواحد يهم:
@@ -155,6 +157,16 @@ export function sanitizeMergedKey(key, rows) {
   if (key === 'crm_clients') return (rows || []).map((row) => sanitizeClientRecord(row));
   if (key === 'crm_daily_feedback') return sanitizeDailyFeedbackCards(rows || []);
   return rows;
+}
+
+// حساب المطوّر (صاحب النظام): نطاقه «بياناته هو» دائماً — زي أي سيلز.
+// أي جهاز قديم يبقى عنده نسخة من سجل الحساب فيها «كل البيانات» ويرفعها
+// للسيرفر، فيرث حسابه أرقام كل المندوبين — فبنثبّت النطاق هنا على الخادم
+// (نفس القاعدة في shared/roles.js: dataScopeOf).
+export function keepOwnerScopeOwn(users) {
+  return (Array.isArray(users) ? users : []).map((u) =>
+    u && isDeveloperAccount(u) ? { ...u, dataScope: 'own' } : u
+  );
 }
 
 // شواهد الحذف لا تُستبدل: جهاز قديم يرفع شواهده الناقصة مايقدرش يلغي حذفاً تمّ.
@@ -297,7 +309,11 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
             mergeKeepingRecords(key, value, data[key], tombstones())
           );
           return key === 'crm_users'
-            ? preserveUserPasswords(merged, data.crm_users, { canManage: session?.r === 'admin' })
+            ? preserveUserPasswords(
+                keepOwnerScopeOwn(merged),
+                data.crm_users,
+                { canManage: session?.r === 'admin' }
+              )
             : merged;
         };
 

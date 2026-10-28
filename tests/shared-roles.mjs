@@ -69,8 +69,15 @@ check(
   [...(dataScopeOf({ ...ceo, dataScope: 'own' }, all) || [])].join(',') === 'admin-1'
 );
 check(
-  'إعداد صريح «كل الشركة» يفتح النطاق',
-  dataScopeOf({ ...dev, dataScope: 'all' }, all) === null
+  'إعداد صريح «كل الشركة» يفتح النطاق (لحساب عادي)',
+  dataScopeOf({ ...sales, dataScope: 'all' }, all) === null &&
+    dataScopeOf({ ...exec, dataScope: 'all' }, all) === null
+);
+check(
+  'حساب المطوّر: نطاقه «بياناته هو» حتى لو سجل فيه «كل البيانات» (نسخة قديمة)',
+  dataScopeOf({ ...dev, dataScope: 'all' }, all) !== null &&
+    [...(dataScopeOf({ ...dev, dataScope: 'all' }, all) || [])].join(',') === 'dev-1' &&
+    dataScopeOf({ ...dev, role: 'sales', dataScope: 'all' }, all) !== null
 );
 check('حساب بلا معرّف = نطاق فارغ', [...(dataScopeOf({ role: 'sales' }, all) || [])].length === 0);
 

@@ -157,5 +157,40 @@ await push('crm_tombstones', [{ key: 'crm_clients', id: 'c1', at: Date.now() }],
 await push('crm_clients', [{ id: 'c2', userId: 'sales-1', name: 'عميل ب', phone: '0101', createdAt: '2026-04-02T00:00:00.000Z' }], cookie);
 check('وحذف العميل المقصود يعمل', (await pull(cookie)).crm_clients.map((c) => c.id).join(',') === 'c2');
 
+// ===== ٦) نطاق حساب المطوّر: «بياناته هو» دائماً (لا يرث أرقام غيره) =====
+// المشكلة: جهاز قديم يبقى عنده نسخة من سجل حساب المطوّر فيها «كل البيانات»
+// فيرفعها للسيرفر (نسخة المُرسل تكسب عند نفس المعرّف)، فيرث حسابه أرقام
+// كل المندوبين. الحل: النطاق مثبّت على «بياناته هو» في الكود وعلى الخادم.
+const OWNER = {
+  id: 'dev-001',
+  username: 'mohamed',
+  name: 'محمد',
+  role: 'admin',
+  developer: true,
+  receivesLeads: true,
+  dataScope: 'own',
+  isActive: true,
+  password: 'OwnerStrong123',
+  createdAt: '2026-01-01T00:00:00.000Z',
+};
+await push('crm_users', [ADMIN, AHMED, recreated, OWNER], cookie);
+const scopeOf = async (id) => {
+  const u = (await pull(cookie)).crm_users.find((x) => x.id === id);
+  return u ? u.dataScope : '(مفيش)';
+};
+check('نطاق حساب المطوّر «بياناته هو» في السجل', (await scopeOf(OWNER.id)) === 'own');
+// جهاز قديم يرفع نسخة فيها «كل البيانات»
+await push('crm_users', [ADMIN, AHMED, recreated, { ...OWNER, dataScope: 'all' }], cookie);
+check('جهاز قديم ما يقدرش يوسّع نطاق حساب المطوّر', (await scopeOf(OWNER.id)) === 'own');
+check('وباقي الحسابات ما اتغيرتش', (await usernames(cookie)) === 'admin,ahmed,mohamed,mona');
+const ownerScope = (await import('../shared/roles.js')).dataScopeOf(
+  { ...OWNER, dataScope: 'all' },
+  [ADMIN, AHMED, OWNER]
+);
+check(
+  'والواجهة كمان تتجاهل «كل البيانات» لحساب المطوّر (بياناته هو)',
+  ownerScope !== null && [...ownerScope].join(',') === OWNER.id
+);
+
 console.log(`\n✅ كل اختبارات ثبات السجلات نجحت (${passed}).`);
 server.close();
