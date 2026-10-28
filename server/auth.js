@@ -14,8 +14,6 @@
 // «مفتاح» يُحط في الواجهة، أي أحد يقرأ كود الصفحة لا يستطيع تزوير جلسة.
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-// حكم «مين صاحب النظام» — نفس الملف في الواجهة (shared/roles.js) فيبقى الحكم واحداً
-import { isOwnerAccount } from '../shared/roles.js';
 
 export const COOKIE_NAME = 'crm_session';
 // مدة الجلسة ١٨٠ يوماً، وتُجدَّد تلقائياً مع كل فتح للتطبيق (تحديث انزلاقي في
@@ -141,12 +139,6 @@ export function verifyPassword(plain, stored) {
 
 // ===== حماية بيانات المستخدمين =====
 export const isManagerRole = (role) => role === 'admin' || role === 'supervisor';
-
-// جلسة صاحب النظام (المطوّر) = أعلى صلاحية: تُعامل كمدير في كل نقاط الخادم
-// (سحب الأرقام، إدارة الحسابات، كلمات المرور) حتى لو رتبته المخزَّنة اتغيّرت
-// في نسخة قديمة وصلت من جهاز تاني. العلامة `o` تُكتب في الجلسة عند الدخول.
-export const isManagerSession = (session) =>
-  !!session && (session.o === 1 || isManagerRole(session.r));
 
 // رقم إصدار جلسات الحساب: يزيد عند الخروج أو تغيير كلمة المرور،
 // فتسقط كل الكوكيز القديمة فوراً ولا يمكن استخدام جلسة مسروقة بعدها.

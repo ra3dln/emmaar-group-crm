@@ -167,13 +167,13 @@ check(
 // ===== ٤) شاشة الإدارة تُبنى على مخزون الشركة، وفيدباك المندوب يُنسب لكاتبه =====
 check(
   'لوحة فيدباك الإدارة بتقرأ مخزون الشركة الكامل (مش نطاق الحساب)',
-  /dailyFeedbacks=\{currentUser\.role === 'admin' \|\| ownerFull \? fullFeedbacks : scopedFeedbacks\}/.test(app) &&
-    /clients=\{currentUser\.role === 'admin' \|\| ownerFull \? fullClients : scopedClients\}/.test(app) &&
-    /callLogs=\{currentUser\.role === 'admin' \|\| ownerFull \? fullCallLogs : scopedCallLogs\}/.test(app)
+  /dailyFeedbacks=\{currentUser\.role === 'admin' \? fullFeedbacks : scopedFeedbacks\}/.test(app) &&
+    /clients=\{currentUser\.role === 'admin' \? fullClients : scopedClients\}/.test(app) &&
+    /callLogs=\{currentUser\.role === 'admin' \? fullCallLogs : scopedCallLogs\}/.test(app)
 );
 check(
   'صفحة تفاصيل فيدباك السيلز تُفتح بنفس المخزون الكامل للحساب الإداري',
-  /dailyFeedbacks=\{currentUser\.role === 'admin' \|\| ownerFull \? fullFeedbacks : dailyFeedbacks\}/.test(app) &&
+  /dailyFeedbacks=\{currentUser\.role === 'admin' \? fullFeedbacks : dailyFeedbacks\}/.test(app) &&
     app.includes('setFullFeedbacks')
 );
 check(

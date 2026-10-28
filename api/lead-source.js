@@ -30,7 +30,7 @@ import {
 } from '../server/leadSource.js';
 import { redisJsonStore, redisStorage } from '../server/store.js';
 import { supabaseJsonStore, supabaseStorage } from '../server/supabase.js';
-import { authConfigured, isManagerSession, sessionFromRequest } from '../server/auth.js';
+import { authConfigured, isManagerRole, sessionFromRequest } from '../server/auth.js';
 
 const CONFIG_KEY = 'crm:lead-source:config';
 
@@ -133,7 +133,7 @@ export default async function handler(req, res) {
     const session = sessionFromRequest(process.env, req);
     if (!session) return reply(res, 401, { ok: false, error: 'unauthorized' });
     // إعدادات سحب الأرقام للإدارة فقط (CEO / Team Leader)
-    if (!isManagerSession(session)) return reply(res, 403, { ok: false, error: 'forbidden' });
+    if (!isManagerRole(session.r)) return reply(res, 403, { ok: false, error: 'forbidden' });
 
     // بدون قاعدة بيانات: نفس السلوك القديم «بلا ذاكرة» حتى لا تتعطّل الميزة
     if (!hasDatabase) return statelessHandler(req, res, url);

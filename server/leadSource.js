@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileStorage } from './store.js';
-import { authConfigured, isManagerSession, sessionFromRequest } from './auth.js';
+import { authConfigured, isManagerRole, sessionFromRequest } from './auth.js';
 // قواعد «التوزيع التلقائي» التي تختارها الإدارة (فورم ← مندوبون بعينهم).
 // نفس ملف المنطق يعمل في المتصفح، فالنتيجة هنا وهناك متطابقة تماماً.
 import { applyAutoRules, AUTO_ASSIGN_KEY, isAssignableSales, parseRules } from '../shared/autoAssign.js';
@@ -1122,7 +1122,7 @@ export function createLeadSourceHandler({ storeFile, configFile, auth = null }) 
         }
         const session = sessionFromRequest(auth, req);
         if (!session) return reply(res, 401, { ok: false, error: 'unauthorized' });
-        if (!isManagerSession(session)) return reply(res, 403, { ok: false, error: 'forbidden' });
+        if (!isManagerRole(session.r)) return reply(res, 403, { ok: false, error: 'forbidden' });
       }
 
       if (req.method === 'GET' && url === '/api/lead-source') {
