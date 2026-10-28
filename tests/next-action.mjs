@@ -286,9 +286,20 @@ check(
 check(
   'الكارت (ENGAZ) يعرض سطر «Next Action» بالوقت',
   /eg-next-label">Next Action/.test(app) &&
-    /campaignStamp\(row\.nextActionAt\)/.test(app) &&
+    /localStamp\(row\.nextActionAt\)/.test(app) &&
     /nextActionOverdue,/.test(app) &&
     /\.eg-next \{/.test(css)
+);
+check(
+  'وقت «Next Action» بتوقيت الجهاز (مش UTC) — 3:49 مساءً تبقى 3:49',
+  /const localStamp = \(value\?: string\): string =>/.test(app) &&
+    /d\.getHours\(\)/.test(app) &&
+    /d\.getUTCFullYear\(\)/.test(app)
+);
+check(
+  'الموعد اللي اختاره المندوب له الأولوية على أي تذكير قديم',
+  /const nextActionAt = String\(chosenAt \|\| next\?\.at \|\| ''\)/.test(app) &&
+    /const chosenAt = String\(client\?\.nextActionAt \|\| ''\)/.test(app)
 );
 
 console.log(`\n✅ نجحت ${passed} فحوصات لـ«الإجراء القادم».`);

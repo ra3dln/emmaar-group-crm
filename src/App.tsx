@@ -7061,6 +7061,18 @@ const campaignStamp = (value?: string): string => {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 };
 
+// ===== الوقت المحلي (توقيت الجهاز) بنفس شكل تاريخ الكارت =====
+// «الإجراء القادم» بيتحسب بالساعة اللي اختارها المندوب على جهازه، فعرضه
+// بتوقيت UTC كان بيخلي 3:49 مساءً تبان 13:49 (أو 12:49) — غلط.
+// (تاريخ الكامبين فوق لسه UTC زي ما هو — ده وقت الفورم نفسه.)
+const localStamp = (value?: string): string => {
+  const at = Date.parse(String(value || ''));
+  if (!value || Number.isNaN(at)) return '';
+  const d = new Date(at);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
 // ===== صف الرقم في صفحة الأرقام =====
 type LeadRow = {
   key: string;
@@ -7119,7 +7131,7 @@ function EngazLeadCard({ row, onOpen, onCall }: { row: LeadRow; onOpen: () => vo
           <div className={`eg-next ${row.nextActionOverdue ? 'is-late' : ''}`}>
             <CalendarClock className="w-3.5 h-3.5 shrink-0" />
             <span className="eg-next-label">Next Action</span>
-            <b className="eg-next-time" dir="ltr">{campaignStamp(row.nextActionAt)}</b>
+            <b className="eg-next-time" dir="ltr">{localStamp(row.nextActionAt)}</b>
             {row.nextActionOverdue && <span className="eg-next-late">اتأخر</span>}
           </div>
         )}
@@ -7195,9 +7207,14 @@ function LeadsView({
       const alertDue = String(alertMap?.get(digitsOfPhone(n?.phone || record?.phone)) || '');
       // ===== «الإجراء القادم»: أقرب تذكير مفتوح للرقم (يوم + ساعة) =====
       // من التذكير نفسه: لو حطّينا تذكير للعميل/الرقم، يظهر وقته على الكارت.
+      // الأولوية للموعد اللي اختاره المندوب بنفسه (client.nextActionAt) — ده
+      // اللي هو حدده في آخر إجراء، قبل أي تذكير تاني قديم.
       const next = nextActionMap?.get(digitsOfPhone(n?.phone || record?.phone)) || null;
-      const nextActionAt = String(next?.at || client?.nextActionAt || '');
-      const nextActionOverdue = !!next?.overdue;
+      const chosenAt = String(client?.nextActionAt || '');
+      const nextActionAt = String(chosenAt || next?.at || '');
+      const nextActionOverdue = chosenAt
+        ? Date.parse(chosenAt) <= Date.now()
+        : !!next?.overdue;
       out.push({
         key: String(n?.key || key || ''),
         name: String(n?.name || record?.name || 'بدون اسم'),
