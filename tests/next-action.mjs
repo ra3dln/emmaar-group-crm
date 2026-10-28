@@ -297,6 +297,12 @@ check(
     /d\.getUTCFullYear\(\)/.test(app)
 );
 check(
+  'الساعة بنظام ١٢ ساعة (2:49 PM مش 14:49)',
+  /const hour12 = hour24 % 12 === 0 \? 12 : hour24 % 12;/.test(app) &&
+    /const meridiem = hour24 >= 12 \? 'PM' : 'AM';/.test(app) &&
+    /\$\{hour12\}:\$\{pad\(d\.getMinutes\(\)\)\} \$\{meridiem\}/.test(app)
+);
+check(
   'الموعد اللي اختاره المندوب له الأولوية على أي تذكير قديم',
   /const nextActionAt = String\(chosenAt \|\| next\?\.at \|\| ''\)/.test(app) &&
     /const chosenAt = String\(client\?\.nextActionAt \|\| ''\)/.test(app)

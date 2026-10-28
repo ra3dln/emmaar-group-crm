@@ -7064,13 +7064,17 @@ const campaignStamp = (value?: string): string => {
 // ===== الوقت المحلي (توقيت الجهاز) بنفس شكل تاريخ الكارت =====
 // «الإجراء القادم» بيتحسب بالساعة اللي اختارها المندوب على جهازه، فعرضه
 // بتوقيت UTC كان بيخلي 3:49 مساءً تبان 13:49 (أو 12:49) — غلط.
-// (تاريخ الكامبين فوق لسه UTC زي ما هو — ده وقت الفورم نفسه.)
+// (تاريخ الكامبين فوق لسه UTC زي ما هو — ده وقت الفورم نفسه كما هو مكتوب.)
+// الساعة بنظام ١٢ ساعة: 2:49 PM مش 14:49.
 const localStamp = (value?: string): string => {
   const at = Date.parse(String(value || ''));
   if (!value || Number.isNaN(at)) return '';
   const d = new Date(at);
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const hour24 = d.getHours();
+  const meridiem = hour24 >= 12 ? 'PM' : 'AM';
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hour12}:${pad(d.getMinutes())} ${meridiem}`;
 };
 
 // ===== صف الرقم في صفحة الأرقام =====
