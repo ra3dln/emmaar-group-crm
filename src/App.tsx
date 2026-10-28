@@ -14,7 +14,8 @@ import {
   Rows, LayoutList, List, ShieldAlert, MapPinOff, Navigation,
   ChevronRight, ChevronLeft, Filter, KeyRound,
   Workflow, BellRing, ClipboardList, MessagesSquare, Share2, LineChart,
-  Megaphone, Globe, Link2, Facebook, ChevronDown, Palette, Scale, Calculator
+  Megaphone, Globe, Link2, Facebook, ChevronDown, Palette, Scale, Calculator,
+  CalendarClock
 } from 'lucide-react';
 import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, CallTarget, TabType } from './types';
 import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, syncNow, ownerOfPhoneOnServer, leadOwnerOfPhoneOnServer, clientPhonesOnServer } from './sync';
@@ -72,6 +73,7 @@ import {
 } from './feedbackBuckets';
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
 import { alertMapOf, clientActionState, leadAlertState, actedAfterReminder } from './reminders';
+import { buildNextActionReminder, nextActionMapOf, type NextAction } from './nextAction';
 import { installBackGuard } from './backNav';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import {
@@ -760,6 +762,61 @@ const scheduleFollowUp = (client: Client, stageLabel: string, ownerId?: string):
   } catch {
     return false;
   }
+};
+
+// ===== «الإجراء القادم»: يوم + ساعة يختارها المندوب في الفيدباك =====
+// يبني تذكيراً بنفس نظام «محتاج إجراء» الموجود، فيبقى الموعد ظاهر على كارت
+// العميل (يوم + ساعة)، ولما يجي وقته من غير خطوة → الكارت يولّع أصفر «اتأخر».
+// التذكير بيتحفظ في نفس جدول التذكيرات، فتبان في تبويب التذكيرات كمان.
+const addNextActionReminder = (
+  client: any,
+  at: string,
+  note: string,
+  ownerId: string
+): Reminder | null => {
+  try {
+    const parsed = new Date(at);
+    if (!at || Number.isNaN(parsed.getTime())) return null;
+    const reminders: Reminder[] = JSON.parse(localStorage.getItem('crm_reminders') || '[]');
+    const reminder = buildNextActionReminder({
+      id: crypto.randomUUID(),
+      userId: ownerId,
+      clientId: String(client?.id || ''),
+      clientName: String(client?.name || ''),
+      clientPhone: String(client?.phone || ''),
+      at: parsed.toISOString(),
+      note: note || 'إجراء قادم',
+    }) as Reminder;
+    localStorage.setItem('crm_reminders', JSON.stringify([reminder, ...reminders]));
+    return reminder;
+  } catch {
+    return null;
+  }
+};
+
+// ===== اختصارات «الإجراء القادم»: اليوم / بكرة / بعد غد =====
+// «اليوم» = الساعة ١٠ لو لسه قدامها، وإلا أقرب وقت بعد دلوقتي (نص ساعة).
+const nextActionQuickValue = (kind: 'today' | 'tomorrow' | 'dayAfter'): string => {
+  const at = new Date();
+  if (kind === 'tomorrow') {
+    at.setDate(at.getDate() + 1);
+    at.setHours(10, 0, 0, 0);
+  } else if (kind === 'dayAfter') {
+    at.setDate(at.getDate() + 2);
+    at.setHours(10, 0, 0, 0);
+  } else {
+    const ten = new Date(at);
+    ten.setHours(10, 0, 0, 0);
+    if (ten.getTime() > at.getTime()) {
+      at.setHours(10, 0, 0, 0);
+    } else {
+      // أقرب نصف ساعة بعد دلوقتي
+      at.setMinutes(Math.ceil(at.getMinutes() / 30) * 30, 0, 0);
+      if (at.getTime() <= Date.now()) at.setHours(at.getHours() + 1);
+    }
+  }
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`;
 };
 
 // قيمة حقل <input type="datetime-local"> الافتراضية عند إضافة عميل:
@@ -3020,6 +3077,11 @@ function App() {
     return map;
   })();
 
+  // ===== «الإجراء القادم»: موعد محدد (يوم + ساعة) على كارت العميل =====
+  // مبني على التذكيرات: أقرب تذكير مفتوح للعميل = الإجراء القادم.
+  // لو فات موعده من غير خطوة → يبقى ظاهر «اتأخر» (نفس منطق «محتاج إجراء»).
+  const nextActionMap = nextActionMapOf(scopedClients, scopedReminders, scopedCallLogs, nowTick);
+
   // المستحق الآن — الأحدث أولاً (نفس ترتيب تبويب التذكيرات)
   // التذكير اللي اتعمل عليه إجراء (مكالمة أو كومنت) بيخرج من القائمة فوراً،
   // والشارة «اتأخر» بتروح معاه — يعني الشارة ما بتروحش غير لما يتاخد إجراء فعلاً.
@@ -3621,6 +3683,7 @@ function App() {
             callLogs={callLogs.filter((l: CallLog) => l.salesId === currentUser.id)}
             feedbacks={dailyFeedbacks}
             alertMap={alertMap}
+            nextActionMap={nextActionMap}
             searchTerm={searchTerm}
             onSearch={setSearchTerm}
             onSelect={setSelectedClient}
@@ -3644,7 +3707,7 @@ function App() {
             setFeedbackPreset({ clientId: client.id, clientName: client.name, clientPhone: client.phone });
             setShowAddFeedback(true);
           }} />}
-          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} users={scopedUsers} numbers={workNumbers} leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} alertMap={alertMap} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} onCall={(c: any) => setCallClient(c)} onLeadViewed={(id: string) => {
+          {activeTab === 'pipeline' && !!scopeIds && currentUser.role !== 'supervisor' && <PipelineView clients={clients} users={scopedUsers} numbers={workNumbers} leads={assignedLeads.filter((l: AssignedLead) => l.salesId === currentUser.id)} alertMap={alertMap} nextActionMap={nextActionMap} onUpdateStage={handleUpdateClientStage} currentUser={currentUser} onSelectClient={setSelectedClient} onRefresh={loadData} onCall={(c: any) => setCallClient(c)} onLeadViewed={(id: string) => {
             const target = assignedLeads.find((l: AssignedLead) => l.id === id);
             if (!target || target.status !== 'new') return;
             writeAssignedLeads((all) => all.map((l: AssignedLead) =>
@@ -5643,13 +5706,15 @@ function QuickNoteButton({ active, onToggle }: { active: boolean; onToggle: () =
 // الهاتف + الأزرار)، لأن المراحل كانت تعرض سطرين بلا وسيلة لتسجيل فيدباك.
 // صندوق الفيدباك (حالة + كومنت إلزامي) داخلي هنا، والحفظ يتحرك معه المرحلة تلقائياً،
 // فالسيلز يسجّل الفيدباك من المراحل بلا رجوع لتبويب العملاء.
-function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenComments, onSetStage, onRefresh, onCall, alertMap }: any) {
+function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenComments, onSetStage, onRefresh, onCall, alertMap, nextActionMap }: any) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState('');
   const [commentText, setCommentText] = useState('');
   const [cancelReason, setCancelReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [syncError, setSyncError] = useState('');
+  // «الإجراء القادم» — يوم + ساعة (اختياري): يكتب تذكيراً يبان على الكارت
+  const [nextActionAt, setNextActionAt] = useState('');
   const src = SOURCE_KINDS[sourceKindOf(`${client?.source} ${client?.status}`)];
   const SrcIcon = src.Icon;
   const sourceText = sourceLabelOf(client);
@@ -5662,6 +5727,8 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
   // لونه الأصلي (لون المرحلة) زي ما كان.
   const alertDue = String(alertMap?.get(digitsOfPhone(client?.phone)) || '');
   const needsAction = !!alertDue;
+  // ===== «الإجراء القادم»: أقرب موعد مفتوح للعميل (يوم + ساعة) =====
+  const nextAction: NextAction | null = nextActionMap?.get(digitsOfPhone(client?.phone)) || null;
   const facts = ([
     client?.budget ? { k: 'الميزانية', v: displayPrice(client.budget) } : null,
     client?.property ? { k: 'العقار', v: client.property } : null,
@@ -5687,6 +5754,7 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
     setStatus('');
     setCommentText('');
     setCancelReason('');
+    setNextActionAt('');
     setSyncError('');
   };
 
@@ -5706,14 +5774,21 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
       callStatus: statusId === 'no-answer' ? 'no-answer' : 'called',
     });
     if (picked?.stage && client.stage !== picked.stage) onSetStage?.(client.id, picked.stage);
+    // ===== «الإجراء القادم»: اختيار يوم + ساعة → تذكير يبان على الكارت =====
+    // الموعد بيتحفظ في جدول التذكيرات (نفس نظام «محتاج إجراء»)، فتبان
+    // على الكارت باليوم والساعة، ولما يجي وقتها من غير خطوة → «اتأخر».
+    const nextReminder = nextActionAt
+      ? addNextActionReminder(client, nextActionAt, 'إجراء قادم', currentUser?.id || client?.userId || '')
+      : null;
     // انتظار الرفع: الفيدباك لازم يوصل قاعدة البيانات حتى يظهر في «الفيدباك اليومي»
     // عند الإدارة — الحفظ المحلي وحده يخلّيه على جهاز السيلز.
-    const [clientsOk, feedbackOk] = await Promise.all([
+    const [clientsOk, feedbackOk, remindersOk] = await Promise.all([
       pushKey('crm_clients'),
       pushKey('crm_daily_feedback'),
+      nextReminder ? pushKey('crm_reminders') : Promise.resolve(true),
     ]);
     setSaving(false);
-    if (!(clientsOk && feedbackOk)) {
+    if (!(clientsOk && feedbackOk && remindersOk)) {
       setSyncError('اتسجل على الشاشة دي لكن ماوصلش لقاعدة البيانات — تأكد من الاتصال واضغط «حفظ» تاني.');
       return;
     }
@@ -5770,6 +5845,15 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
                 تبقى زي آخر فيدباك) + كومنت — بدون أي سؤال «تم الرد / لم يرد». */}
             <QuickNoteButton active={open} onToggle={() => (open ? closeComposer() : openComposer())} />
           </div>
+
+          {nextAction && (
+            <p className={`cc-next ${nextAction.overdue ? 'is-late' : ''}`} title={nextAction.note || 'الإجراء القادم'}>
+              <CalendarClock className="w-3 h-3" />
+              <span className="cc-next-label">الإجراء القادم</span>
+              <b className="cc-next-time">{formatDateTime(nextAction.at)}</b>
+              {nextAction.overdue && <span className="cc-next-late">اتأخر</span>}
+            </p>
+          )}
 
           {facts.length > 0 && (
             <div className="cc-facts">
@@ -5838,6 +5922,29 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
             </button>
             <button type="button" title="إلغاء" onClick={closeComposer}>✕</button>
           </div>
+          {/* ===== «الإجراء القادم»: يوم + ساعة (اختياري) ===== */}
+          {/* الاختيار ده بيكتب تذكيراً بنفس نظام «محتاج إجراء»، فيبقى الموعد
+              مكتوب على كارت العميل: «الإجراء القادم: يوم كذا الساعة كذا». */}
+          <label className="fc-next">
+            <span className="fc-next-label">
+              <CalendarClock className="w-3 h-3" />
+              الإجراء القادم (يوم + ساعة)
+            </span>
+            <span className="fc-next-quick">
+              <button type="button" onClick={() => setNextActionAt(nextActionQuickValue('today'))}>اليوم</button>
+              <button type="button" onClick={() => setNextActionAt(nextActionQuickValue('tomorrow'))}>بكرة</button>
+              <button type="button" onClick={() => setNextActionAt(nextActionQuickValue('dayAfter'))}>بعد غد</button>
+            </span>
+            <input
+              type="datetime-local"
+              value={nextActionAt}
+              onChange={(e) => setNextActionAt(e.target.value)}
+              className="fc-next-input"
+            />
+            {nextActionAt && (
+              <button type="button" className="fc-next-clear" title="إلغاء الموعد" onClick={() => setNextActionAt('')}>✕</button>
+            )}
+          </label>
           <p className={syncError ? 'fc-hint fc-sync-error' : 'fc-hint'}>
             {syncError
               ? syncError
@@ -6168,7 +6275,7 @@ function ClientCommentsModal({ client, users = [], callLogs = [], feedbacks = []
 // قائمة العملاء للمندوب: الأرقام الواردة من الإدارة + عملاؤه في **قائمة واحدة** بلا أي تقسيم،
 // وكل كارت يحمل شريطاً لونياً وشارة توضح مصدر العميل (Facebook / Campaign / External…)
 // مع صندوق اختيارات سريع جمب الاسم: new / follow up / closed deal.
-function ClientsView({ currentUser, clients, users = [], leads = [], callLogs = [], feedbacks = [], alertMap, searchTerm, onSearch, onSelect, onAdd, onAddNumber, onCall, onLeadViewed, onSetStage, onRefresh }: any) {
+function ClientsView({ currentUser, clients, users = [], leads = [], callLogs = [], feedbacks = [], alertMap, nextActionMap, searchTerm, onSearch, onSelect, onAdd, onAddNumber, onCall, onLeadViewed, onSetStage, onRefresh }: any) {
   const [view, setView] = useState<'cards' | 'table'>(() => (localStorage.getItem('crm_clients_view') === 'table' ? 'table' : 'cards'));
   const [showComments, setShowComments] = useState(false);
   const [commentsClient, setCommentsClient] = useState<Client | null>(null);
@@ -6642,6 +6749,7 @@ function ClientsView({ currentUser, clients, users = [], leads = [], callLogs = 
                 currentUser={currentUser}
                 users={users}
                 alertMap={alertMap}
+                nextActionMap={nextActionMap}
                 onSelect={onSelect}
                 onOpenComments={() => setCommentsClient(client)}
                 onSetStage={onSetStage}
@@ -7118,7 +7226,7 @@ function LeadsView({
   );
 }
 
-function PipelineView({ clients, users = [], numbers = [], leads = [], alertMap, onUpdateStage, currentUser, onSelectClient, onRefresh, onLeadViewed, onCall }: any) {
+function PipelineView({ clients, users = [], numbers = [], leads = [], alertMap, nextActionMap, onUpdateStage, currentUser, onSelectClient, onRefresh, onLeadViewed, onCall }: any) {
   // كل رقم في نطاقي: العميل بحالته، والرقم الموزّع بحالة آخر فيدباك عليه.
   // بدون كده أعمدة المراحل كانت تعرض صفراً رغم وجود أرقام في التوزيع.
   // كل بطاقة عميل تحمل نفس كارت تبويب «العملاء» (بشريط الفيدباك بتسع حالات وصندوق
@@ -7163,6 +7271,7 @@ function PipelineView({ clients, users = [], numbers = [], leads = [], alertMap,
                       currentUser={currentUser}
                       users={users}
                       alertMap={alertMap}
+                      nextActionMap={nextActionMap}
                       onSelect={onSelectClient}
                       onOpenComments={onSelectClient}
                       onSetStage={onUpdateStage}
@@ -13092,7 +13201,7 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess, preset }: 
     clientPhone: preset?.clientPhone || '',
     clientName: preset?.clientName || '',
     date: new Date().toISOString().slice(0, 16),
-    feedback: '', status: '', callStatus: 'called', duration: '', nextAction: '', cancelReason: '',
+    feedback: '', status: '', callStatus: 'called', duration: '', nextAction: '', nextActionAt: '', cancelReason: '',
   });
   
   const [saving, setSaving] = useState(false);
@@ -13119,6 +13228,8 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess, preset }: 
         userId: currentUser.id,
         // التاريخ المختار يُحفظ ISO (بدل نص حقل datetime-local) حتى يُحسب «فيدباك اليوم» بدقة
         date: form.date ? new Date(form.date).toISOString() : now,
+        // موعد «الإجراء القادم» (يوم + ساعة) — يُحفظ ISO على البطاقة
+        ...(form.nextActionAt ? { nextActionAt: new Date(form.nextActionAt).toISOString() } : {}),
         createdAt: now,
       };
       localStorage.setItem(
@@ -13136,13 +13247,25 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess, preset }: 
           callStatus: form.status === 'no-answer' ? 'no-answer' : 'called',
         });
       }
+      // ===== «الإجراء القادم»: اختيار يوم + ساعة → تذكير يبان على كارت العميل =====
+      let nextReminder: Reminder | null = null;
+      if (form.nextActionAt) {
+        const target = clients.find((c: Client) => c.id === form.clientId);
+        nextReminder = addNextActionReminder(
+          target || { id: form.clientId, name: form.clientName, phone: form.clientPhone },
+          form.nextActionAt,
+          'إجراء قادم',
+          currentUser?.id || ''
+        );
+      }
       // **الرفع الفعلي**: بدون انتظاره كان الفيدباك يُحفظ على جهاز السيلز فقط
       // ولا تظهره الإدارة في «الفيدباك اليومي» أبداً.
-      const [feedbackOk, clientsOk] = await Promise.all([
+      const [feedbackOk, clientsOk, remindersOk] = await Promise.all([
         pushKey('crm_daily_feedback'),
         !savedId && form.clientId ? pushKey('crm_clients') : Promise.resolve(true),
+        nextReminder ? pushKey('crm_reminders') : Promise.resolve(true),
       ]);
-      if (!(feedbackOk && clientsOk)) {
+      if (!(feedbackOk && clientsOk && remindersOk)) {
         setError('الفيدباك اتسجل على الشاشة دي لكن ماوصلش لقاعدة البيانات — تأكد من الاتصال واضغط «إضافة» مرة تانية لإعادة الرفع.');
         return;
       }
@@ -13187,6 +13310,24 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess, preset }: 
           <input type="tel" placeholder="رقم العميل *" value={form.clientPhone} onChange={(e) => setForm({ ...form, clientPhone: e.target.value, clientId: '' })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
           <input type="text" placeholder="اسم العميل *" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value, clientId: '' })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
           <input type="datetime-local" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
+          {/* ===== «الإجراء القادم»: يوم + ساعة (اختياري) ===== */}
+          {/* يكتب تذكيراً بنفس نظام «محتاج إجراء»، فيبقى الموعد على كارت العميل:
+              «الإجراء القادم: يوم كذا الساعة كذا». */}
+          <div>
+            <label className="block text-xs font-bold text-[var(--text)] mb-1.5">
+              <CalendarClock className="w-3 h-3 inline" /> الإجراء القادم (يوم + ساعة) — اختياري
+            </label>
+            <div className="fc-next-quick mb-1.5">
+              <button type="button" onClick={() => setForm({ ...form, nextActionAt: nextActionQuickValue('today') })}>اليوم</button>
+              <button type="button" onClick={() => setForm({ ...form, nextActionAt: nextActionQuickValue('tomorrow') })}>بكرة</button>
+              <button type="button" onClick={() => setForm({ ...form, nextActionAt: nextActionQuickValue('dayAfter') })}>بعد غد</button>
+            </div>
+            <input type="datetime-local" value={form.nextActionAt} onChange={(e) => setForm({ ...form, nextActionAt: e.target.value })}
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" />
+            <p className="text-[11px] text-[var(--text-dim)] mt-1">
+              يتكتب على كارت العميل كـ«محتاج إجراء» — لما يجي وقته وهو ما اتصرفش، الكارت يولّع أصفر «اتأخر».
+            </p>
+          </div>
           <select value={form.callStatus} onChange={(e) => setForm({ ...form, callStatus: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]">
             <option value="called" className="bg-gray-900">تم الاتصال</option>
             <option value="no-answer" className="bg-gray-900">لا رد</option>

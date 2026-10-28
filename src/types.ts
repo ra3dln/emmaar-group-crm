@@ -162,6 +162,8 @@ export interface DailyFeedback {
   status?: string;
   duration?: string;
   nextAction?: string;
+  // موعد «الإجراء القادم» (يوم + ساعة) — يكتب تذكيراً يبان على كارت العميل
+  nextActionAt?: string;
   createdAt: string;
 }
 
