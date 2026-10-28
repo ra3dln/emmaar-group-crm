@@ -33,8 +33,8 @@ const openRemindersOf = (client: any, reminders: any[] = []): any[] => {
   });
 };
 
-// هل عمل المندوب حاجة بعد التذكير؟ (كومنت في خط العميل أو مكالمة مسجّلة)
-const actedAfter = (client: any, callLogs: any[], since: number): boolean => {
+// هل عمل المندوب حاجة بعد وقت معيّن؟ (كومنت في خط العميل أو مكالمة مسجّلة)
+export const actedSince = (client: any, callLogs: any[], since: number): boolean => {
   const acts = Array.isArray(client?.activities) ? client.activities : [];
   if (acts.some((a: any) => timeOf(a?.at || a?.createdAt) > since)) return true;
   const phone = digitsOfPhone(client?.phone);
@@ -43,6 +43,10 @@ const actedAfter = (client: any, callLogs: any[], since: number): boolean => {
     (l: any) => digitsOfPhone(l?.clientPhone) === phone && timeOf(l?.createdAt) > since
   );
 };
+
+// هل عمل المندوب حاجة بعد التذكير؟ (كومنت في خط العميل أو مكالمة مسجّلة)
+const actedAfter = (client: any, callLogs: any[], since: number): boolean =>
+  actedSince(client, callLogs, since);
 
 // ===== كل التذكيرات اللي فات موعدها — مش الأحدث وحده =====
 // الرقم يبقى «محتاج إجراء» لو **أي** تذكير فات عليه ومفيش أي خطوة بعده.

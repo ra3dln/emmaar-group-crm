@@ -125,7 +125,51 @@ check(
   ) === null
 );
 
-// ===== ٤) الخريطة: مفتاحها رقم العميل (تتطابق مع الكارت في كل الشاشات) =====
+// ===== ٤) الموعد المختار من الفيدباك — مكتوب على سجل العميل نفسه =====
+// ده اللي بيبان على الكارت باليوم والساعة (مش بس مستنتج من التذكيرات).
+check(
+  'الموعد المختار (على العميل) يبان على الكارت',
+  (() => {
+    const a = nextActionOf(client({ nextActionAt: iso(NOW + 4 * HOUR) }), [], [], NOW);
+    return !!a && a.at === iso(NOW + 4 * HOUR) && a.overdue === false && a.chosen === true;
+  })()
+);
+check(
+  'الموعد المختار اللي فات وهو محتاج خطوة → «اتأخر»',
+  (() => {
+    const a = nextActionOf(client({ nextActionAt: iso(NOW - HOUR) }), [], [], NOW);
+    return !!a && a.overdue === true && a.done === false;
+  })()
+);
+check(
+  'الموعد المختار اللي فات واتنفّذ → «تم» (يفضل مكتوب على الكارت)',
+  (() => {
+    const a = nextActionOf(
+      client({
+        nextActionAt: iso(NOW - HOUR),
+        activities: [{ id: 'a1', type: 'comment', text: 'اتصلت', at: iso(NOW - 30 * 60 * 1000) }],
+      }),
+      [],
+      [],
+      NOW
+    );
+    return !!a && a.done === true && a.overdue === false;
+  })()
+);
+check(
+  'الموعد المختار له الأولوية على التذكير',
+  (() => {
+    const a = nextActionOf(
+      client({ nextActionAt: iso(NOW + 4 * HOUR) }),
+      [reminder({ dateTime: iso(NOW + HOUR) })],
+      [],
+      NOW
+    );
+    return !!a && a.at === iso(NOW + 4 * HOUR) && a.chosen === true;
+  })()
+);
+
+// ===== ٥) الخريطة: مفتاحها رقم العميل (تتطابق مع الكارت في كل الشاشات) =====
 const map = nextActionMapOf(
   [client(), client({ id: 'c2', phone: '01009998888' })],
   [reminder()],
@@ -156,7 +200,7 @@ check(
 );
 check(
   'الكارت يعرض سطر «الإجراء القادم» باليوم والساعة',
-  /className=\{`cc-next \$\{nextAction\.overdue \? 'is-late' : ''\}`\}/.test(app) &&
+  /cc-next \$\{nextAction\.overdue \? 'is-late' : ''\}/.test(app) &&
     /cc-next-time/.test(app) &&
     /formatDateTime\(nextAction\.at\)/.test(app)
 );
@@ -181,6 +225,19 @@ check(
   /nextActionQuickValue = \(kind: 'today' \| 'tomorrow' \| 'dayAfter'\)/.test(app) &&
     /setNextActionAt\(nextActionQuickValue\('today'\)\)/.test(app) &&
     /setForm\(\{ \.\.\.form, nextActionAt: nextActionQuickValue\('tomorrow'\) \}\)/.test(app)
+);
+check(
+  'الموعد بيتكتب على سجل العميل نفسه (فيبان على الكارت)',
+  /nextActionAt: new Date\(nextActionAt\)\.toISOString\(\), nextActionNote: 'إجراء قادم'/.test(app) &&
+    /nextActionAt: new Date\(form\.nextActionAt\)\.toISOString\(\), nextActionNote: 'إجراء قادم'/.test(app) &&
+    /nextActionAt\?: string;/.test(types) &&
+    /nextActionNote\?: string;/.test(types)
+);
+check(
+  'الكارت يميّز «اتأخر» و«تم»',
+  /cc-next-late">اتأخر/.test(app) &&
+    /cc-next-done">تم/.test(app) &&
+    /\.cc-next\.is-done/.test(css)
 );
 
 console.log(`\n✅ نجحت ${passed} فحوصات لـ«الإجراء القادم».`);

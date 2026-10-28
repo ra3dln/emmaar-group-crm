@@ -1944,6 +1944,13 @@ html[data-mode="light"] .fs-item-en { color: color-mix(in srgb, var(--fs) 85%, #
   font-weight: 700;
   color: #fbbf24;
 }
+/* الموعد فات واتنفّذ → «تم» */
+.cc-next.is-done { opacity: 0.7; }
+.cc-next .cc-next-done {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: #86efac;
+}
 
 /* اختيار «الإجراء القادم» في صندوق الفيدباك (كارت العميل) */
 .feedback-composer .fc-next {

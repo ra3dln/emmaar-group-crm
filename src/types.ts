@@ -71,6 +71,12 @@ export interface Client {
   campaignAt?: string;
   // آخر سبب إلغاء اختاره المندوب — أساس فلتر الإلغاء في قائمة العملاء
   cancelReason?: string;
+  // ===== «الإجراء القادم»: موعد محدد (يوم + ساعة) يختاره المندوب في الفيدباك =====
+  // بيتكتب على سجل العميل نفسه (مش بس تذكير)، فيبقى ظاهر على الكارت باليوم
+  // والساعة: «الإجراء القادم: 29 أكتوبر 2026، 11:00 ص».
+  nextActionAt?: string;
+  // وصف الخطوة («إجراء قادم» افتراضياً) — يظهر كتلميح مع الموعد
+  nextActionNote?: string;
   createdAt: string;
   updatedAt: string;
   activities?: ClientActivity[];

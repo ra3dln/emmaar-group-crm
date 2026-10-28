@@ -674,7 +674,7 @@ const addClientActivity = (
   type: string,
   text: string,
   by?: string,
-  opts?: { authorId?: string; callStatus?: DailyFeedback['callStatus']; cardId?: string; skipCard?: boolean; status?: string; cancelReason?: string }
+  opts?: { authorId?: string; callStatus?: DailyFeedback['callStatus']; cardId?: string; skipCard?: boolean; status?: string; cancelReason?: string; nextActionAt?: string; nextActionNote?: string }
 ): void => {
   if (!clientId) return;
   try {
@@ -699,6 +699,11 @@ const addClientActivity = (
       return {
         ...c,
         ...(opts?.cancelReason ? { cancelReason: opts.cancelReason } : {}),
+        // ===== «الإجراء القادم»: الموعد بيتكتب على سجل العميل نفسه =====
+        // عشان يبان على الكارت باليوم والساعة (مش بس في التذكيرات).
+        ...(opts?.nextActionAt
+          ? { nextActionAt: opts.nextActionAt, nextActionNote: opts.nextActionNote || 'إجراء قادم' }
+          : {}),
         activities: [entry, ...(c.activities || [])].slice(0, 60),
         updatedAt: nowIso,
       };
@@ -5771,6 +5776,10 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
       authorId: currentUser?.id,
       ...(statusId ? { status: statusId } : {}),
       ...(statusId === 'cancellation' && cancelReason ? { cancelReason } : {}),
+      // «الإجراء القادم» (يوم + ساعة) — بيتكتب على سجل العميل فيبان على الكارت
+      ...(nextActionAt
+        ? { nextActionAt: new Date(nextActionAt).toISOString(), nextActionNote: 'إجراء قادم' }
+        : {}),
       callStatus: statusId === 'no-answer' ? 'no-answer' : 'called',
     });
     if (picked?.stage && client.stage !== picked.stage) onSetStage?.(client.id, picked.stage);
@@ -5847,11 +5856,12 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
           </div>
 
           {nextAction && (
-            <p className={`cc-next ${nextAction.overdue ? 'is-late' : ''}`} title={nextAction.note || 'الإجراء القادم'}>
+            <p className={`cc-next ${nextAction.overdue ? 'is-late' : ''} ${nextAction.done ? 'is-done' : ''}`} title={nextAction.note || 'الإجراء القادم'}>
               <CalendarClock className="w-3 h-3" />
               <span className="cc-next-label">الإجراء القادم</span>
               <b className="cc-next-time">{formatDateTime(nextAction.at)}</b>
               {nextAction.overdue && <span className="cc-next-late">اتأخر</span>}
+              {nextAction.done && <span className="cc-next-done">تم</span>}
             </p>
           )}
 
@@ -13232,6 +13242,18 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess, preset }: 
         ...(form.nextActionAt ? { nextActionAt: new Date(form.nextActionAt).toISOString() } : {}),
         createdAt: now,
       };
+      // ===== «الإجراء القادم»: اختيار يوم + ساعة → تذكير يبان على كارت العميل =====
+      // (قبل حفظ البطاقة، عشان الرفع يبقى قريب من الكتابة)
+      let nextReminder: Reminder | null = null;
+      if (form.nextActionAt) {
+        const target = clients.find((c: Client) => c.id === form.clientId);
+        nextReminder = addNextActionReminder(
+          target || { id: form.clientId, name: form.clientName, phone: form.clientPhone },
+          form.nextActionAt,
+          'إجراء قادم',
+          currentUser?.id || ''
+        );
+      }
       localStorage.setItem(
         'crm_daily_feedback',
         JSON.stringify([card, ...feedbacks.filter((f: DailyFeedback) => f.id !== id)])
@@ -13243,20 +13265,13 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess, preset }: 
           authorId: currentUser?.id,
           skipCard: true,
           status: form.status,
+          // «الإجراء القادم» (يوم + ساعة) — على سجل العميل + تذكير
+          ...(form.nextActionAt
+            ? { nextActionAt: new Date(form.nextActionAt).toISOString(), nextActionNote: 'إجراء قادم' }
+            : {}),
           ...(form.status === 'cancellation' && form.cancelReason ? { cancelReason: form.cancelReason } : {}),
           callStatus: form.status === 'no-answer' ? 'no-answer' : 'called',
         });
-      }
-      // ===== «الإجراء القادم»: اختيار يوم + ساعة → تذكير يبان على كارت العميل =====
-      let nextReminder: Reminder | null = null;
-      if (form.nextActionAt) {
-        const target = clients.find((c: Client) => c.id === form.clientId);
-        nextReminder = addNextActionReminder(
-          target || { id: form.clientId, name: form.clientName, phone: form.clientPhone },
-          form.nextActionAt,
-          'إجراء قادم',
-          currentUser?.id || ''
-        );
       }
       // **الرفع الفعلي**: بدون انتظاره كان الفيدباك يُحفظ على جهاز السيلز فقط
       // ولا تظهره الإدارة في «الفيدباك اليومي» أبداً.
