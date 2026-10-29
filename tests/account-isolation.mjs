@@ -178,12 +178,14 @@ try {
     'العملاء والتذكيرات والفيدباك تُرشَّح بنطاق الحساب',
     /setClients\([\s\S]{0,200}inMyScope\(c\.userId\)[\s\S]{0,200}inMyScope\(c\.assignedTo\)/.test(app) &&
       /setReminders\(allReminders\.filter\(\(r: Reminder\) => inMyScope\(r\.userId\)\)\)/.test(app) &&
-      /setDailyFeedbacks\(allFeedbacks\.filter\(\(f: DailyFeedback\) => inMyScope\(f\.userId\)\)\)/.test(app)
+      // الاستثناء الوحيد: الأرقام المشتركة (سيلز شريك) — src/partners.ts / tests/shared-partners.mjs
+      /setDailyFeedbacks\(\s*allFeedbacks\.filter\(\(f: DailyFeedback\) => inMyScope\(f\.userId\) \|\| onSharedPhone\(f\.clientPhone\)\)\s*\)/.test(app) &&
+      /const sharedPhones = sharedPhonesOf\(\[\.\.\.allClients, \.\.\.allAssignedLeads\], currentUser\.id\);/.test(app)
   );
   check(
     'الأرقام الموزّعة والمكالمات والرسائل تُرشَّح للحساب',
-    /setAssignedLeads\(allAssignedLeads\.filter\(\(l: AssignedLead\) => inMyScope\(l\.salesId\)\)\)/.test(app) &&
-      /setCallLogs\(getCallLogs\(\)\.filter\(\(l: CallLog\) => inMyScope\(l\.salesId\)\)\)/.test(app) &&
+    /setAssignedLeads\(\s*allAssignedLeads\.filter\(\(l: AssignedLead\) => inMyScope\(l\.salesId\) \|\| isPartnerOf\(l, currentUser\.id\)\)\s*\)/.test(app) &&
+      /setCallLogs\(getCallLogs\(\)\.filter\(\(l: CallLog\) => inMyScope\(l\.salesId\) \|\| onSharedPhone\(l\.clientPhone\)\)\)/.test(app) &&
       /setMessages\([\s\S]{0,160}m\.fromId === currentUser\.id \|\| m\.toId === currentUser\.id/.test(app)
   );
   check(
@@ -201,7 +203,8 @@ try {
   check(
     'لوحة الأرقام والمكالمات تستخدم نفس النطاق لا الرتبة',
     /const myLeads = scopedLeads\.filter\([\s\S]{0,140}inMyScope\(l\.salesId\)[\s\S]{0,140}\);/.test(app) &&
-      /setCallLogs\(getCallLogs\(\)\.filter\(\(l: CallLog\) => inMyScope\(l\.salesId\)\)\)/.test(app)
+      /const inMyCallScope = \(log: CallLog\) => inMyScope\(log\.salesId\) \|\| mySharedPhones\.has\(digitsOfPhone\(log\.clientPhone\)\);/.test(app) &&
+      /setCallLogs\(getCallLogs\(\)\.filter\(inMyCallScope\)\)/.test(app)
   );
   check(
     'يمكن ضبط نطاق الحساب من شاشة تعديل المستخدم',

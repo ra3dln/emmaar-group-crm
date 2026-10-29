@@ -127,9 +127,9 @@ check('صفحة الأرقام بالإنجليزي (Lead Info / Search)', /<opt
 // ===== ٤) صفحة الأرقام: بحث + فلاتر + كارت =====
 check('صفحة الأرقام فيها بحث + فلاتر حالة + كروت', /eg-search/.test(leadsView) && /eg-filter/.test(leadsView) && /EngazLeadCard/.test(leadsView));
 check(
-  'فلاتر الحالة بالترتيب: All Leads، Fresh، Cold Calls، Delay، Follow Up…',
+  'فلاتر الحالة بالترتيب: All Leads، Fresh، Cold Calls، Delay، Shared Leads، Follow Up…',
   /LEAD_STATUS_ORDER = \[/.test(app) &&
-    /'fresh-stage', COLD_CALL_ID, DELAY_ID, 'follow-up', 'meeting', 'after-meeting'/.test(app) &&
+    /'fresh-stage', COLD_CALL_ID, DELAY_ID, SHARED_ID, 'follow-up', 'meeting', 'after-meeting'/.test(app) &&
     /'reschedule', 'cancellation', 'no-answer', 'done-deal', 'reservation'/.test(app)
 );
 check('اسم الفورم مكتوب زي ما هو في الكارت', /formName: formNameOf\(record\)/.test(leadsView) && /eg-form/.test(card));

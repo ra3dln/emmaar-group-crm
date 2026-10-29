@@ -52,6 +52,8 @@ export interface ClientActivity {
 export interface Client {
   id: string;
   userId: string;
+  // السيلز الشركاء على العميل (src/partners.ts)
+  partnerIds?: string[];
   name: string;
   phone: string;
   phones: string[];
@@ -98,6 +100,8 @@ export interface AssignedLead {
   id: string;
   adminId: string;
   salesId: string;
+  // السيلز الشركاء على الرقم (src/partners.ts)
+  partnerIds?: string[];
   name: string;
   phone: string;
   description: string;

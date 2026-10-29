@@ -76,8 +76,10 @@ import {
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
 import { alertMapOf, clientActionState, leadAlertState, actedAfterReminder } from './reminders';
 import { buildNextActionReminder, nextActionByPhoneOf, nextActionMapOf, type NextAction } from './nextAction';
+import { isPartnerOf, isRecordOwner, ownsPhone, partnerPhonesOf, partnersOnPhone, sharedPhonesOf, withPartner, withoutPartner } from './partners';
 import { installBackGuard } from './backNav';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
+import { PartnerPanel } from './PartnerPanel';
 import {
   ATTENDANCE_END_DEFAULT,
   ATTENDANCE_GRACE_DEFAULT,
@@ -2131,10 +2133,17 @@ function App() {
     // نطاقه الآن بياناته هو فقط، ولو احتاج يشوف شغل غيره يستخدم «الدخول إلى الحساب».
     const myScopeIds: Set<string> | null = dataScopeOf(currentUser, allUsers);
     const inMyScope = (id?: string) => !myScopeIds || (!!id && myScopeIds.has(id));
+    // ===== السيلز المشترك (src/partners.ts) =====
+    // الشريك بيستلم العميل/الرقم اللي اتضاف عليه، والطرفين بيستلموا كومنتات ومكالمات
+    // بعض على الأرقام المشتركة (من غير ما يشوفوا باقي شغل بعض).
+    const sharedPhones = sharedPhonesOf([...allClients, ...allAssignedLeads], currentUser.id);
+    const onSharedPhone = (phone?: string) => sharedPhones.has(digitsOfPhone(phone));
 
     setUsers(allUsers);
     setTeams(allTeams);
-    setAssignedLeads(allAssignedLeads.filter((l: AssignedLead) => inMyScope(l.salesId)));
+    setAssignedLeads(
+      allAssignedLeads.filter((l: AssignedLead) => inMyScope(l.salesId) || isPartnerOf(l, currentUser.id))
+    );
     // المخزون الكامل — لحسابات الإدارة فقط (لوحات أرقام الكامبين).
     // حساب السيلز ما بيحمّلوش (مفيش داعي، وهو الممنوع أصلاً: خلط شغل الزملاء).
     const isAdminAccount = currentUser.role !== 'sales';
@@ -2150,7 +2159,7 @@ function App() {
         myScopeIds ? m.fromId === currentUser.id || m.toId === currentUser.id : true
       )
     );
-    setCallLogs(getCallLogs().filter((l: CallLog) => inMyScope(l.salesId)));
+    setCallLogs(getCallLogs().filter((l: CallLog) => inMyScope(l.salesId) || onSharedPhone(l.clientPhone)));
     // الحساب لم يعد موجوداً (حُذف، أو أُعيد ضبط النظام وبدأنا من جديد) → خروج تلقائي لشاشة الدخول
     // بشرط وجود قائمة حسابات فعلاً: قائمة فاضية (تزامن لم يصل بعد) ليست دليلاً على حذف
     // الحساب، وكانت تُخرج المستخدم بلا سبب على الأجهزة التي تفتح قبل اكتمال المزامنة.
@@ -2173,12 +2182,17 @@ function App() {
     }
 
     setClients(
-      allClients.filter((c: Client) => inMyScope(c.userId) || inMyScope(c.assignedTo))
+      allClients.filter(
+        (c: Client) => inMyScope(c.userId) || inMyScope(c.assignedTo) || isPartnerOf(c, currentUser.id)
+      )
     );
     setReminders(allReminders.filter((r: Reminder) => inMyScope(r.userId)));
     // الفيدباك لصاحبه فقط. الربط بالرقم كان يجعل كومنت مندوب يظهر لمندوب آخر
     // حصل على نفس الرقم — وهو بالضبط «الفيدباك بينزل للشخص التاني».
-    setDailyFeedbacks(allFeedbacks.filter((f: DailyFeedback) => inMyScope(f.userId)));
+    // استثناء: الأرقام المشتركة (شريك) — كومنتاتها للطرفين.
+    setDailyFeedbacks(
+      allFeedbacks.filter((f: DailyFeedback) => inMyScope(f.userId) || onSharedPhone(f.clientPhone))
+    );
     // العقارات: عقارات الفريق تظهر للجميع، والعقار الخاص لا يخرج من جهاز صاحبه
     // ولا يُحمَّل أصلاً في متصفح مندوب آخر (الإدارة وقائد الفريق يرون عقارات فريقهم).
     const ownerOf = (p: Property) => p.userId;
@@ -2210,7 +2224,11 @@ function App() {
     const next = mutate(all);
     localStorage.setItem('crm_assigned_leads', JSON.stringify(next));
     const scope = dataScopeOf(currentUser, JSON.parse(localStorage.getItem('crm_users') || '[]'));
-    setAssignedLeads(scope ? next.filter((l: AssignedLead) => scope.has(String(l.salesId || ''))) : next);
+    setAssignedLeads(
+      scope
+        ? next.filter((l: AssignedLead) => scope.has(String(l.salesId || '')) || isPartnerOf(l, currentUser?.id || ''))
+        : next
+    );
     // اللوحات الإدارية (توزيع الأرقام والحصص) تقرأ fullLeads: كانت تتحدّث بعد المزامنة
     // فقط، فيبدو التوزيع اليدوي وإلغاء التوزيع كأنهما لم يُحفَظا حتى يعمل ريفرش.
     // نفس شرط loadData: أي حساب غير سيلز يحمل المخزون الكامل.
@@ -3036,6 +3054,13 @@ function App() {
   // إداري محدود النطاق (حساب المطوّر).
   const scopeIds = dataScopeOf(currentUser, users);
   const inMyScope = (id?: string) => !scopeIds || (!!id && scopeIds.has(id));
+  // ===== السيلز المشترك =====
+  // الأرقام المشتركة (أنا شريك فيها أو بتاعتي وعليها شريك): مكالماتها للطرفين —
+  // نفس قاعدة loadData. والأرقام اللي أنا شريك فيها بس = خانة «Shared Leads».
+  const myPartnerRecords = [...clients, ...assignedLeads];
+  const mySharedPhones = sharedPhonesOf(myPartnerRecords, currentUser.id);
+  const sharedWithMePhones = partnerPhonesOf(myPartnerRecords, currentUser.id);
+  const inMyCallScope = (log: CallLog) => inMyScope(log.salesId) || mySharedPhones.has(digitsOfPhone(log.clientPhone));
 
   const activeReminders = reminders.filter(r => !r.isCompleted);
 
@@ -3060,7 +3085,8 @@ function App() {
   const workNumbers = (() => {
     const snapshots = feedbackByPhone(scopedFeedbacks, scopedCallLogs, users);
     const myLeads = scopedLeads.filter(
-      (l: AssignedLead) => inMyScope(l.salesId) && !otherClientPhones.has(phoneKeyOf(l.phone))
+      (l: AssignedLead) =>
+        (inMyScope(l.salesId) || isPartnerOf(l, currentUser.id)) && !otherClientPhones.has(phoneKeyOf(l.phone))
     );
     // الأرقام الموزّعة فقط تدخل لوحة الحالات: الرقم غير الموزّع ليس «مرحلة جديدة»
     // عند أحد، وكان يظهر في fresh stage وكأنه شغل الفريق (فكل أرقام الفورمات تُعدّ).
@@ -3177,6 +3203,46 @@ function App() {
 
   // حفظ مكالمة: سجل مشترك للإدارة + حدث في الخط الزمني للعميل + تذكير بموعد الاتصال القادم
   // + الكومنت ينزل تلقائياً كبطاقة في «الفيدباك اليومي» (فوق: خط العميل الزمني ينزل هو كذلك من addClientActivity)
+  // ===== إضافة / شيل سيلز شريك على رقم (صاحب الرقم بس — src/partners.ts) =====
+  // الشراكة بتتكتب على العميل وعلى الرقم الموزّع بنفس الهاتف، والحفظ يستنى
+  // وصولها للسيرفر: لو ما وصلتش، الشريك مش هيشوف العميل على جهازه.
+  const handleSetPartner = async (phone: string, partnerId: string, mode: 'add' | 'remove'): Promise<boolean> => {
+    const key = digitsOfPhone(phone);
+    if (!key || !partnerId) return false;
+    const at = new Date().toISOString();
+    const change = (record: any) => {
+      if (digitsOfPhone(record?.phone) !== key || !isRecordOwner(record, currentUser.id)) return record;
+      return mode === 'add' ? withPartner(record, partnerId, at) : withoutPartner(record, partnerId, at);
+    };
+    const readList = (storeKey: string): any[] => {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(storeKey) || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    };
+    const storeClients = readList('crm_clients');
+    const nextClients = storeClients.map(change);
+    const clientsChanged = nextClients.some((record, i) => record !== storeClients[i]);
+    const leadsChanged = readList('crm_assigned_leads').some((record) => change(record) !== record);
+    if (!clientsChanged && !leadsChanged) return false;
+    if (clientsChanged) localStorage.setItem('crm_clients', JSON.stringify(nextClients));
+    const results = await Promise.all([
+      clientsChanged ? pushKey('crm_clients') : Promise.resolve(true),
+      leadsChanged ? writeAssignedLeads((all) => all.map(change)) : Promise.resolve(true),
+    ]);
+    loadData();
+    const ok = results.every(Boolean);
+    if (!ok) {
+      setInAppNotification({
+        title: 'الشريك اتحفظ على الجهاز بس',
+        body: 'ما وصلش للسيرفر — السيلز الشريك مش هيشوف العميل لحد ما يوصل. جرّب تاني.',
+      });
+    }
+    return ok;
+  };
+
   const handleSaveCall = (payload: { result: 'answered' | 'no-answer'; comment: string; status?: string; cancelReason?: string; nextCallAt: string }) => {
     const target = callClient;
     if (!target) return;
@@ -3208,7 +3274,7 @@ function App() {
     // سجل هذا الحساب فقط — بنفس نطاقه (الإدارة الكاملة ترى الكل، والحساب المحدود النطاق
     // يبقى على سجله هو؛ كان الاعتماد على الرتبة يرمي كل مكالمات الشركة في ذاكرته
     // فتظهر أرقام وفيدباك الجميع على لوحته).
-    setCallLogs(getCallLogs().filter((l: CallLog) => inMyScope(l.salesId)));
+    setCallLogs(getCallLogs().filter(inMyCallScope));
 
     // ===== رقم موزَّع لسه مش عميل مسجّل =====
     // مفيش سجل عميل نضيف عليه الخط الزمني، فالمكالمة بتتسجَّل برقمه: سجل
@@ -3680,6 +3746,7 @@ function App() {
               callLogs={callLogs}
               alertMap={alertMap}
               nextActionMap={nextActionByPhone}
+              sharedPhones={sharedWithMePhones}
               filter={leadsFilter}
               onFilter={setLeadsFilter}
               onBack={() => setLeadsOpen(false)}
@@ -3690,7 +3757,7 @@ function App() {
               }}
             />
           ) : (
-            <DashboardView stats={stats} clients={clients} numbers={workNumbers} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} callLogs={callLogs} alertMap={alertMap} onOpenStatus={(id: string) => { setLeadsFilter(id || ''); setLeadsOpen(true); }} onCompleteReminder={completeReminder} onActed={markReminderAction} />
+            <DashboardView stats={stats} clients={clients} numbers={workNumbers} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} callLogs={callLogs} alertMap={alertMap} sharedPhones={sharedWithMePhones} onOpenStatus={(id: string) => { setLeadsFilter(id || ''); setLeadsOpen(true); }} onCompleteReminder={completeReminder} onActed={markReminderAction} />
           ))}
           {activeTab === 'clients' && isSalesView && <ClientsView
             currentUser={currentUser}
@@ -3880,6 +3947,17 @@ function App() {
           user={currentUser}
           fromReminder={!!reminderCallId}
           comments={commentsOfTarget(callClient, clients, dailyFeedbacks, callLogs, users)}
+          partners={partnersOnPhone(myPartnerRecords, callClient.phone)
+            .map((id) => users.find((u: User) => u.id === id))
+            .filter((u): u is User => !!u)}
+          canManagePartners={ownsPhone(myPartnerRecords, callClient.phone, currentUser.id)}
+          partnerOptions={users.filter((u: User) =>
+            isAssignableSales(u) &&
+            u.id !== currentUser.id &&
+            !partnersOnPhone(myPartnerRecords, callClient.phone).includes(u.id)
+          )}
+          onAddPartner={(id: string) => handleSetPartner(callClient.phone, id, 'add')}
+          onRemovePartner={(id: string) => handleSetPartner(callClient.phone, id, 'remove')}
           onOpenDetails={(target: any) => {
             const detail = (clients || []).find((x: Client) => String(x.id) === String(target?.id));
             if (!detail) return;
@@ -5006,7 +5084,7 @@ function MobileTabBar({ activeTab, onTab, onMore, badge = 0 }: any) {
 }
 
 // Dashboard View
-function DashboardView({ stats, clients, numbers = [], reminders, properties, currentUser, impersonating, onOpenStatus, onCompleteReminder, onActed, callLogs = [], alertMap }: any) {
+function DashboardView({ stats, clients, numbers = [], reminders, properties, currentUser, impersonating, onOpenStatus, onCompleteReminder, onActed, callLogs = [], alertMap, sharedPhones }: any) {
   // المستحق الآن — الأحدث أولاً. والتذكير اللي اتعمل عليه إجراء (مكالمة أو كومنت)
   // بيخرج من القائمة فوراً — عشان الشارة «اتأخر» ما تروحش غير لما يتاخد إجراء.
   const dueReminders = reminders
@@ -5044,6 +5122,8 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
   const freshLeads = scopeNumbers.filter((record: any) => isFreshNumber(record, calledPhones)).length;
   // «Delay» = أرقام عليها شارة «اتأخر» (تذكير فات من غير خطوة)
   const delayed = scopeNumbers.filter((record: any) => isDelayedNumber(record, alertMap)).length;
+  // «Shared Leads» = أرقام زمايلي اللي أنا سيلز مشترك فيها
+  const shared = scopeNumbers.filter((record: any) => !!sharedPhones?.has(digitsOfPhone(record?.phone))).length;
   const [todayRecord, setTodayRecord] = useState<Attendance | undefined>(() => getTodayCheckIn(currentUser.id));
   const myHistory = getAttendance().filter((a: Attendance) => a.userId === currentUser.id).sort((a: Attendance, b: Attendance) => b.checkInAt.localeCompare(a.checkInAt)).slice(0, 7);
   
@@ -5088,6 +5168,8 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
               ? freshLeads
               : card.id === DELAY_ID
               ? delayed
+              : card.id === SHARED_ID
+              ? shared
               : scopeNumbers.filter((record: any) => (record.bucket || feedbackBucketOf(record)) === card.id).length;
             const pct = scopeNumbers.length ? Math.min(100, Math.round((n / scopeNumbers.length) * 100)) : 0;
             return (
@@ -7012,11 +7094,15 @@ const COLD_CALL_ID = 'cold-call';
 // «Delay» مش حالة فيدباك برضه: رقم عليه تذكير فات وقته من غير خطوة (isDelayedNumber).
 // خانة إضافية — الرقم بيتعدّ فيها وفي خانته الأصلية مع بعض.
 const DELAY_ID = 'delay';
+// «Shared Leads»: أرقام زمايلي اللي أنا سيلز مشترك فيها (src/partners.ts) — خانة
+// إضافية زي Delay: الرقم بيتعدّ فيها وفي خانته الأصلية مع بعض.
+const SHARED_ID = 'shared';
 const LEAD_STATUS_LABELS: Record<string, string> = {
   '': 'All Leads',
   'fresh-stage': 'Fresh Leads',
   [COLD_CALL_ID]: 'Cold Calls',
   [DELAY_ID]: 'Delay',
+  [SHARED_ID]: 'Shared Leads',
   'follow-up': 'Follow Up',
   meeting: 'Meeting',
   'after-meeting': 'Following after Meeting',
@@ -7027,7 +7113,7 @@ const LEAD_STATUS_LABELS: Record<string, string> = {
   reservation: 'Reservation',
 };
 const LEAD_STATUS_ORDER = [
-  'fresh-stage', COLD_CALL_ID, DELAY_ID, 'follow-up', 'meeting', 'after-meeting',
+  'fresh-stage', COLD_CALL_ID, DELAY_ID, SHARED_ID, 'follow-up', 'meeting', 'after-meeting',
   'reschedule', 'cancellation', 'no-answer', 'done-deal', 'reservation',
 ];
 
@@ -7039,6 +7125,7 @@ const DASH_CARDS: Array<{ id: string; label: string; cls: string }> = [
   { id: 'fresh-stage', label: 'Fresh Leads', cls: 'fs-fresh' },
   { id: COLD_CALL_ID, label: 'Cold Calls', cls: 'fs-cold' },
   { id: DELAY_ID, label: 'Delay', cls: 'fs-delay' },
+  { id: SHARED_ID, label: 'Shared Leads', cls: 'fs-shared' },
   { id: 'follow-up', label: 'Follow Up', cls: 'fs-follow' },
   { id: 'meeting', label: 'Meeting', cls: 'fs-meeting' },
   { id: 'after-meeting', label: 'Following after Meeting', cls: 'fs-after' },
@@ -7107,6 +7194,8 @@ type LeadRow = {
   fresh?: boolean;
   // تذكير فات وقته من غير خطوة (يدخل في فلتر «Delay» وكمان في خانته الأصلية)
   delayed?: boolean;
+  // رقم زميل أنا سيلز مشترك فيه (يدخل في فلتر «Shared Leads» وكمان في خانته)
+  shared?: boolean;
   // التذكير فات موعده والمندوب مخدش خطوة → الكارت أصفر (مطلوب إجراء)
   alertDue?: string;
   // «الإجراء القادم»: موعد محدد (يوم + ساعة) من التذكير — يتبان على الكارت
@@ -7186,7 +7275,7 @@ function EngazLeadCard({ row, onOpen, onCall }: { row: LeadRow; onOpen: () => vo
 // الحالة (زي ENGAZ)، وضغط أي حالة بيصفّي الأرقام، والضغط على رقم بيفتح نافذة
 // الإجراء (الحالة + الكومنت + التذكير + آخر التعليقات).
 function LeadsView({
-  currentUser, numbers = [], leads = [], callLogs = [], alertMap, nextActionMap, filter = '', onFilter, onOpen, onBack,
+  currentUser, numbers = [], leads = [], callLogs = [], alertMap, nextActionMap, sharedPhones, filter = '', onFilter, onOpen, onBack,
 }: any) {
   const [query, setQuery] = useState('');
   const [field, setField] = useState<'all' | 'name' | 'phone' | 'form'>('all');
@@ -7246,6 +7335,7 @@ function LeadsView({
         cold,
         fresh,
         delayed: isDelayedNumber({ phone: n?.phone || record?.phone }, alertMap),
+        shared: !!sharedPhones?.has(digitsOfPhone(n?.phone || record?.phone)),
         alertDue,
         nextActionAt,
         nextActionOverdue,
@@ -7254,7 +7344,7 @@ function LeadsView({
       });
     }
     return out;
-  }, [numbers, leads, callLogs, alertMap, nextActionMap]);
+  }, [numbers, leads, callLogs, alertMap, nextActionMap, sharedPhones]);
 
   // العدّادات: كل الأرقام + كل حالة (الباردة اتفتحت وما اتصلناش — منفصلة عن الجديدة)
   const counts = useMemo(() => {
@@ -7263,6 +7353,7 @@ function LeadsView({
       map[row.status] = (map[row.status] || 0) + 1;
       // Delay خانة إضافية: الرقم بيتعدّ فيها من غير ما يخرج من خانته
       if (row.delayed) map[DELAY_ID] = (map[DELAY_ID] || 0) + 1;
+      if (row.shared) map[SHARED_ID] = (map[SHARED_ID] || 0) + 1;
     }
     return map;
   }, [rows]);
@@ -7274,6 +7365,7 @@ function LeadsView({
     if (filter === COLD_CALL_ID) list = list.filter((row) => row.cold);
     else if (filter === 'fresh-stage') list = list.filter((row) => row.fresh);
     else if (filter === DELAY_ID) list = list.filter((row) => row.delayed);
+    else if (filter === SHARED_ID) list = list.filter((row) => row.shared);
     else if (filter) list = list.filter((row) => row.status === filter);
     // المقارنة في دالة مستقلة ومختبَرة: البحث بالحروف للاسم/الفورم وبالأرقام للتليفون
     return list.filter((row) => matchLeadSearch(row, query, field));
@@ -7539,7 +7631,10 @@ const toLocalInput = (d: Date): string => {
 // ===== نافذة الإجراء (موديل ENGAZ) =====
 // تفتح بالضغط على أي رقم: الحالة، موعد الإجراء القادم (تذكير)، نتيجة الاتصال
 // (تم الرد / لم يرد)، الكومنت، وآخر التعليقات — وكلها تتحفظ بزر «إضافة إجراء».
-function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, comments = [], onOpenDetails }: any) {
+function CallFlowModal({
+  client, user, onClose, onSave, fromReminder = false, comments = [], onOpenDetails,
+  partners = [], partnerOptions = [], canManagePartners = false, onAddPartner, onRemovePartner,
+}: any) {
   const [result, setResult] = useState<'' | 'answered' | 'no-answer'>('');
   const [comment, setComment] = useState('');
   // الحالة تبدأ بحالة آخر فيدباك على العميل: مش إلزامي يغيّرها مع كل إجراء
@@ -7642,6 +7737,15 @@ function CallFlowModal({ client, user, onClose, onSave, fromReminder = false, co
                 )}
               </div>
             </div>
+
+            {/* ===== السيلز المشترك: صاحب الرقم يضيف شريك يشتغل معاه على العميل ===== */}
+            <PartnerPanel
+              partners={partners}
+              options={partnerOptions}
+              canManage={canManagePartners}
+              onAdd={(id: string) => onAddPartner?.(id) ?? Promise.resolve(false)}
+              onRemove={(id: string) => onRemovePartner?.(id) ?? Promise.resolve(false)}
+            />
 
             {/* ===== الاتصال (الرنّ الحقيقي بيحصل هنا) ===== */}
             <a href={`tel:${client.phone}`} onClick={() => setDialed(true)} className="eg-call">

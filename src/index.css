@@ -3584,6 +3584,8 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
 .fs-cold { --fs: #7c8cf8; }
 /* «Delay»: تذكير فات من غير خطوة — نفس لون شارة «اتأخر» */
 .fs-delay { --fs: var(--warn); }
+/* «Shared Leads»: أرقام زمايلي اللي أنا سيلز مشترك فيها */
+.fs-shared { --fs: #d46fae; }
 
 /* ---------- لوحة الأرقام (شبكة العدّادات) ---------- */
 .eg-dash { display: flex; flex-direction: column; gap: 12px; }
@@ -4007,6 +4009,57 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
 }
 .eg-call:hover { background: var(--tint-2); }
 .eg-hint { font-size: 11.5px; color: var(--text-dim); }
+
+/* ---------- السيلز المشترك (نافذة الإجراء) ---------- */
+.eg-partners {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--tint-1);
+}
+.eg-partners-head { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 700; color: var(--text-strong); }
+.eg-partners-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.eg-partner-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--text);
+}
+.eg-partner-chip button { display: inline-flex; padding: 2px; border-radius: 999px; color: var(--text-muted); }
+.eg-partner-chip button:hover { color: var(--danger); }
+.eg-partners-empty { font-size: 11.5px; color: var(--text-dim); }
+.eg-partners-add { display: flex; flex-wrap: wrap; gap: 8px; }
+.eg-partners-add select {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-strong);
+  font-size: 13px;
+}
+.eg-partners-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  background: var(--brand-fill);
+  color: var(--on-brand);
+  font-size: 13px;
+  font-weight: 700;
+}
+.eg-partners-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .eg-row { display: flex; align-items: center; gap: 8px; }
 .eg-row .fc-status-menu { width: 100%; }
 .eg-date-row {
