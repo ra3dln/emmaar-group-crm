@@ -69,6 +69,7 @@ import {
   feedbackBucketOf,
   feedbackByPhone,
   isColdNumber,
+  isDelayedNumber,
   isFreshNumber,
   latestFeedbackStatusOf,
 } from './feedbackBuckets';
@@ -3689,7 +3690,7 @@ function App() {
               }}
             />
           ) : (
-            <DashboardView stats={stats} clients={clients} numbers={workNumbers} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} callLogs={callLogs} onOpenStatus={(id: string) => { setLeadsFilter(id || ''); setLeadsOpen(true); }} onCompleteReminder={completeReminder} onActed={markReminderAction} />
+            <DashboardView stats={stats} clients={clients} numbers={workNumbers} reminders={reminders} properties={properties} currentUser={currentUser} impersonating={!!impersonator} callLogs={callLogs} alertMap={alertMap} onOpenStatus={(id: string) => { setLeadsFilter(id || ''); setLeadsOpen(true); }} onCompleteReminder={completeReminder} onActed={markReminderAction} />
           ))}
           {activeTab === 'clients' && isSalesView && <ClientsView
             currentUser={currentUser}
@@ -5005,7 +5006,7 @@ function MobileTabBar({ activeTab, onTab, onMore, badge = 0 }: any) {
 }
 
 // Dashboard View
-function DashboardView({ stats, clients, numbers = [], reminders, properties, currentUser, impersonating, onOpenStatus, onCompleteReminder, onActed, callLogs = [] }: any) {
+function DashboardView({ stats, clients, numbers = [], reminders, properties, currentUser, impersonating, onOpenStatus, onCompleteReminder, onActed, callLogs = [], alertMap }: any) {
   // المستحق الآن — الأحدث أولاً. والتذكير اللي اتعمل عليه إجراء (مكالمة أو كومنت)
   // بيخرج من القائمة فوراً — عشان الشارة «اتأخر» ما تروحش غير لما يتاخد إجراء.
   const dueReminders = reminders
@@ -5041,6 +5042,8 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
   const coldCalls = scopeNumbers.filter((record: any) => isColdNumber(record, coldPhones)).length;
   // «Fresh Leads» = الأرقام الجديدة اللي ما اتصلناش فيها خالص
   const freshLeads = scopeNumbers.filter((record: any) => isFreshNumber(record, calledPhones)).length;
+  // «Delay» = أرقام عليها شارة «اتأخر» (تذكير فات من غير خطوة)
+  const delayed = scopeNumbers.filter((record: any) => isDelayedNumber(record, alertMap)).length;
   const [todayRecord, setTodayRecord] = useState<Attendance | undefined>(() => getTodayCheckIn(currentUser.id));
   const myHistory = getAttendance().filter((a: Attendance) => a.userId === currentUser.id).sort((a: Attendance, b: Attendance) => b.checkInAt.localeCompare(a.checkInAt)).slice(0, 7);
   
@@ -5083,6 +5086,8 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
               ? coldCalls
               : card.id === 'fresh-stage'
               ? freshLeads
+              : card.id === DELAY_ID
+              ? delayed
               : scopeNumbers.filter((record: any) => (record.bucket || feedbackBucketOf(record)) === card.id).length;
             const pct = scopeNumbers.length ? Math.min(100, Math.round((n / scopeNumbers.length) * 100)) : 0;
             return (
@@ -7004,10 +7009,14 @@ function LeadFeedCard({ lead, record, onLeadViewed, onCall, cancelled = false, c
 // «مكالمات باردة» مش حالة فيدباك: هو رقم لسه ما اتصلنا بيه خالص.
 // والترتيب هو ترتيب ENGAZ: كل الأرقام، جديد، مكالمات باردة، متابعة، معاينة…
 const COLD_CALL_ID = 'cold-call';
+// «Delay» مش حالة فيدباك برضه: رقم عليه تذكير فات وقته من غير خطوة (isDelayedNumber).
+// خانة إضافية — الرقم بيتعدّ فيها وفي خانته الأصلية مع بعض.
+const DELAY_ID = 'delay';
 const LEAD_STATUS_LABELS: Record<string, string> = {
   '': 'All Leads',
   'fresh-stage': 'Fresh Leads',
   [COLD_CALL_ID]: 'Cold Calls',
+  [DELAY_ID]: 'Delay',
   'follow-up': 'Follow Up',
   meeting: 'Meeting',
   'after-meeting': 'Following after Meeting',
@@ -7018,7 +7027,7 @@ const LEAD_STATUS_LABELS: Record<string, string> = {
   reservation: 'Reservation',
 };
 const LEAD_STATUS_ORDER = [
-  'fresh-stage', COLD_CALL_ID, 'follow-up', 'meeting', 'after-meeting',
+  'fresh-stage', COLD_CALL_ID, DELAY_ID, 'follow-up', 'meeting', 'after-meeting',
   'reschedule', 'cancellation', 'no-answer', 'done-deal', 'reservation',
 ];
 
@@ -7029,6 +7038,7 @@ const DASH_CARDS: Array<{ id: string; label: string; cls: string }> = [
   { id: '', label: 'All Leads', cls: '' },
   { id: 'fresh-stage', label: 'Fresh Leads', cls: 'fs-fresh' },
   { id: COLD_CALL_ID, label: 'Cold Calls', cls: 'fs-cold' },
+  { id: DELAY_ID, label: 'Delay', cls: 'fs-delay' },
   { id: 'follow-up', label: 'Follow Up', cls: 'fs-follow' },
   { id: 'meeting', label: 'Meeting', cls: 'fs-meeting' },
   { id: 'after-meeting', label: 'Following after Meeting', cls: 'fs-after' },
@@ -7095,6 +7105,8 @@ type LeadRow = {
   cold?: boolean;
   // رقم جديد نازل حالاً (يدخل في فلتر «Fresh Leads»)
   fresh?: boolean;
+  // تذكير فات وقته من غير خطوة (يدخل في فلتر «Delay» وكمان في خانته الأصلية)
+  delayed?: boolean;
   // التذكير فات موعده والمندوب مخدش خطوة → الكارت أصفر (مطلوب إجراء)
   alertDue?: string;
   // «الإجراء القادم»: موعد محدد (يوم + ساعة) من التذكير — يتبان على الكارت
@@ -7233,6 +7245,7 @@ function LeadsView({
         isLead: !client,
         cold,
         fresh,
+        delayed: isDelayedNumber({ phone: n?.phone || record?.phone }, alertMap),
         alertDue,
         nextActionAt,
         nextActionOverdue,
@@ -7248,6 +7261,8 @@ function LeadsView({
     const map: Record<string, number> = {};
     for (const row of rows) {
       map[row.status] = (map[row.status] || 0) + 1;
+      // Delay خانة إضافية: الرقم بيتعدّ فيها من غير ما يخرج من خانته
+      if (row.delayed) map[DELAY_ID] = (map[DELAY_ID] || 0) + 1;
     }
     return map;
   }, [rows]);
@@ -7258,6 +7273,7 @@ function LeadsView({
     // «Fresh Leads» فلتر تاني: الأرقام الجديدة اللي نازلة حالاً
     if (filter === COLD_CALL_ID) list = list.filter((row) => row.cold);
     else if (filter === 'fresh-stage') list = list.filter((row) => row.fresh);
+    else if (filter === DELAY_ID) list = list.filter((row) => row.delayed);
     else if (filter) list = list.filter((row) => row.status === filter);
     // المقارنة في دالة مستقلة ومختبَرة: البحث بالحروف للاسم/الفورم وبالأرقام للتليفون
     return list.filter((row) => matchLeadSearch(row, query, field));

@@ -3582,6 +3582,8 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
 
 /* «مكالمات باردة»: رقم ما اتصلنا بيه خالص — لون مستقل عن باقي الحالات */
 .fs-cold { --fs: #7c8cf8; }
+/* «Delay»: تذكير فات من غير خطوة — نفس لون شارة «اتأخر» */
+.fs-delay { --fs: var(--warn); }
 
 /* ---------- لوحة الأرقام (شبكة العدّادات) ---------- */
 .eg-dash { display: flex; flex-direction: column; gap: 12px; }

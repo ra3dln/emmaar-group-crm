@@ -222,6 +222,15 @@ export const isColdNumber = (
   return coldPhones.has(phone);
 };
 
+// «Delay»: رقم عليه تذكير فات وقته والمندوب ما اتصرفش بعده — نفس الأرقام اللي
+// عليها شارة «اتأخر» الصفرا (alertMap = «محتاج إجراء» من src/reminders.ts).
+// خانة إضافية: الرقم بيفضل في خانته الأصلية كمان (Follow Up مثلاً)، وبيخرج من
+// Delay أول ما المندوب يتصل أو يكتب كومنت.
+export const isDelayedNumber = (record: any, alertMap?: Map<string, string> | null): boolean => {
+  const phone = digitsOfPhone(record?.phone);
+  return !!phone && !!alertMap && alertMap.has(phone);
+};
+
 export type WorkNumber = {
   key: string;
   name: string;
