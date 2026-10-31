@@ -5612,13 +5612,19 @@ const NEW_CLIENT_FEEDBACK = 'عميل جديد — لم يتم التواصل م
 // (فيه أيضاً السقوط على المرحلة عند غياب حالة، حتى لا تبقى عدّادات اللوحة صفراً)
 // آخر فيدباك للعميل: نُفضّل آخر كومنت حقيقي يحمل حالة، وإلا آخر كومنت خالص.
 // (اللوجات — اتصال/تذكير/واتساب — ما بتظهرش هنا: الكومنت هو كلام المندوب.)
+// نص نتيجة الاتصال («No answer» / «تم الرد») كومنت حقيقي هنا — لو هو الأحدث
+// يظهر هو، مش كومنت أقدم منه (نفس قاعدة commentsOfTarget).
 const lastCommentOf = (c: any): ClientActivity | null => {
-  const comments = commentActivitiesOf(c) as ClientActivity[];
-  return (
-    comments.find((a: ClientActivity) => a?.status) ||
-    comments[0] ||
-    null
-  );
+  const acts = Array.isArray(c?.activities) ? c.activities : [];
+  let best: ClientActivity | null = null;
+  for (const a of acts) {
+    if (!isCommentActivity(a)) continue;
+    const text = cleanCommentText(a?.text);
+    if (!text || (isSystemOnlyText(text) && !isCallResultText(text))) continue;
+    // الأحدث بالوقت — ولو الوقت متساوي/ناقص يفضل الأول (القائمة الأحدث أولاً)
+    if (!best || String(a?.at || '') > String(best.at || '')) best = { ...a, text };
+  }
+  return best;
 };
 
 // ===== اسم كاتب الكومنت =====

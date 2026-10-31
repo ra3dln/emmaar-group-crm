@@ -190,6 +190,11 @@ check(
   'آخر التعليقات بتحتفظ بنص نتيجة الاتصال',
   /isCallResultText\(text\)/.test(app) && /isSystemOnlyText\(text\)/.test(app)
 );
+// كارت العميل: آخر كومنت = الأحدث بالوقت، و«No answer» الأحدث يظهر بدل كومنت أقدم
+check(
+  'كارت العميل بيعرض آخر كومنت (حتى لو No answer) مش أول كومنت',
+  /const lastCommentOf = [\s\S]{0,700}isCallResultText\(text\)[\s\S]{0,300}> String\(best\.at/.test(app)
+);
 
 // ===== ٩) «Add Action» بيحفظ فعلاً على الشاشات القصيرة =====
 // الشيت عمود مرن (flex column) وله تمرير داخلي: أبناؤه لازم ما ينضغطوش،
