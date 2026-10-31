@@ -93,7 +93,8 @@ const snapshots = feedbackByPhone(
 );
 check('الفهرس يوحّد صيغة الهاتف', snapshots.get('01000000099')?.status === 'meeting');
 check('الأحدث هو الذي يحدد الحالة', snapshots.get('01000000099')?.note === 'موعد الخميس');
-check('المكالمة بلا رد تُحسب «لا يوجد رد»', snapshots.get('01000000066')?.status === 'no-answer');
+// «لم يرد» ما بتنقلش الرقم من خانته — فمالهاش حالة في الفهرس
+check('المكالمة بلا رد ما بتغيّرش خانة الرقم', snapshots.has('01000000066') && snapshots.get('01000000066')?.status === '');
 check('سبب الإلغاء يصل مع بطاقة الفيدباك', snapshots.get('01000000077')?.cancelReason === 'low-budget');
 
 const numbers = buildWorkNumbers(
@@ -115,7 +116,7 @@ check(
 check('الرقم الجديد يقع على «مرحلة جديدة»', numbers.find((n) => n.phone === '01000000088')?.bucket === 'fresh-stage');
 check('الرقم الملغي يظهر بإلغائه وسببه', numbers.find((n) => n.phone === '01000000077')?.bucket === 'cancellation' &&
   numbers.find((n) => n.phone === '01000000077')?.cancelReason === 'low-budget');
-check('المكالمة بلا رد تضع الرقم على «لا يوجد رد»', numbers.find((n) => n.phone === '01000000066')?.bucket === 'no-answer');
+check('المكالمة بلا رد بتسيب الرقم في Fresh (مش «لا يوجد رد»)', numbers.find((n) => n.phone === '01000000066')?.bucket === 'fresh-stage');
 check('العميل المسجّل يحمل مرحلة المراحل', numbers.find((n) => n.phone === '01000000009')?.stage === 'lost');
 check('كل رقم له مرحلة نهائية', numbers.every((n) => !!n.stage));
 check('حالة التوزيع الجديدة تنتهي لمرحلة جديدة', LEAD_STATUS_TO_FEEDBACK_STATUS.new === 'fresh-stage');

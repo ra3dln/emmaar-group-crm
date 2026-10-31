@@ -92,13 +92,10 @@ check(
     /card\.id === 'fresh-stage'\s*\n\s*\? freshLeads/.test(dash)
 );
 check(
-  '«Cold Calls» = اتصلنا فيه وما ردّنا · «Fresh Leads» = ما اتصلناش فيه خالص',
-  /export const isColdNumber = \(/.test(buckets) &&
-    /export const isFreshNumber = \(/.test(buckets) &&
-    /export const coldPhonesOf = \(/.test(buckets) &&
-    /if \(bucket !== 'fresh-stage'\) return false;/.test(buckets) &&
-    /if \(calledPhones\.has\(digitsOfPhone\(record\?\.phone\)\)\) return false;/.test(buckets) &&
-    /return coldPhones\.has\(phone\);/.test(buckets)
+  '«لم يرد» ما بتنقلش الرقم لـ Cold Calls · Fresh = مرحلة جديدة حتى لو اتصلنا',
+  /export const isColdNumber = \([\s\S]{0,120}\): boolean => false;/.test(buckets) &&
+    /export const isFreshNumber = \([\s\S]{0,160}=== 'fresh-stage';/.test(buckets) &&
+    /export const coldPhonesOf = \(/.test(buckets)
 );
 check(
   'الفرق بالحالة مش بالوقت — الأرقام الجديدة ما تزاحش لـ Cold Calls',
@@ -198,7 +195,7 @@ check(
 );
 check(
   'حالة فارغة ما بتقدرش تمسح حالة معروفة',
-  /if \(!snapshot\.status && prev\?\.status\)/.test(buckets)
+  /if \(status && \(!prev\.status \|\| at >= String\(prev\.statusAt/.test(buckets)
 );
 
 // ===== ١٠) الوقت: وقت الكامبين بالـUTC (زي ما هو مسجَّل في الفورم) =====

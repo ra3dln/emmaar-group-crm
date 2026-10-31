@@ -69,7 +69,7 @@ check(
 );
 
 const snapshotNoAnswer = feedbackByPhone([feedback('no-answer')], [callLog('no-answer')]);
-check('رقم موزَّع: فيدباك no answer → الحالة no-answer', snapshotNoAnswer.get('01001234567')?.status === 'no-answer');
+check('رقم موزَّع: فيدباك no answer → الرقم بيفضل في خانته (مفيش حالة)', snapshotNoAnswer.get('01001234567')?.status === '');
 
 // فيدباك بلا حالة صريحة ما يمسحش حالة معروفة
 const snapshotEmpty = feedbackByPhone(
@@ -117,15 +117,36 @@ check(
   followClient?.bucket
 );
 check(
-  'اختيار No Answer صراحةً لسه بيروح Cold Calls',
+  'اختيار No Answer صراحةً بعد Follow Up → يفضل Follow Up',
   feedbackByPhone(
-    [feedback('follow-up', '2026-10-28T12:00:00.000Z'), { ...feedback('no-answer', '2026-10-31T12:00:00.000Z'), id: 'f-na' }],
+    [{ ...feedback('no-answer', '2026-10-31T12:00:00.000Z'), id: 'f-na' }, feedback('follow-up', '2026-10-28T12:00:00.000Z')],
     [callLog('no-answer', '2026-10-31T12:00:00.000Z')]
-  ).get(PHONE)?.status === 'no-answer'
+  ).get(PHONE)?.status === 'follow-up'
 );
+const freshCalledNoAnswer = buildWorkNumbers(
+  [],
+  [{ id: 'l-na', name: 'رقم', phone: PHONE, status: 'contacted', salesId: 'u1' }],
+  feedbackByPhone([{ ...feedback('no-answer'), id: 'f-na2' }], [callLog('no-answer')])
+)[0];
 check(
-  'رقم كل مكالماته لم يرد ومالوش حالة مختارة لسه no-answer',
-  feedbackByPhone([], [callLog('no-answer')]).get(PHONE)?.status === 'no-answer'
+  'رقم Fresh اتصلنا بيه وما ردّش → يفضل Fresh (مش Cold Calls ولا Follow Up)',
+  freshCalledNoAnswer?.bucket === 'fresh-stage' &&
+    isFreshNumber(freshCalledNoAnswer, new Set([PHONE])) &&
+    !isColdNumber(freshCalledNoAnswer, coldPhonesOf([callLog('no-answer')])),
+  freshCalledNoAnswer?.bucket
+);
+const freshClientNoAnswer = buildWorkNumbers(
+  [{
+    id: 'c-na', name: 'عميل', phone: PHONE, stage: 'contacted',
+    activities: [{ id: 'a1', type: 'feedback', text: 'No answer', status: 'no-answer', at: AT }],
+  }],
+  [],
+  feedbackByPhone([], [callLog('no-answer')])
+)[0];
+check(
+  'عميل جديد كل اللي عليه No Answer → يفضل Fresh',
+  freshClientNoAnswer?.bucket === 'fresh-stage',
+  freshClientNoAnswer?.bucket
 );
 
 // ===== ٣) لوحة الأرقام: كل رقم في مكان واحد وبالحالة الصح =====
@@ -207,21 +228,20 @@ const split = buildWorkNumbers(
   )
 );
 const calledPhones = new Set(['01000000005']);
-// «Cold Calls» = اتصلنا فيه وآخر محاولة «لم يرد» — مش بالوقت.
-// (القاعدة القديمة كانت وقتية: بعد ٢٤ ساعة أي رقم ما اتصلناش فيه بيبقى «بارد»،
-//  فكانت الأرقام الجديدة بتزاح من Fresh Leads وتدخل Cold Calls.)
+// «لم يرد» ما بتنقلش الرقم من خانته: Cold Calls فاضية، والرقم اللي اتصلنا بيه
+// وما ردّش بيفضل في Fresh.
 const coldPhones = coldPhonesOf([{ clientPhone: '01000000005', result: 'no-answer', createdAt: AT }]);
 const cold = split.filter((n) => isColdNumber(n, coldPhones));
 const fresh = split.filter((n) => isFreshNumber(n, calledPhones));
-check('«Cold Calls» = اتصلنا فيه وما ردّنا (١)', cold.length === 1, `وجد ${cold.length}`);
-check('«Fresh Leads» = الأرقام اللي ما اتصلناش فيها خالص (٤)', fresh.length === 4, `وجد ${fresh.length}`);
+check('«Cold Calls» فاضية (لم يرد ما بتنقلش الرقم)', cold.length === 0, `وجد ${cold.length}`);
+check('«Fresh Leads» = كل الأرقام الجديدة حتى اللي ما ردّتش (٥)', fresh.length === 5, `وجد ${fresh.length}`);
 check(
   'الرقم الواحد ما بيحسبش في الاتنين',
   cold.every((n) => !fresh.some((f) => f.key === n.key))
 );
 check(
-  'الرقم اللي اتصلنا بيه وما ردّنا = بارد (مش جديد)',
-  cold.some((n) => n.phone === '01000000005') && !fresh.some((n) => n.phone === '01000000005')
+  'الرقم اللي اتصلنا بيه وما ردّنا بيفضل Fresh',
+  fresh.some((n) => n.phone === '01000000005')
 );
 check(
   'الرقم اللي اتفتح من التوزيع (-opening) بيفضل Fresh لحد ما يتصل بيه',

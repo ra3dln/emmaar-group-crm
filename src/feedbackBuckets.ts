@@ -47,10 +47,32 @@ export const latestFeedbackStatusOf = (record: any): string => {
   return found ? String(found.status) : '';
 };
 
+// ===== «لم يرد» ما بتنقلش الرقم من خانته =====
+// الرقم بيفضل في خانته (Fresh / Follow Up / …) لو اتسجّل عليه «No Answer» —
+// سواء نتيجة مكالمة أو حالة اختارها المندوب. فالحالة دي ما بتتحسبش في الخانة.
+const NO_ANSWER = 'no-answer';
+const bucketStatus = (status: any): string => (String(status || '') === NO_ANSWER ? '' : String(status || ''));
+
+// آخر حالة بتحدد الخانة (من غير «لم يرد») + وقتها
+const latestBucketActivityOf = (record: any): any => {
+  const activities: any[] = Array.isArray(record?.activities) ? record.activities : [];
+  return activities.find((activity) => !!bucketStatus(activity?.status)) || null;
+};
+
+// اختيار «No Answer» بيحرّك المرحلة لـ contacted — فلو مفيش غيره على العميل،
+// المرحلة دي مش خانة حقيقية: الرقم لسه في Fresh.
+const stageBucketOf = (record: any): string => {
+  const stage = String(record?.stage || '');
+  const activities: any[] = Array.isArray(record?.activities) ? record.activities : [];
+  const onlyNoAnswer = activities.some((a) => a?.status === NO_ANSWER);
+  if (stage === 'contacted' && onlyNoAnswer) return 'fresh-stage';
+  return STAGE_TO_FEEDBACK_STATUS[stage] || '';
+};
+
 export const feedbackBucketOf = (record: any): string => {
-  const status = latestFeedbackStatusOf(record);
+  const status = bucketStatus(latestBucketActivityOf(record)?.status);
   if (status) return status;
-  return STAGE_TO_FEEDBACK_STATUS[String(record?.stage || '')] || '';
+  return stageBucketOf(record);
 };
 
 // ===== فهرس الفيدباك بالرقم =====
@@ -69,8 +91,8 @@ export type PhoneSnapshot = {
   // اسم كاتب آخر كلام على الرقم (يتبان جنب الملاحظة)
   noteBy?: string;
   at: string;
-  // الحالة جاية من سجل مكالمة بس (مش حالة اختارها المندوب)
-  fromCall?: boolean;
+  // وقت الحالة نفسها (at ممكن يكون أحدث: حدث «لم يرد» بعدها ما غيّرش الحالة)
+  statusAt?: string;
 };
 
 export const feedbackByPhone = (
@@ -101,17 +123,25 @@ export const feedbackByPhone = (
     notes.set(key, { note: text, at, by: String(by || '') });
   };
 
+  // الحالة الأحدث بتكسب (ولو نفس اللحظة: اللي اتعالج بعد — الفيدباك بعد المكالمة).
+  // حالة فارغة («لم يرد» أو فيدباك من غير حالة) ما بتمسحش حالة معروفة، أيّاً كان
+  // ترتيب البيانات — بس بتحدّث وقت آخر حدث على الرقم.
   const put = (phone: any, snapshot: PhoneSnapshot) => {
     const key = digitsOfPhone(phone);
     if (!key) return;
+    const status = bucketStatus(snapshot.status);
+    const at = String(snapshot.at || '');
     const prev = map.get(key);
-    if (prev && String(prev.at) > String(snapshot.at)) return;
-    // حالة فارغة ما بتقدرش تمسح حالة معروفة (فيدباك من غير حالة صريحة)
-    if (!snapshot.status && prev?.status) {
-      if (String(snapshot.at) > String(prev.at)) prev.at = snapshot.at;
+    if (!prev) {
+      map.set(key, { ...snapshot, status, cancelReason: status ? snapshot.cancelReason : '', statusAt: status ? at : '' });
       return;
     }
-    map.set(key, snapshot);
+    if (at > String(prev.at)) prev.at = at;
+    if (status && (!prev.status || at >= String(prev.statusAt || ''))) {
+      prev.status = status;
+      prev.cancelReason = snapshot.cancelReason;
+      prev.statusAt = at;
+    }
   };
 
   // ===== ترتيب مهم =====
@@ -120,16 +150,12 @@ export const feedbackByPhone = (
   // المندوب في الفيدباك (follow up / meeting / done deal …)، لا نتيجة المكالمة
   // الضمنية. فلو المعالجة كانت بالعكس، المكالمة كانت هتنسخ الحالة وترجّع
   // الرقم لـ follow-up حتى لو المندوب حطّه meeting.
-  // آخر حالة صريحة اختارها المندوب على كل رقم (من بطاقات الفيدباك)
-  const chosen = new Map<string, { status: string; cancelReason: string; at: string }>();
-
   for (const log of callLogs || []) {
     put(log?.clientPhone, {
-      status: log?.result === 'no-answer' ? 'no-answer' : 'follow-up',
+      status: log?.result === 'no-answer' ? NO_ANSWER : 'follow-up',
       cancelReason: '',
       note: '',
       at: String(log?.createdAt || ''),
-      fromCall: true,
     });
     putNote(log?.clientPhone, log?.comment, String(log?.createdAt || ''), String(log?.salesName || ''));
   }
@@ -143,23 +169,6 @@ export const feedbackByPhone = (
       at,
     });
     putNote(feedback?.clientPhone, feedback?.feedback, at, nameOf(feedback?.userId));
-    const key = digitsOfPhone(feedback?.clientPhone);
-    const status = String(feedback?.status || '');
-    if (key && status && !(String(chosen.get(key)?.at || '') > at)) {
-      chosen.set(key, { status, cancelReason: String(feedback?.cancelReason || ''), at });
-    }
-  }
-
-  // ===== مكالمة «لم يرد» من غير حالة ما بتنقلش الرقم لـ Cold Calls =====
-  // لو المندوب حطّ الرقم Follow Up (أو أي حالة)، مكالمة لم يرد بعدها من غير
-  // حالة مختارة ما بتغيّرش الحالة — الرقم بيفضل في الحالة اللي اختارها.
-  for (const [key, entry] of map) {
-    const pick = chosen.get(key);
-    if (entry.fromCall && entry.status === 'no-answer' && pick) {
-      entry.status = pick.status;
-      entry.cancelReason = pick.cancelReason;
-      entry.fromCall = false;
-    }
   }
 
   // الملاحظة = آخر كلام مندوب على الرقم (وليس آخر لوج)
@@ -222,33 +231,21 @@ export const coldPhonesOf = (callLogs: any[] = []): Set<string> => {
   return out;
 };
 
-// «Fresh Leads»: رقم في مرحلة جديدة **ما اتصلناش فيه خالص** (لسه شغل جديد)
+// «Fresh Leads»: رقم في مرحلة جديدة — حتى لو اتصلنا بيه وما ردّش
+// («لم يرد» ما بتطلّعش الرقم من Fresh). `calledPhones` باقي للتوافق بس.
 export const isFreshNumber = (
   record: any,
-  calledPhones: Set<string>,
-  now: number = Date.now()
-): boolean => {
-  const bucket = String(record?.bucket || feedbackBucketOf(record));
-  if (bucket !== 'fresh-stage') return false;
-  if (calledPhones.has(digitsOfPhone(record?.phone))) return false;
-  return true;
-};
+  _calledPhones?: Set<string>,
+  _now: number = Date.now()
+): boolean => String(record?.bucket || feedbackBucketOf(record)) === 'fresh-stage';
 
-// «Cold Calls»: اتصلنا فيه وآخر محاولة «لم يرد» (أو حالته «لم يرد»)
-// بنظره: الأرقام اللي حالتها «متابعة/مقابلة» مكانها الحقيقي — مش بارد.
+// «Cold Calls»: مبقاش بيشيل أرقام — «لم يرد» (نتيجة مكالمة أو حالة مختارة)
+// ما بتنقلش الرقم من خانته (Fresh / Follow Up / …). الخانة باقية فاضية.
 export const isColdNumber = (
-  record: any,
-  coldPhones: Set<string>,
-  now: number = Date.now()
-): boolean => {
-  const bucket = String(record?.bucket || feedbackBucketOf(record));
-  const phone = digitsOfPhone(record?.phone);
-  if (!phone) return false;
-  // حالة «لم يرد» صراحةً = بارد
-  if (bucket === 'no-answer') return true;
-  if (bucket !== 'fresh-stage') return false;
-  return coldPhones.has(phone);
-};
+  _record?: any,
+  _coldPhones?: Set<string>,
+  _now: number = Date.now()
+): boolean => false;
 
 // «Delay»: رقم عليه تذكير فات وقته والمندوب ما اتصرفش بعده — نفس الأرقام اللي
 // عليها شارة «اتأخر» الصفرا (alertMap = «محتاج إجراء» من src/reminders.ts).
@@ -319,16 +316,20 @@ export const buildWorkNumbers = (
     const snapshot = snapshots.get(key);
     // حالة العميل: الصريحة في خطّه الزمني، وإلا آخر فيدباك/مكالمة على نفس الرقم
     // (مكالمة من جهاز تاني أو رقم اتحوّل لعميل بعد ما اتصلنا بيه).
-    const actStatus = latestFeedbackStatusOf(client);
-    const actAt = String(activities.find((a: any) => !!a?.status)?.at || '');
+    // («لم يرد» مش خانة — بيتعدّى عليها في الاتنين)
+    const actLatest = latestBucketActivityOf(client);
+    const actStatus = bucketStatus(actLatest?.status);
+    const actAt = String(actLatest?.at || '');
     const snapStatus = String(snapshot?.status || '');
-    const snapAt = String(snapshot?.at || '');
-    // «لم يرد» جاية من سجل مكالمة بس ما بتغطّيش على حالة اختارها المندوب في خطّه
-    const callOnlyNoAnswer = !!snapshot?.fromCall && snapStatus === 'no-answer' && !!actStatus;
+    const snapAt = String(snapshot?.statusAt || snapshot?.at || '');
+    // اتصلنا بيه وكل اللي عليه «لم يرد» → المرحلة contacted مش خانة حقيقية (لسه Fresh)
+    const onlyNoAnswerCalls = !!snapshot && !snapStatus && !actStatus;
+    const stageBucket =
+      onlyNoAnswerCalls && String(client?.stage || '') === 'contacted' ? 'fresh-stage' : stageBucketOf(client);
     const bucket =
-      snapStatus && (!actAt || snapAt >= actAt) && !callOnlyNoAnswer
+      snapStatus && (!actAt || snapAt >= actAt)
         ? snapStatus
-        : actStatus || STAGE_TO_FEEDBACK_STATUS[String(client?.stage || '')] || '';
+        : actStatus || stageBucket;
     // «مفتوح» = المندوب فتح الرقم من التوزيع (viewed) أو كتب عليه كلام.
     // وعميل مش من التوزيع (أضافه بنفسه) = مفتوح برضه.
     const lead = leadByPhone.get(key);
@@ -365,9 +366,13 @@ export const buildWorkNumbers = (
     const key = digitsOfPhone(phone) || `lead:${lead?.id}`;
     if (seen.has(key)) continue; // الرقم اتحوّل لعميل مسجّل — ما يتكررش
     const snapshot = snapshots.get(key);
+    // أي مكالمة بتخلّي حالة الرقم في التوزيع «contacted» — فلو كل اللي عليه
+    // «لم يرد»، الحالة دي مش خانة حقيقية: الرقم لسه Fresh.
+    const leadStatus = String(lead?.status || '');
+    const onlyNoAnswerCalls = !!snapshot && !snapshot.status && leadStatus === 'contacted';
     const bucket =
       snapshot?.status ||
-      LEAD_STATUS_TO_FEEDBACK_STATUS[String(lead?.status || '')] ||
+      (onlyNoAnswerCalls ? 'fresh-stage' : LEAD_STATUS_TO_FEEDBACK_STATUS[leadStatus]) ||
       'fresh-stage';
     out.push({
       key,
