@@ -69,6 +69,8 @@ export type PhoneSnapshot = {
   // اسم كاتب آخر كلام على الرقم (يتبان جنب الملاحظة)
   noteBy?: string;
   at: string;
+  // الحالة جاية من سجل مكالمة بس (مش حالة اختارها المندوب)
+  fromCall?: boolean;
 };
 
 export const feedbackByPhone = (
@@ -118,12 +120,16 @@ export const feedbackByPhone = (
   // المندوب في الفيدباك (follow up / meeting / done deal …)، لا نتيجة المكالمة
   // الضمنية. فلو المعالجة كانت بالعكس، المكالمة كانت هتنسخ الحالة وترجّع
   // الرقم لـ follow-up حتى لو المندوب حطّه meeting.
+  // آخر حالة صريحة اختارها المندوب على كل رقم (من بطاقات الفيدباك)
+  const chosen = new Map<string, { status: string; cancelReason: string; at: string }>();
+
   for (const log of callLogs || []) {
     put(log?.clientPhone, {
       status: log?.result === 'no-answer' ? 'no-answer' : 'follow-up',
       cancelReason: '',
       note: '',
       at: String(log?.createdAt || ''),
+      fromCall: true,
     });
     putNote(log?.clientPhone, log?.comment, String(log?.createdAt || ''), String(log?.salesName || ''));
   }
@@ -137,6 +143,23 @@ export const feedbackByPhone = (
       at,
     });
     putNote(feedback?.clientPhone, feedback?.feedback, at, nameOf(feedback?.userId));
+    const key = digitsOfPhone(feedback?.clientPhone);
+    const status = String(feedback?.status || '');
+    if (key && status && !(String(chosen.get(key)?.at || '') > at)) {
+      chosen.set(key, { status, cancelReason: String(feedback?.cancelReason || ''), at });
+    }
+  }
+
+  // ===== مكالمة «لم يرد» من غير حالة ما بتنقلش الرقم لـ Cold Calls =====
+  // لو المندوب حطّ الرقم Follow Up (أو أي حالة)، مكالمة لم يرد بعدها من غير
+  // حالة مختارة ما بتغيّرش الحالة — الرقم بيفضل في الحالة اللي اختارها.
+  for (const [key, entry] of map) {
+    const pick = chosen.get(key);
+    if (entry.fromCall && entry.status === 'no-answer' && pick) {
+      entry.status = pick.status;
+      entry.cancelReason = pick.cancelReason;
+      entry.fromCall = false;
+    }
   }
 
   // الملاحظة = آخر كلام مندوب على الرقم (وليس آخر لوج)
@@ -300,8 +323,10 @@ export const buildWorkNumbers = (
     const actAt = String(activities.find((a: any) => !!a?.status)?.at || '');
     const snapStatus = String(snapshot?.status || '');
     const snapAt = String(snapshot?.at || '');
+    // «لم يرد» جاية من سجل مكالمة بس ما بتغطّيش على حالة اختارها المندوب في خطّه
+    const callOnlyNoAnswer = !!snapshot?.fromCall && snapStatus === 'no-answer' && !!actStatus;
     const bucket =
-      snapStatus && (!actAt || snapAt >= actAt)
+      snapStatus && (!actAt || snapAt >= actAt) && !callOnlyNoAnswer
         ? snapStatus
         : actStatus || STAGE_TO_FEEDBACK_STATUS[String(client?.stage || '')] || '';
     // «مفتوح» = المندوب فتح الرقم من التوزيع (viewed) أو كتب عليه كلام.

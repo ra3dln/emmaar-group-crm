@@ -91,6 +91,43 @@ const snapshotNewerCall = feedbackByPhone(
 );
 check('مكالمة أحدث من الفيدباك → حالتها هي الأحدث', snapshotNewerCall.get('01001234567')?.status === 'follow-up');
 
+// ===== Follow Up منفصل عن Cold Calls =====
+// رقم حالته Follow Up وبعدها سجل مكالمة «لم يرد» من غير حالة مختارة —
+// كان بيتحسب no-answer فيروح Cold Calls. لازم يفضل Follow Up.
+const snapFollowThenBareNoAnswer = feedbackByPhone(
+  [feedback('follow-up', '2026-10-28T12:23:06.000Z')],
+  [callLog('no-answer', '2026-10-31T12:49:44.000Z')]
+);
+check(
+  'Follow Up + مكالمة لم يرد بعدها من غير حالة → يفضل follow-up (مش Cold Calls)',
+  snapFollowThenBareNoAnswer.get(PHONE)?.status === 'follow-up',
+  snapFollowThenBareNoAnswer.get(PHONE)?.status
+);
+const followClient = buildWorkNumbers(
+  [{
+    id: 'c-fu', name: 'عميل', phone: PHONE, stage: 'contacted',
+    activities: [{ id: 'a1', type: 'feedback', text: 'هكلمه تاني', status: 'follow-up', at: '2026-10-28T12:23:06.000Z' }],
+  }],
+  [],
+  feedbackByPhone([], [callLog('no-answer', '2026-10-31T12:49:44.000Z')])
+)[0];
+check(
+  'عميل Follow Up + مكالمة لم يرد من غير حالة → مش Cold Calls',
+  followClient?.bucket === 'follow-up' && !isColdNumber(followClient, coldPhonesOf([callLog('no-answer', '2026-10-31T12:49:44.000Z')])),
+  followClient?.bucket
+);
+check(
+  'اختيار No Answer صراحةً لسه بيروح Cold Calls',
+  feedbackByPhone(
+    [feedback('follow-up', '2026-10-28T12:00:00.000Z'), { ...feedback('no-answer', '2026-10-31T12:00:00.000Z'), id: 'f-na' }],
+    [callLog('no-answer', '2026-10-31T12:00:00.000Z')]
+  ).get(PHONE)?.status === 'no-answer'
+);
+check(
+  'رقم كل مكالماته لم يرد ومالوش حالة مختارة لسه no-answer',
+  feedbackByPhone([], [callLog('no-answer')]).get(PHONE)?.status === 'no-answer'
+);
+
 // ===== ٣) لوحة الأرقام: كل رقم في مكان واحد وبالحالة الصح =====
 const numbers = buildWorkNumbers(
   [clientWith('follow-up'), { ...clientWith('meeting'), id: 'c2', phone: '01112223344' }],
