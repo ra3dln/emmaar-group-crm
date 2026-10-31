@@ -4,7 +4,12 @@
 // المرحلة من تبويب «المراحل») بلا أي فيدباك — فكانت البطاقة تظهر في القائمة
 // والعداد يبقى صفراً. لذلك عند غياب حالة فيدباك نسقط على المرحلة الحالية.
 
-import { cleanCommentText, commentActivitiesOf, isSystemOnlyText } from '../shared/comments.js';
+import { cleanCommentText, isCallResultText, isCommentActivity, isSystemOnlyText } from '../shared/comments.js';
+
+// نص يتعرض كملاحظة على الكارت: كلام المندوب + نص نتيجة الاتصال («No answer» /
+// «تم الرد») — لأن «No answer» الأحدث هو آخر كومنت فعلاً ولازم يظهر بدل اللي قبله.
+const isNoteText = (text: string): boolean =>
+  !!text && (!isSystemOnlyText(text) || isCallResultText(text));
 
 export const STAGE_TO_FEEDBACK_STATUS: Record<string, string> = {
   new: 'fresh-stage',
@@ -72,8 +77,8 @@ export const feedbackByPhone = (
   users: any[] = []
 ): Map<string, PhoneSnapshot> => {
   const map = new Map<string, PhoneSnapshot>();
-  // آخر كلام كتبه المندوب على كل رقم — منفصل عن الحالة، لأن لوج النظام
-  // (زي «No answer») مالوش كلام، ومن حقّه ما يمسحش كلام المندوب اللي قبله.
+  // آخر كومنت على كل رقم — منفصل عن الحالة (الحالة ممكن تيجي من بطاقة بلا كلام).
+  // «No answer» الأحدث بيظهر هو، مش الكومنت اللي قبله.
   const notes = new Map<string, { note: string; at: string; by: string }>();
   // اسم الكاتب: من سجل المكالمة (محفوظ) أو من بطاقة الفيدباك (بالمعرّف بس)
   const nameOf = (id: any) => {
@@ -87,8 +92,8 @@ export const feedbackByPhone = (
     const key = digitsOfPhone(phone);
     if (!key) return;
     const text = cleanCommentText(raw);
-    // نص آلي لوحده (لوج) مش كلام مندوب — ما يتكتبش كملاحظة
-    if (!text || isSystemOnlyText(text)) return;
+    // لوج خالص (اتصال: … / تذكير / واتساب) مش كومنت — ما يتكتبش كملاحظة
+    if (!isNoteText(text)) return;
     const prev = notes.get(key);
     if (prev && String(prev.at) > String(at)) return;
     notes.set(key, { note: text, at, by: String(by || '') });
@@ -280,9 +285,14 @@ export const buildWorkNumbers = (
     const phone = String(client?.phone || '');
     const key = digitsOfPhone(phone) || `client:${client?.id}`;
     const activities: any[] = Array.isArray(client?.activities) ? client.activities : [];
-    // كلام المندوب فقط (لا لوجات) — هو اللي يتعرض كملاحظة على الرقم
-    const commentActs = commentActivitiesOf(client);
-    const lastActivity = commentActs.find((a: any) => !!String(a?.text || '').trim());
+    // الكومنتات (لا لوجات) — وآخرها بالوقت هو اللي يتعرض كملاحظة على الرقم
+    const commentActs = activities
+      .filter((a: any) => isCommentActivity(a) && isNoteText(cleanCommentText(a?.text)))
+      .map((a: any) => ({ ...a, text: cleanCommentText(a?.text) }));
+    const lastActivity = commentActs.reduce(
+      (best: any, a: any) => (!best || String(a?.at || '') > String(best?.at || '') ? a : best),
+      null
+    );
     const snapshot = snapshots.get(key);
     // حالة العميل: الصريحة في خطّه الزمني، وإلا آخر فيدباك/مكالمة على نفس الرقم
     // (مكالمة من جهاز تاني أو رقم اتحوّل لعميل بعد ما اتصلنا بيه).

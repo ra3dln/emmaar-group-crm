@@ -239,8 +239,34 @@ const noteOld = feedbackByPhone(
   ]
 );
 check(
-  'اللوج الجديد ما بيمسحش كلام المندوب اللي قبله',
-  noteOld.get('01006665555')?.note === 'طلب معاينة'
+  '«No answer» الأحدث هو آخر كومنت على الرقم (مش الكومنت اللي قبله)',
+  noteOld.get('01006665555')?.note === 'No answer'
+);
+const workNoAnswer = buildWorkNumbers(
+  [
+    {
+      id: 'c9',
+      name: 'عميل',
+      phone: '01006664444',
+      stage: 'contacted',
+      activities: [
+        { id: 'a2', type: 'feedback', text: 'No answer', status: 'no-answer', at: '2026-10-25T12:00:00.000Z', by: 'mohamed' },
+        { id: 'a1', type: 'feedback', text: 'Low budget', status: 'cancellation', at: '2026-10-24T12:00:00.000Z', by: 'mohamed' },
+      ],
+    },
+  ],
+  [],
+  new Map()
+);
+check(
+  'كارت العميل في صفحة الأرقام بيعرض «No answer» الأحدث مش أول كومنت',
+  workNoAnswer[0]?.salesNote === 'No answer' && workNoAnswer[0]?.salesNoteBy === 'mohamed',
+  JSON.stringify(workNoAnswer[0]?.salesNote)
+);
+// لوج خالص («تم إنشاء تذكير …») لسه مش بيظهر كملاحظة
+check(
+  'اللوج الخالص لسه ما بيظهرش كملاحظة',
+  !feedbackByPhone([], [{ clientPhone: '01006663333', comment: 'تم إنشاء تذكير للمتابعة', createdAt: AT }]).get('01006663333')?.note
 );
 
 console.log(`\n✅ نجحت ${passed} فحوصات (انتقال الحالة من الفيدباك)`);
