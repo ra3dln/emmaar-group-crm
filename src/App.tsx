@@ -7652,15 +7652,23 @@ function CallFlowModal({
   const [done, setDone] = useState(false);
   const commentRef = useRef<HTMLTextAreaElement>(null);
 
+  // آخر موعد اقترحناه تلقائياً — عشان نعرف إن الموعد الحالي مش اختيار المندوب
+  const suggestedAtRef = useRef('');
+
   // الموعد المقترح: بعد ساعتين لو لم يرد، وبعد يوم لو تم الرد
   const pick = (r: 'answered' | 'no-answer') => {
     setResult(r);
     // في مسار التذكير لا نقترح موعداً جديداً تلقائياً — التذكير الحالي ينتهي،
     // ولو عايز متابعة يحددها بنفسه من حقل الموعد.
-    if (!fromReminder) {
+    // والموعد اللي اختاره المندوب بنفسه ما يتغيّرش لما يضغط No Answer / Answered:
+    // الاقتراح بيتحط بس لو الحقل فاضي أو لسه فيه اقتراحنا اللي قبله.
+    const userPicked = !!nextCallAt && nextCallAt !== suggestedAtRef.current;
+    if (!fromReminder && !userPicked) {
       const base = new Date();
       base.setMinutes(base.getMinutes() + (r === 'no-answer' ? 120 : 1440));
-      setNextCallAt(toLocalInput(base));
+      const suggested = toLocalInput(base);
+      suggestedAtRef.current = suggested;
+      setNextCallAt(suggested);
     }
     // «لم يرد» = لا يوجد رد: تُكتب في الكومنتات تلقائياً حتى لا يحتاج المندوب لكتابتها
     if (r === 'no-answer' && !comment.trim()) setComment(NO_ANSWER_COMMENT);

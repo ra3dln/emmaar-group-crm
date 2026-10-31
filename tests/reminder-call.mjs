@@ -76,7 +76,7 @@ check(
 );
 check(
   'مسار التذكير ما بيقترحش موعد اتصال جديد تلقائياً',
-  /if \(!fromReminder\)/.test(callModal) && /fromReminder=\{!!reminderCallId\}/.test(app)
+  /if \(!fromReminder(?: && !userPicked)?\)/.test(callModal) && /fromReminder=\{!!reminderCallId\}/.test(app)
 );
 
 console.log(`\n✅ كل اختبارات تسجيل الاتصال من التذكيرات نجحت (${passed}).`);

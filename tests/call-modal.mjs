@@ -190,6 +190,12 @@ check(
   'آخر التعليقات بتحتفظ بنص نتيجة الاتصال',
   /isCallResultText\(text\)/.test(app) && /isSystemOnlyText\(text\)/.test(app)
 );
+// الموعد اللي اختاره المندوب ما يتغيّرش لما يضغط No Answer / Answered
+check(
+  'No Answer / Answered ما بيغيّروش الموعد اللي اختاره المندوب',
+  /const userPicked = !!nextCallAt && nextCallAt !== suggestedAtRef\.current;/.test(app) &&
+    /if \(!fromReminder && !userPicked\)/.test(app)
+);
 // كارت العميل: آخر كومنت = الأحدث بالوقت، و«No answer» الأحدث يظهر بدل كومنت أقدم
 check(
   'كارت العميل بيعرض آخر كومنت (حتى لو No answer) مش أول كومنت',
