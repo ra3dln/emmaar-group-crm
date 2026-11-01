@@ -76,6 +76,7 @@ import {
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
 import { alertMapOf, clientActionState, leadAlertState, actedAfterReminder } from './reminders';
 import { buildNextActionReminder, nextActionByPhoneOf, nextActionMapOf, type NextAction } from './nextAction';
+import { addExtraPhone, extraPhonesOf, removeExtraPhone } from './extraPhones';
 import { isPartnerOf, isRecordOwner, ownsPhone, partnerPhonesOf, partnersOnPhone, sharedPhonesOf, withPartner, withoutPartner } from './partners';
 import { installBackGuard } from './backNav';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
@@ -1409,6 +1410,7 @@ function DevPreview({ screen: initial }: { screen: string }) {
             { id: 'dashboard', label: 'Dashboard (Leads Board)' },
             { id: 'leads', label: 'Leads' },
             { id: 'sheet', label: 'Action sheet' },
+            { id: 'client', label: 'Client details' },
           ].map((s) => (
             <button key={s.id} type="button" className={`eg-filter ${screen === s.id ? 'is-on' : ''}`}
               onClick={() => setScreen(s.id)}>{s.label}</button>
@@ -1441,7 +1443,16 @@ function DevPreview({ screen: initial }: { screen: string }) {
             />
           )}
 
-          {screen !== 'sheet' && (
+          {/* نافذة العميل: الأرقام الإضافية + ملحوظة */}
+          {screen === 'client' && (
+            <ClientDetailModal
+              client={{ ...mockClients[0], phones: ['01009998877'], phoneNotes: { '01009998877': 'رقم الواتساب — بيرد بعد ٦' } }}
+              users={[mockUser]}
+              onClose={() => setScreen('leads')}
+            />
+          )}
+
+          {screen !== 'sheet' && screen !== 'client' && (
             <MobileTabBar activeTab={screen === 'leads' ? 'leads' : 'dashboard'} onTab={() => {}} onMore={() => {}} badge={2} />
           )}
         </div>
@@ -14987,12 +14998,110 @@ function ClientDetailModal({ client, users = [], onClose, onSuccess, onCall, cal
     addClientActivity(client.id, type, text);
     onSuccess?.();
   };
+
+  // ===== أرقام إضافية + ملحوظة (ميزة للسيلز) — src/extraPhones.ts =====
+  // نسخة محلية من العميل عشان الرقم الجديد يبان فوراً في النافذة
+  const [current, setCurrent] = useState<any>(client);
+  const [phoneForm, setPhoneForm] = useState<{ open: boolean; phone: string; note: string }>({ open: false, phone: '', note: '' });
+  const [phoneError, setPhoneError] = useState('');
+  const [phoneSaving, setPhoneSaving] = useState(false);
+  const extraPhones = extraPhonesOf(current);
+  // الحفظ: على الجهاز ثم انتظار الرفع لقاعدة البيانات — لو ما وصلش نقول للمندوب
+  const persistClient = async (build: (stored: any, all: any[]) => { ok: true; client: any } | { ok: false; error: string }) => {
+    let all: any[] = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+      all = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      all = [];
+    }
+    const stored = all.find((c: any) => String(c?.id) === String(client.id)) || current;
+    const result = build(stored, all);
+    if (!result.ok) {
+      setPhoneError(result.error);
+      return false;
+    }
+    setPhoneSaving(true);
+    localStorage.setItem('crm_clients', JSON.stringify(
+      all.some((c: any) => String(c?.id) === String(client.id))
+        ? all.map((c: any) => (String(c?.id) === String(client.id) ? result.client : c))
+        : [result.client, ...all]
+    ));
+    setCurrent(result.client);
+    const ok = await pushKey('crm_clients');
+    setPhoneSaving(false);
+    onSuccess?.();
+    if (!ok) {
+      setPhoneError('اتسجل على الجهاز ده لكن ماوصلش لقاعدة البيانات — تأكد من الاتصال وجرّب تاني.');
+      return false;
+    }
+    setPhoneError('');
+    return true;
+  };
+  const saveExtraPhone = async () => {
+    if (phoneSaving) return;
+    const saved = await persistClient((stored, all) => addExtraPhone(stored, phoneForm.phone, phoneForm.note, all));
+    if (saved) setPhoneForm({ open: false, phone: '', note: '' });
+  };
+  const deleteExtraPhone = async (phone: string) => {
+    if (phoneSaving) return;
+    await persistClient((stored) => ({ ok: true, client: removeExtraPhone(stored, phone) }));
+  };
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="page-intro"><div><h2>{client.name}</h2></div></div>
         <div className="space-y-3">
           <p className="text-[var(--text)]" dir="ltr">{client.phone}</p>
+          {/* ===== أرقام إضافية ===== */}
+          <div className="extra-phones space-y-2">
+            {extraPhones.map((item) => (
+              <div key={item.phone} className="extra-phone-row bg-[var(--tint-1)] rounded-[var(--r-md)] px-3 py-2 flex items-start gap-2">
+                <Phone className="w-3.5 h-3.5 mt-1 shrink-0 text-[var(--text-muted)]" />
+                <div className="flex-1 min-w-0">
+                  <a href={`tel:${item.phone}`} className="text-[var(--text-strong)] font-bold" dir="ltr">{item.phone}</a>
+                  {item.note && <p className="text-xs text-[var(--text-muted)] whitespace-pre-line break-words">{item.note}</p>}
+                </div>
+                <button type="button" title="شيل الرقم" disabled={phoneSaving}
+                  onClick={() => void deleteExtraPhone(item.phone)}
+                  className="p-1 text-[var(--text-dim)] hover:text-red-400 disabled:opacity-50">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+            {phoneForm.open ? (
+              <div className="extra-phone-form bg-[var(--tint-1)] rounded-[var(--r-md)] p-3 space-y-2">
+                <input type="tel" inputMode="tel" dir="ltr" autoFocus placeholder="الرقم الإضافي"
+                  value={phoneForm.phone}
+                  onChange={(e) => { setPhoneForm({ ...phoneForm, phone: e.target.value }); setPhoneError(''); }}
+                  className="w-full bg-[var(--tint-2)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-[var(--text-strong)]" />
+                <textarea placeholder="ملحوظة على الرقم (اختياري)"
+                  value={phoneForm.note}
+                  onChange={(e) => setPhoneForm({ ...phoneForm, note: e.target.value })}
+                  className="w-full bg-[var(--tint-2)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-[var(--text-strong)] resize-none h-16" />
+                {phoneError && <p className="text-xs text-red-400">{phoneError}</p>}
+                <div className="flex gap-2">
+                  <button type="button" disabled={phoneSaving || !phoneForm.phone.trim()} onClick={() => void saveExtraPhone()}
+                    className="flex-1 bg-[var(--brand)] text-white py-2 rounded-[var(--r-md)] font-bold disabled:opacity-50">
+                    {phoneSaving ? 'جاري الحفظ…' : 'حفظ الرقم'}
+                  </button>
+                  <button type="button" disabled={phoneSaving}
+                    onClick={() => { setPhoneForm({ open: false, phone: '', note: '' }); setPhoneError(''); }}
+                    className="px-4 bg-[var(--tint-2)] text-[var(--text-strong)] py-2 rounded-[var(--r-md)] font-bold">
+                    إلغاء
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <button type="button" onClick={() => setPhoneForm({ open: true, phone: '', note: '' })}
+                  className="text-sm font-bold text-[var(--brand)] flex items-center gap-1">
+                  <Plus className="w-4 h-4" /> إضافة رقم إضافي
+                </button>
+                {phoneError && <p className="text-xs text-red-400">{phoneError}</p>}
+              </>
+            )}
+          </div>
           {client.property && <p className="text-[var(--text)]">{client.property}</p>}
           <p className="text-[var(--text)]">
             الميزانية: <span className="text-emerald-400 font-bold">{displayPrice(client.budget)}</span>
@@ -15040,7 +15149,7 @@ function ClientDetailModal({ client, users = [], onClose, onSuccess, onCall, cal
           </button>
           <WhatsAppButton name={client.name} label="واتساب"
             className="flex-1 justify-center py-3 text-sm rounded-[var(--r-md)]"
-            phones={[client.phone, ...(client.phones || [])]}
+            phones={[current.phone, ...(current.phones || [])]}
             onOpened={() => logActivity('whatsapp', 'تم فتح واتساب وإرسال رسالة للعميل')} />
         </div>
 

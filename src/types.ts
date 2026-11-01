@@ -57,6 +57,8 @@ export interface Client {
   name: string;
   phone: string;
   phones: string[];
+  // ملحوظة السيلز على كل رقم إضافي — المفتاح أرقام الرقم (src/extraPhones.ts)
+  phoneNotes?: Record<string, string>;
   property: string;
   budget: string;
   monthlyInstallment: string;
