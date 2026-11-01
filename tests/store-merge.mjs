@@ -157,6 +157,26 @@ await push('crm_tombstones', [{ key: 'crm_clients', id: 'c1', at: Date.now() }],
 await push('crm_clients', [{ id: 'c2', userId: 'sales-1', name: 'عميل ب', phone: '0101', createdAt: '2026-04-02T00:00:00.000Z' }], cookie);
 check('وحذف العميل المقصود يعمل', (await pull(cookie)).crm_clients.map((c) => c.id).join(',') === 'c2');
 
+// ===== ٥ب) نسخة قديمة من نفس السجل ما تكتبش فوق تعديل أحدث =====
+// جهاز بيرفع كل قائمته كل ثانية كان بيرجّع نسخته القديمة من العميل فوق تعديل
+// الإدارة (المُرسل كان يكسب دايماً). دلوقتي الأحدث (updatedAt) هو اللي يفضل.
+const OLD_C = { id: 'c3', userId: 'sales-1', name: 'عميل ج', phone: '0102', stage: 'contacted', createdAt: '2026-04-03T00:00:00.000Z', updatedAt: '2026-11-01T12:22:00.000Z' };
+const NEW_C = { ...OLD_C, stage: 'new', updatedAt: '2026-11-01T12:30:00.000Z' };
+await push('crm_clients', [OLD_C], cookie);
+await push('crm_clients', [NEW_C], cookie); // تعديل الإدارة
+await push('crm_clients', [OLD_C], cookie); // جهاز لسه ما سحبش التعديل
+const stageOf = async (id) => (await pull(cookie)).crm_clients.find((c) => c.id === id)?.stage;
+check('نسخة الجهاز القديمة ما بتمسحش تعديل أحدث على نفس العميل', (await stageOf('c3')) === 'new');
+await push('crm_clients', [{ ...NEW_C, stage: 'meeting', updatedAt: '2026-11-01T12:40:00.000Z' }], cookie);
+check('وتعديل أحدث من الجهاز بيتسجّل عادي', (await stageOf('c3')) === 'meeting');
+await push('crm_clients', [{ ...NEW_C, stage: 'lost', updatedAt: '2026-11-01T12:40:00.000Z' }], cookie);
+check('ونفس الوقت بالظبط: نسخة المُرسل تكسب (زي الأول)', (await stageOf('c3')) === 'lost');
+// الأرقام الموزّعة: وقت التوزيع (assignedAt) بيتحسب في «الأحدث» زي الجهاز
+const L_OLD = { id: 'l1', phone: '0103', salesId: '', createdAt: '2026-04-03T00:00:00.000Z', assignedAt: '2026-10-28T08:00:00.000Z' };
+await push('crm_assigned_leads', [{ ...L_OLD, salesId: 'sales-1', assignedAt: '2026-11-01T12:08:00.000Z' }], cookie);
+await push('crm_assigned_leads', [L_OLD], cookie);
+check('توزيع رقم ما يرجعش «غير موزّع» من جهاز قديم', (await pull(cookie)).crm_assigned_leads.find((l) => l.id === 'l1')?.salesId === 'sales-1');
+
 // ===== ٦) نطاق حساب المطوّر: «بياناته هو» دائماً (لا يرث أرقام غيره) =====
 // المشكلة: جهاز قديم يبقى عنده نسخة من سجل حساب المطوّر فيها «كل البيانات»
 // فيرفعها للسيرفر (نسخة المُرسل تكسب عند نفس المعرّف)، فيرث حسابه أرقام

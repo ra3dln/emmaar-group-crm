@@ -125,6 +125,16 @@ const hasIds = (list) =>
 const recordStamp = (record) =>
   Math.max(Date.parse(record?.updatedAt || '') || 0, Date.parse(record?.createdAt || '') || 0);
 
+// وقت آخر تغيير على السجل — نفس حقول الجهاز (src/sync.ts: changeStamp) عشان
+// السيرفر والأجهزة يختاروا نفس النسخة «الأحدث».
+const changeStamp = (record) =>
+  Math.max(
+    0,
+    ...[record?.updatedAt, record?.assignedAt, record?.viewedAt, record?.createdAt]
+      .map((value) => Date.parse(value || ''))
+      .filter((n) => Number.isFinite(n))
+  );
+
 export function mergeKeepingRecords(key, incoming, stored, tombstones = []) {
   // شواهد الحذف نفسها تُستبدل كما هي (دمجها بالمعرّف كان سيضيّع شواهد حذف)
   if (key === TOMBSTONE_DATA_KEY) return incoming;
@@ -132,8 +142,15 @@ export function mergeKeepingRecords(key, incoming, stored, tombstones = []) {
   const storedRows = hasIds(stored) ? stored : [];
   const byId = new Map();
   for (const row of storedRows) byId.set(String(row.id), row);
-  // نسخة المُرسل تكسب عند نفس المعرّف (أحدث تعديل)
-  for (const row of incoming) byId.set(String(row.id), row);
+  // نفس المعرّف: النسخة الأحدث تكسب (وعند التساوي نسخة المُرسل).
+  // كان المُرسل يكسب دايماً — فجهاز بيرفع كل قائمته كل ثانية كان بيرجّع نسخته
+  // القديمة من السجل فوق تعديل أحدث اتعمل من جهاز تاني أو من الإدارة.
+  for (const row of incoming) {
+    const id = String(row.id);
+    const prev = byId.get(id);
+    if (prev && changeStamp(prev) > changeStamp(row)) continue;
+    byId.set(id, row);
+  }
 
   const deletedAt = new Map();
   for (const tomb of Array.isArray(tombstones) ? tombstones : []) {
