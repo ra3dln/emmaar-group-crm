@@ -354,8 +354,8 @@ const mapsLink = (lat: number, lng: number): string =>
 
 // ===== الرتب الثلاث: CEO / Team Leader / Sales Agent =====
 // الرتبة تُشتق من الدور الداخلي (admin = CEO، supervisor = Team Leader، sales = Sales Agent)
-const RANK_LABEL: Record<string, string> = { admin: 'CEO', supervisor: 'Team Leader', sales: 'Sales Agent', developer: 'System Dev' };
-const RANK_AR: Record<string, string> = { admin: 'المدير التنفيذي', supervisor: 'قائد فريق', sales: 'سيلز', developer: 'مطوّر النظام' };
+const RANK_LABEL: Record<string, string> = { admin: 'CEO', supervisor: 'Team Leader', sales: 'Sales Agent', developer: 'System Dev', accountant: 'محاسب' };
+const RANK_AR: Record<string, string> = { admin: 'المدير التنفيذي', supervisor: 'قائد فريق', sales: 'سيلز', developer: 'مطوّر النظام', accountant: 'محاسب' };
 const rankLabel = (role?: string): string => RANK_LABEL[role || 'sales'] || 'Sales Agent';
 // لقب يظهر تحت الاسم في المحادثة: حساب المطوّر يُكتب تحته «System Developer»
 // حتى لو كانت رتبته إدارية (مثل حساب mohamed).
@@ -1926,6 +1926,11 @@ function App() {
     // قوائم السلبرز + الإدارة معاً لكل من يعمل سيلزاً (المطوّر أو إداري يستقبل أرقاماً)
     const devMenus = worksAsSales(currentUser) && !impersonator;
     const guardRole = impersonator && worksAsSales(currentUser) ? 'sales' : currentUser.role;
+    // المحاسب: صفحته الوحيدة الحضور
+    if (guardRole === 'accountant' && activeTab !== 'admin-attendance') {
+      setActiveTab('admin-attendance');
+      return;
+    }
     if (!isTabAllowed(guardRole, activeTab, devMenus)) {
       setActiveTab(guardRole === 'sales' || devMenus ? 'dashboard' : 'admin-users');
       return;
@@ -2157,7 +2162,8 @@ function App() {
     );
     // المخزون الكامل — لحسابات الإدارة فقط (لوحات أرقام الكامبين).
     // حساب السيلز ما بيحمّلوش (مفيش داعي، وهو الممنوع أصلاً: خلط شغل الزملاء).
-    const isAdminAccount = currentUser.role !== 'sales';
+    // (المحاسب مش منهم: شغله الحضور بس، فما يحمّلش عملاء وأرقام الشركة)
+    const isAdminAccount = isManagerRole(currentUser.role);
     setFullLeads(isAdminAccount ? allAssignedLeads : []);
     setFullClients(isAdminAccount ? allClients : []);
     setFullFeedbacks(isAdminAccount ? allFeedbacks : []);
@@ -3917,7 +3923,9 @@ function App() {
             writeAssignedLeads((all) => all.filter((l: AssignedLead) => !target.has(l.id)));
             ids.forEach((id: string) => removeLeadClient(id));
           }} onAssign={handleAssignLeads} onSave={() => writeAssignedLeads((all) => all)} autoRules={autoAssignRules} onSaveAutoRule={handleSaveAutoRule} onRebalanceForm={handleRebalanceForm} />}
-          {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={scopedUsers} />}
+          {/* المحاسب: يسجّل حضوره هو + يشوف حضور كل الحسابات (مش نطاقه بس) */}
+          {activeTab === 'admin-attendance' && currentUser.role === 'accountant' && <OwnAttendanceCard currentUser={currentUser} />}
+          {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={currentUser.role === 'accountant' ? users : scopedUsers} />}
           {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
           {activeTab === 'chat' && isSalesView && <SalesChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} readOnly={!!impersonator} />}
           {activeTab === 'admin-chat' && currentUser.role !== 'sales' && <AdminChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} onGroupRead={handleMarkGroupRead} />}
@@ -4634,6 +4642,11 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
     },
   ];
 
+  // المحاسب: الحضور والانصراف بس (يشوف حضور الكل ويسجّل حضوره هو)
+  if (role === 'accountant') {
+    return [{ label: 'الحضور', items: [{ id: 'admin-attendance', icon: Clock, label: 'الحضور والانصراف' }] }];
+  }
+
   // قائد الفريق (Team Leader) يرى لوحة الإدارة الخاصة بفريقه بدون أدوات النظام العامة
   if (role === 'supervisor') {
     return [
@@ -4701,6 +4714,7 @@ function isTabAllowed(role: string, tab: string, developer = false): boolean {
 }
 
 function startTabFor(user: User): TabType {
+  if (user.role === 'accountant') return 'admin-attendance';
   const fallback: TabType = user.role === 'sales' || worksAsSales(user) ? 'dashboard' : 'admin-users';
   try {
     const saved = localStorage.getItem(tabKeyOf(user.id));
@@ -5261,6 +5275,12 @@ function DashboardView({ stats, clients, numbers = [], reminders, properties, cu
 }
 
 // كارت الحضور والانصراف للسيلز
+// كارت الحضور لحساب مالوش لوحة سيلز (المحاسب) — بحالة اليوم بتاعته هو
+function OwnAttendanceCard({ currentUser }: { currentUser: User }) {
+  const [record, setRecord] = useState<Attendance | undefined>(() => getTodayCheckIn(currentUser.id));
+  return <AttendanceCard currentUser={currentUser} record={record} onUpdate={setRecord} />;
+}
+
 function AttendanceCard({ currentUser, record, onUpdate }: { currentUser: User; record?: Attendance; onUpdate: (rec: Attendance) => void }) {
   const [status, setStatus] = useState<'' | 'locating' | 'checking-in' | 'checking-out'>('');
   const [error, setError] = useState('');
@@ -13829,6 +13849,7 @@ function EditUserModal({ user, users, currentUser, onClose, onSuccess }: any) {
               <option value="sales" className="bg-gray-900">Sales Agent — سيلز</option>
               <option value="supervisor" className="bg-gray-900">Team Leader — قائد فريق</option>
               {canAssignCeo && <option value="admin" className="bg-gray-900">CEO — المدير التنفيذي</option>}
+              {(canAssignCeo || form.role === 'accountant') && <option value="accountant" className="bg-gray-900">Accountant — محاسب</option>}
             </select>
             <p className="text-xs text-[var(--text-dim)] mt-1">
               {isSelf
@@ -14010,6 +14031,10 @@ function AddUserModal({ currentUser, users = [], onClose, onSuccess }: any) {
       setError('إنشاء حساب CEO متاح للمدير التنفيذي فقط');
       return;
     }
+    if (form.role === 'accountant' && !canCreateCeo) {
+      setError('إنشاء حساب محاسب متاح للمدير التنفيذي فقط');
+      return;
+    }
     const store = JSON.parse(localStorage.getItem('crm_users') || '[]') as User[];
     if (!createdId && store.some((u) => u.username.toLowerCase() === clean.username.toLowerCase())) {
       setError('اسم المستخدم موجود بالفعل');
@@ -14061,12 +14086,14 @@ function AddUserModal({ currentUser, users = [], onClose, onSuccess }: any) {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs text-[var(--text-muted)] mb-1.5 font-bold">الرتبة</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {([
                 { id: 'admin', label: 'CEO', sub: 'مدير تنفيذي' },
                 { id: 'supervisor', label: 'Team Leader', sub: 'قائد فريق' },
                 { id: 'sales', label: 'Sales Agent', sub: 'سيلز' },
-              ] as const).filter((r) => r.id !== 'admin' || canCreateCeo).map((r) => (
+                // المحاسب: الحضور والانصراف بس — والمدير التنفيذي بس اللي يعمله
+                { id: 'accountant', label: 'Accountant', sub: 'محاسب' },
+              ] as const).filter((r) => (r.id !== 'admin' && r.id !== 'accountant') || canCreateCeo).map((r) => (
                 <button key={r.id} type="button" onClick={() => setForm({ ...form, role: r.id })}
                   className={`rounded-[var(--r-md)] px-2 py-3 border text-center transition-colors ${
                     form.role === r.id ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)]' : 'bg-[var(--tint-1)] border-[var(--border)] hover:bg-[var(--tint-2)]'

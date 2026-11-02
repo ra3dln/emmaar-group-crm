@@ -4,7 +4,8 @@ export interface User {
   password: string;
   name: string;
   phone?: string;
-  role: 'admin' | 'supervisor' | 'sales';
+  // accountant = محاسب: يشوف الحضور والانصراف بس ويسجّل حضوره (يدخل من بوابة الإدارة)
+  role: 'admin' | 'supervisor' | 'sales' | 'accountant';
   // حساب «مطوّر»: رتبته إدارية (كل الصلاحيات وتعديل كلمات المرور) لكنه
   // يظهر في قائمة الحسابات كحساب سيلز عادي، وتظهر له قوائم السيلز والإدارة معاً.
   developer?: boolean;

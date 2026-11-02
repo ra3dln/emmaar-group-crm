@@ -230,7 +230,10 @@ export function createAuthHandler({ storage, env = process.env }) {
             u &&
             String(u.username || '').trim().toLowerCase() === username &&
             u.isActive !== false &&
-            (loginType === 'admin' ? isManagerRole(u.role) : u.role === 'sales' || isManagerRole(u.role))
+            // المحاسب يدخل من بوابة الإدارة (ومن أي بوابة، زي حسابات الإدارة)
+            (loginType === 'admin'
+              ? isManagerRole(u.role) || u.role === 'accountant'
+              : u.role === 'sales' || u.role === 'accountant' || isManagerRole(u.role))
         );
 
         const check = candidate ? verifyPassword(password, candidate.password) : { ok: false };
