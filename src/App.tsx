@@ -7200,6 +7200,7 @@ const campaignStamp = (value?: string): string => {
 // بتوقيت UTC كان بيخلي 3:49 مساءً تبان 13:49 (أو 12:49) — غلط.
 // (تاريخ الكامبين فوق لسه UTC زي ما هو — ده وقت الفورم نفسه كما هو مكتوب.)
 // الساعة بنظام ١٢ ساعة: 2:49 PM مش 14:49.
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const localStamp = (value?: string): string => {
   const at = Date.parse(String(value || ''));
   if (!value || Number.isNaN(at)) return '';
@@ -7208,7 +7209,9 @@ const localStamp = (value?: string): string => {
   const hour24 = d.getHours();
   const meridiem = hour24 >= 12 ? 'PM' : 'AM';
   const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hour12}:${pad(d.getMinutes())} ${meridiem}`;
+  // اسم اليوم جنب التاريخ (Mon / Tue …) عشان المندوب يعرف اليوم من غير ما يحسبه
+  const day = DAY_NAMES[d.getDay()];
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${day} ${hour12}:${pad(d.getMinutes())} ${meridiem}`;
 };
 
 // ===== صف الرقم في صفحة الأرقام =====
@@ -7834,7 +7837,7 @@ function CallFlowModal({
                 </div>
 
                 <div className="eg-quick">
-                  {[['After 1hr', 60], ['After 2hr', 120], ['Tomorrow', 1440], ['Next week', 10080]].map(([label, mins]) => (
+                  {[['After 1hr', 60], ['After 2hr', 120], ['Tomorrow', 1440], ['After 2 days', 2880], ['Next week', 10080]].map(([label, mins]) => (
                     <button key={label as string} type="button"
                       onClick={() => { const d = new Date(); d.setMinutes(d.getMinutes() + (mins as number)); setNextCallAt(toLocalInput(d)); }}
                       className="eg-quick-btn">

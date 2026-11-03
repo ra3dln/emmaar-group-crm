@@ -303,6 +303,12 @@ check(
     /\$\{hour12\}:\$\{pad\(d\.getMinutes\(\)\)\} \$\{meridiem\}/.test(app)
 );
 check(
+  'اسم اليوم جنب التاريخ في Next Action (2026-10-26 Mon 10:00 AM)',
+  /const DAY_NAMES = \['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'\];/.test(app) &&
+    /\$\{pad\(d\.getDate\(\)\)\} \$\{day\} \$\{hour12\}/.test(app)
+);
+check('زرار «After 2 days» في اختيار الموعد', /\['After 2 days', 2880\]/.test(app));
+check(
   'الموعد اللي اختاره المندوب له الأولوية على أي تذكير قديم',
   /const nextActionAt = String\(chosenAt \|\| next\?\.at \|\| ''\)/.test(app) &&
     /const chosenAt = String\(client\?\.nextActionAt \|\| ''\)/.test(app)
