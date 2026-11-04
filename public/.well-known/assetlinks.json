@@ -1,0 +1,10 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.emaar.msacrm",
+      "sha256_cert_fingerprints": ["BD:0B:0A:27:AF:E3:57:E6:A0:1E:1B:91:06:8F:05:CD:83:10:CC:55:E1:07:1D:65:43:00:6A:2D:FA:41:75:E8"]
+    }
+  }
+]

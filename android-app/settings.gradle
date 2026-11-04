@@ -1,0 +1,19 @@
+// ===== تطبيق أندرويد (TWA): بيفتح موقع الـ CRM الحي جوه Chrome =====
+// أي تعديل في الموقع بيوصل لوحده — النسخة الجديدة من الـ APK لازمة بس لو اتغيّر
+// الكود الأصلي هنا (زي ميزة التعرّف على المكالمات بعدين).
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'msa-crm'
+include ':app'

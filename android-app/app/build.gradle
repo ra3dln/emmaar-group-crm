@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.application'
+}
+
+// مفتاح التوقيع برّه الريبو (سر): مساره وكلمة سره في ملف signing.properties
+// المسار بييجي من متغير البيئة MSA_SIGNING — لو مش موجود بيتبني APK بتوقيع debug.
+def signingFile = System.getenv('MSA_SIGNING') ? file(System.getenv('MSA_SIGNING')) : null
+def signingProps = new Properties()
+if (signingFile != null && signingFile.exists()) signingFile.withInputStream { signingProps.load(it) }
+
+android {
+    namespace 'com.emaar.msacrm'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.emaar.msacrm'
+        minSdk 21
+        targetSdk 34
+        // ارفع الرقمين دول مع كل نسخة جديدة — عشان تتسطّب فوق القديمة من غير مسح
+        versionCode 1
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        release {
+            if (signingProps['storeFile']) {
+                storeFile file(signingProps['storeFile'])
+                storePassword signingProps['storePassword']
+                keyAlias signingProps['keyAlias']
+                keyPassword signingProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingProps['storeFile'] ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}
