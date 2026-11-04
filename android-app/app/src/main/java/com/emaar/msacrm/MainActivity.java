@@ -17,6 +17,8 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
@@ -29,9 +31,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 
 // ===== شاشة التطبيق: الموقع الحي جوه WebView بتاع التطبيق نفسه =====
@@ -43,19 +43,22 @@ public class MainActivity extends Activity {
     private static final int BRAND = Color.parseColor("#0B1E3D");
     private static final int REQ_LOCATION = 1;
     private static final int REQ_FILE = 2;
-    // لو الصفحة ما ظهرتش في الوقت ده: النت بطيء — نعرض زرار إعادة المحاولة
-    private static final long SLOW_MS = 15000;
+    // لون خلفية الصفحة بيتقرا كل كام ثانية (الثيم ممكن يتغيّر) عشان أيقونات الساعة والبطارية تبان
+    private static final long THEME_CHECK_MS = 2500;
 
     private WebView web;
-    // شاشة البداية (اللوجو + تحميل) لحد ما الصفحة تظهر — بدل الشاشة الرصاصي
-    private LinearLayout splash;
-    private TextView splashText;
-    private Button retryButton;
-    private ProgressBar spinner;
-    private boolean pageVisible;
+    // شاشة «مفيش نت» — بتظهر بس لو الصفحة ما حمّلتش
+    private LinearLayout offline;
+    // ارتفاع شريط الساعة فوق وشريط الرجوع تحت (بوحدات CSS) — الموقع بيبعد محتواه عنهم
+    private float safeTopCss;
+    private float safeBottomCss;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final Runnable slowCheck = () -> {
-        if (!pageVisible) showProblem("النت بطيء — لسه بنحمّل…");
+    private final Runnable themeCheck = new Runnable() {
+        @Override
+        public void run() {
+            syncBarIcons();
+            handler.postDelayed(this, THEME_CHECK_MS);
+        }
     };
     // طلب الموقع (GPS) من الصفحة مستني موافقة المستخدم على الصلاحية
     private String pendingGeoOrigin;
@@ -67,8 +70,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Window window = getWindow();
-        window.setStatusBarColor(BRAND);
-        window.setNavigationBarColor(BRAND);
+        goEdgeToEdge(window);
         useHighestRefreshRate(window);
 
         FrameLayout root = new FrameLayout(this);
@@ -79,9 +81,15 @@ public class MainActivity extends Activity {
         web.setOverScrollMode(View.OVER_SCROLL_NEVER);
         root.addView(web, new FrameLayout.LayoutParams(-1, -1));
 
-        splash = buildSplash();
-        root.addView(splash, new FrameLayout.LayoutParams(-1, -1));
+        offline = buildOfflineScreen();
+        root.addView(offline, new FrameLayout.LayoutParams(-1, -1));
         setContentView(root);
+
+        // ارتفاع الشريطين (والكيبورد) — الصفحة مرسومة تحتهم، فبنقول للموقع يبعد عنهم
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            applyInsets(insets);
+            return insets;
+        });
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -89,7 +97,6 @@ public class MainActivity extends Activity {
         s.setDatabaseEnabled(true);
         s.setGeolocationEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
-        // نسخة الصفحة المحفوظة على الجهاز بتتستخدم الأول، وبعدها بتتحدّث من النت
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
         s.setUserAgentString(s.getUserAgentString() + " MSACRMApp/" + BuildConfig.VERSION_NAME);
 
@@ -103,24 +110,23 @@ public class MainActivity extends Activity {
                 return openOutside(request.getUrl());
             }
 
-            // أول ما الصفحة تترسم فعلاً: نشيل شاشة البداية
             @Override
             public void onPageCommitVisible(WebView view, String url) {
-                markVisible();
+                pushSafeArea();
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                if (!url.startsWith("about:")) markVisible();
+                pushSafeArea();
+                syncBarIcons();
             }
 
             // الصفحة الرئيسية ما حمّلتش (مفيش نت / النت وقع) → شاشة إعادة المحاولة
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (!request.isForMainFrame()) return;
-                pageVisible = false;
                 view.loadUrl("about:blank");
-                showProblem("مفيش اتصال بالإنترنت");
+                offline.setVisibility(View.VISIBLE);
             }
         });
 
@@ -153,11 +159,101 @@ public class MainActivity extends Activity {
             }
         });
 
-        if (savedInstanceState != null) {
-            web.restoreState(savedInstanceState);
-            markVisible();
+        // التطبيق بيفتح على الواجهة على طول (من غير شاشة بداية)
+        if (savedInstanceState != null) web.restoreState(savedInstanceState);
+        else web.loadUrl(SITE);
+    }
+
+    // ===== شاشة كاملة زي باقي التطبيقات =====
+    // الصفحة بتترسم تحت شريط الساعة وشريط الرجوع (شفافين) بدل حواف زرقا فوق وتحت.
+    private void goEdgeToEdge(Window window) {
+        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.setNavigationBarContrastEnforced(false);
+            window.setStatusBarContrastEnforced(false);
+        }
+        if (Build.VERSION.SDK_INT >= 28) {
+            WindowManager.LayoutParams lp = window.getAttributes();
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            window.setAttributes(lp);
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false);
         } else {
-            loadSite();
+            window.getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        }
+    }
+
+    private void applyInsets(WindowInsets insets) {
+        int top;
+        int bottom;
+        int keyboard;
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.graphics.Insets bars = insets.getInsets(
+                WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
+            top = bars.top;
+            bottom = bars.bottom;
+            keyboard = Math.max(0, ime.bottom - bars.bottom);
+        } else {
+            top = insets.getStableInsetTop();
+            bottom = insets.getStableInsetBottom();
+            keyboard = Math.max(0, insets.getSystemWindowInsetBottom() - bottom);
+        }
+        // الكيبورد: نقصّر الصفحة بارتفاعه عشان الحقل اللي بتكتب فيه يفضل باين
+        web.setPadding(0, 0, 0, keyboard > 0 ? keyboard + bottom : 0);
+        float density = getResources().getDisplayMetrics().density;
+        safeTopCss = top / density;
+        safeBottomCss = keyboard > 0 ? 0 : bottom / density;
+        pushSafeArea();
+    }
+
+    // الموقع بيبعد الهيدر والشريط السفلي عن الحواف بـ --safe-top / --safe-bottom
+    private void pushSafeArea() {
+        if (web == null) return;
+        String js = "(function(){var s=document.documentElement.style;"
+            + "s.setProperty('--safe-top','" + safeTopCss + "px');"
+            + "s.setProperty('--safe-bottom','" + safeBottomCss + "px');})();";
+        web.evaluateJavascript(js, null);
+    }
+
+    // أيقونات الساعة والبطارية: بيضا على ثيم غامق، وغامقة على ثيم فاتح
+    private void syncBarIcons() {
+        if (web == null || Build.VERSION.SDK_INT < 23) return;
+        web.evaluateJavascript(
+            "(function(){var c=getComputedStyle(document.body||document.documentElement).backgroundColor;"
+                + "var m=c.match(/\\d+(\\.\\d+)?/g);if(!m)return -1;"
+                + "return (0.299*m[0]+0.587*m[1]+0.114*m[2])/255;})()",
+            value -> {
+                float luminance;
+                try {
+                    luminance = Float.parseFloat(value);
+                } catch (NumberFormatException e) {
+                    return;
+                }
+                if (luminance < 0) return;
+                setLightBars(luminance > 0.6f);
+            });
+    }
+
+    private void setLightBars(boolean light) {
+        Window window = getWindow();
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController c = window.getInsetsController();
+            if (c == null) return;
+            int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            c.setSystemBarsAppearance(light ? mask : 0, mask);
+        } else {
+            View decor = window.getDecorView();
+            int flags = decor.getSystemUiVisibility();
+            int lightFlags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                | (Build.VERSION.SDK_INT >= 26 ? View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0);
+            decor.setSystemUiVisibility(light ? (flags | lightFlags) : (flags & ~lightFlags));
         }
     }
 
@@ -179,77 +275,38 @@ public class MainActivity extends Activity {
         window.setAttributes(params);
     }
 
-    private LinearLayout buildSplash() {
+    private LinearLayout buildOfflineScreen() {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER);
         box.setBackgroundColor(BRAND);
         box.setClickable(true);
 
-        ImageView logo = new ImageView(this);
-        logo.setImageResource(R.mipmap.ic_launcher);
-        box.addView(logo, new LinearLayout.LayoutParams(dp(96), dp(96)));
+        TextView text = new TextView(this);
+        text.setText("مفيش اتصال بالإنترنت");
+        text.setTextColor(Color.parseColor("#C8D3E6"));
+        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        text.setGravity(Gravity.CENTER);
+        box.addView(text, new LinearLayout.LayoutParams(-2, -2));
 
-        spinner = new ProgressBar(this);
-        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(dp(32), dp(32));
-        sp.topMargin = dp(28);
-        box.addView(spinner, sp);
-
-        splashText = new TextView(this);
-        splashText.setTextColor(Color.parseColor("#C8D3E6"));
-        splashText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        splashText.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2);
-        tp.topMargin = dp(18);
-        box.addView(splashText, tp);
-
-        retryButton = new Button(this);
-        retryButton.setText("إعادة المحاولة");
-        retryButton.setTextColor(BRAND);
-        retryButton.setAllCaps(false);
+        Button retry = new Button(this);
+        retry.setText("إعادة المحاولة");
+        retry.setTextColor(BRAND);
+        retry.setAllCaps(false);
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.WHITE);
         bg.setCornerRadius(dp(24));
-        retryButton.setBackground(bg);
-        retryButton.setPadding(dp(28), 0, dp(28), 0);
-        retryButton.setOnClickListener(v -> loadSite());
+        retry.setBackground(bg);
+        retry.setPadding(dp(28), 0, dp(28), 0);
+        retry.setOnClickListener(v -> {
+            box.setVisibility(View.GONE);
+            web.loadUrl(SITE);
+        });
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, dp(46));
         bp.topMargin = dp(18);
-        box.addView(retryButton, bp);
-        retryButton.setVisibility(View.GONE);
+        box.addView(retry, bp);
+        box.setVisibility(View.GONE);
         return box;
-    }
-
-    private void loadSite() {
-        pageVisible = false;
-        splash.setVisibility(View.VISIBLE);
-        spinner.setVisibility(View.VISIBLE);
-        splashText.setText("");
-        retryButton.setVisibility(View.GONE);
-        handler.removeCallbacks(slowCheck);
-        handler.postDelayed(slowCheck, SLOW_MS);
-        web.loadUrl(SITE);
-    }
-
-    private void markVisible() {
-        pageVisible = true;
-        handler.removeCallbacks(slowCheck);
-        if (splash.getVisibility() == View.VISIBLE) {
-            splash.animate().alpha(0f).setDuration(180).withEndAction(() -> {
-                splash.setVisibility(View.GONE);
-                splash.setAlpha(1f);
-            }).start();
-        }
-    }
-
-    private void showProblem(String message) {
-        handler.removeCallbacks(slowCheck);
-        splash.animate().cancel();
-        splash.setAlpha(1f);
-        splash.setVisibility(View.VISIBLE);
-        spinner.setVisibility(View.GONE);
-        splashText.setText(message);
-        retryButton.setVisibility(View.VISIBLE);
     }
 
     private int dp(int value) {
@@ -300,32 +357,35 @@ public class MainActivity extends Activity {
     // زرار الرجوع: يرجع صفحة جوه الموقع، ولو مفيش يقفل التطبيق
     @Override
     public void onBackPressed() {
-        if (web != null && pageVisible && web.canGoBack()) web.goBack();
+        if (web != null && offline.getVisibility() != View.VISIBLE && web.canGoBack()) web.goBack();
         else super.onBackPressed();
     }
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
-        if (web != null && pageVisible) web.saveState(outState);
+        if (web != null) web.saveState(outState);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         if (web != null) web.onResume();
+        handler.removeCallbacks(themeCheck);
+        handler.postDelayed(themeCheck, THEME_CHECK_MS);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        handler.removeCallbacks(themeCheck);
         if (web != null) web.onPause();
         CookieManager.getInstance().flush();
     }
 
     @Override
     protected void onDestroy() {
-        handler.removeCallbacks(slowCheck);
+        handler.removeCallbacks(themeCheck);
         if (web != null) {
             web.destroy();
             web = null;

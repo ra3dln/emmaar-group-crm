@@ -17,8 +17,8 @@ android {
         minSdk 21
         targetSdk 34
         // ارفع الرقمين دول مع كل نسخة جديدة — عشان تتسطّب فوق القديمة من غير مسح
-        versionCode 3
-        versionName '1.2'
+        versionCode 4
+        versionName '1.3'
     }
 
     buildFeatures {
