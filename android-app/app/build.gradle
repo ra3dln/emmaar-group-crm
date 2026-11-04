@@ -17,8 +17,12 @@ android {
         minSdk 21
         targetSdk 34
         // ارفع الرقمين دول مع كل نسخة جديدة — عشان تتسطّب فوق القديمة من غير مسح
-        versionCode 1
-        versionName '1.0'
+        versionCode 2
+        versionName '1.1'
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     signingConfigs {
@@ -43,8 +47,4 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-}
-
-dependencies {
-    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
 }
