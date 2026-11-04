@@ -10,6 +10,7 @@ const {
   lateMinutes,
   earlyMinutes,
   clockLabel,
+  attendanceDayRows,
 } = await import('../src/attendance.ts');
 
 let passed = 0;
@@ -46,5 +47,32 @@ check('بدون انصراف = 0', earlyMinutes(undefined), 0);
 
 check('عرض 630 = 10:30', clockLabel(630), '10:30');
 check('عرض null = —', clockLabel(null), '—');
+
+// ===== تفاصيل الأيام بالتاريخ في التقرير الشهري =====
+// أكتوبر 2026: يوم 1 خميس، يوم 2 جمعة (راحة)، يوم 3 سبت
+const inAt = (day, h, m) => new Date(2026, 9, day, h, m, 0).toISOString();
+const days = attendanceDayRows({
+  year: 2026,
+  month: 10,
+  records: [
+    { date: '2026-10-01', checkInAt: inAt(1, 10, 5), checkOutAt: inAt(1, 18, 0) },
+    { date: '2026-10-03', checkInAt: inAt(3, 11, 0), checkOutAt: inAt(3, 17, 0) },
+    { date: '2026-10-04', checkInAt: inAt(4, 10, 0) },
+  ],
+  restDay: '5',
+  today: new Date(2026, 9, 5, 12, 0),
+});
+check('صف لكل يوم لحد النهارده (٥ أيام)', days.length, 5);
+check('التاريخ مكتوب كتاريخ', days[0].date, '2026-10-01');
+check('اسم اليوم جنب التاريخ', days[0].dayName, 'الخميس');
+check('وقت الحضور', days[0].checkIn, '10:05');
+check('يوم في الميعاد = حاضر', days[0].status, 'حاضر');
+check('يوم الراحة من غير حضور = راحة', days[1].status, 'راحة');
+check('متأخر وانصرف بدري', days[2].status, 'متأخر • انصراف مبكر');
+check('دقائق التأخير بعد السماحية', days[2].late, 30);
+check('حضور من غير انصراف', days[3].status, 'بلا انصراف');
+check('يوم عمل من غير حضور = غياب', days[4].status, 'غياب');
+check('ساعات العمل', days[0].workedHours, 7.9);
+check('شهر لسه ما جاش = مفيش أيام', attendanceDayRows({ year: 2027, month: 1, records: [], today: new Date(2026, 9, 5) }).length, 0);
 
 console.log(`\n✅ كل اختبارات الحضور والانصراف نجحت (${passed}).`);

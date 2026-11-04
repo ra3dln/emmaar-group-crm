@@ -85,6 +85,7 @@ import {
   ATTENDANCE_END_DEFAULT,
   ATTENDANCE_GRACE_DEFAULT,
   ATTENDANCE_START_DEFAULT,
+  attendanceDayRows,
   clockLabel,
   clockToMinutes,
   earlyMinutes as earlyMinutesOf,
@@ -8560,6 +8561,21 @@ function AttendanceMonthlyReport({ users }: any) {
     { days: 0, lateDays: 0, lateMinutes: 0, noCheckout: 0, earlyDays: 0, earlyMinutes: 0, hours: 0 }
   );
 
+  // ===== تفاصيل الأيام: تاريخ كل يوم لكل سيلز (src/attendance.ts) =====
+  const dayRowsOf = (user: User) =>
+    attendanceDayRows({
+      year,
+      month: monthNumber,
+      records: records.filter((rec) => rec.userId === user.id),
+      start: workStart,
+      grace: graceMinutes,
+      end: workEnd,
+      restDay,
+    });
+  const [detailUserId, setDetailUserId] = useState('');
+  const detailUser = rows.find((row) => row.user.id === detailUserId)?.user || rows[0]?.user || null;
+  const detailRows = detailUser ? dayRowsOf(detailUser) : [];
+
   // ===== تصدير Excel حقيقي (.xlsx) =====
   // كان CSV، وبعض برامج العرض كانت تفتحه كخطأ «unrecoverable problem».
   // الآن ملف xlsx قياسي: أرقام كأرقام، RTL، وعناوين بولد.
@@ -8580,6 +8596,19 @@ function AttendanceMonthlyReport({ users }: any) {
     ];
     const note = `«بلا تسجيل» = أيام العمل المتوقعة (${expectedDays} يوم، ${restPhrase}) ناقص أيام الحضور. • التأخير يُحسب بعد ${graceMinutes} دقيقة سماح من ${workStart} (أي بعد ${clockLabel(lateAfterMinutes)}). • الانصراف المبكر قبل ${workEnd}.`;
     const noteRow = rows.length + 5; // عنوان + سطر الإعدادات + العنوان + البيانات + الإجمالي
+    // تحت الملخص: تفاصيل الأيام بالتاريخ لكل سيلز (سطر فاضي ثم عنوان القسم ثم رأس الجدول)
+    const detailTitleRow = noteRow + 2;
+    const detailHeaderRow = noteRow + 3;
+    const detailHeader = [
+      'السيلز', 'التاريخ', 'اليوم', 'الحضور', 'الانصراف',
+      'التأخير (دقيقة)', 'انصراف مبكر (دقيقة)', 'ساعات العمل', 'الحالة',
+    ];
+    const detailData = rows.flatMap((row) =>
+      dayRowsOf(row.user).map((d) => [
+        row.user.name, d.date, d.dayName, d.checkIn, d.checkOut,
+        d.late || '', d.early || '', d.workedHours || '', d.status,
+      ])
+    );
 
     const blob = buildXlsx({
       sheetName: 'الحضور',
@@ -8590,11 +8619,15 @@ function AttendanceMonthlyReport({ users }: any) {
         ...data,
         totalRow,
         [note],
+        [],
+        [`تفاصيل الأيام — ${monthLabel}`],
+        detailHeader,
+        ...detailData,
       ],
-      headerRows: [3],
-      titleRows: [1],
+      headerRows: [3, detailHeaderRow],
+      titleRows: [1, detailTitleRow],
       columnWidths: [22, 12, 12, 18, 14, 16, 20, 14, 16, 16, 12, 12],
-      merges: ['A1:L1', 'A2:L2', `A${noteRow}:L${noteRow}`],
+      merges: ['A1:L1', 'A2:L2', `A${noteRow}:L${noteRow}`, `A${detailTitleRow}:I${detailTitleRow}`],
     });
     downloadBlob(blob, `تقرير-الحضور-${month}.xlsx`);
   };
@@ -8715,6 +8748,57 @@ function AttendanceMonthlyReport({ users }: any) {
 
             {rows.length === 0 && (
               <p className="text-sm text-[var(--text-muted)] text-center py-6">لا يوجد سيلز لعرض تقريره</p>
+            )}
+
+            {/* ===== تفاصيل الأيام بالتاريخ لكل سيلز ===== */}
+            {detailUser && (
+              <div className="mt-5 attendance-days">
+                <div className="flex flex-wrap items-end gap-3">
+                  <h4 className="font-bold text-[var(--text-strong)] text-sm">تفاصيل الأيام — {monthLabel}</h4>
+                  <label>
+                    <span className="text-[11px] text-[var(--text-muted)] block mb-1">السيلز</span>
+                    <select value={detailUser.id} onChange={(e) => setDetailUserId(e.target.value)}
+                      className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-2 text-[var(--text-strong)] text-sm">
+                      {rows.map((row) => <option key={row.user.id} value={row.user.id} className="bg-gray-900">{row.user.name}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="overflow-x-auto mt-3">
+                  <table className="w-full text-sm min-w-[640px]">
+                    <thead>
+                      <tr className="text-[var(--text-muted)] text-xs">
+                        <th className="text-right py-2 px-2 font-bold">التاريخ</th>
+                        <th className="py-2 px-2">اليوم</th>
+                        <th className="py-2 px-2">الحضور</th>
+                        <th className="py-2 px-2">الانصراف</th>
+                        <th className="py-2 px-2">التأخير</th>
+                        <th className="py-2 px-2">انصراف مبكر</th>
+                        <th className="py-2 px-2">ساعات العمل</th>
+                        <th className="py-2 px-2">الحالة</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detailRows.map((d) => (
+                        <tr key={d.date} className="border-t border-[var(--border)]">
+                          <td className="py-2 px-2 text-right text-[var(--text-strong)] whitespace-nowrap" dir="ltr">{d.date}</td>
+                          <td className="py-2 px-2 text-center text-[var(--text)]">{d.dayName}</td>
+                          <td className="py-2 px-2 text-center text-[var(--text)]" dir="ltr">{d.checkIn}</td>
+                          <td className="py-2 px-2 text-center text-[var(--text)]" dir="ltr">{d.checkOut}</td>
+                          <td className={`py-2 px-2 text-center ${d.late ? 'text-amber-400' : 'text-[var(--text-dim)]'}`}>{d.late ? formatDuration(d.late) : '—'}</td>
+                          <td className={`py-2 px-2 text-center ${d.early ? 'text-amber-400' : 'text-[var(--text-dim)]'}`}>{d.early ? formatDuration(d.early) : '—'}</td>
+                          <td className="py-2 px-2 text-center text-[var(--text)]">{d.workedHours ? `${d.workedHours} س` : '—'}</td>
+                          <td className={`py-2 px-2 text-center font-bold ${
+                            d.status === 'غياب' ? 'text-red-400' : d.status === 'راحة' ? 'text-[var(--text-dim)]' : d.status === 'حاضر' ? 'text-emerald-300' : 'text-amber-400'
+                          }`}>{d.status}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {detailRows.length === 0 && (
+                    <p className="text-sm text-[var(--text-muted)] text-center py-4">الشهر ده لسه ما بدأش</p>
+                  )}
+                </div>
+              </div>
             )}
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-4">

@@ -48,3 +48,80 @@ export const clockLabel = (mins: number | null): string =>
   mins === null
     ? '—'
     : `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+
+// ===== تفاصيل الأيام في التقرير الشهري =====
+// صف لكل يوم في الشهر (لحد النهارده لو الشهر الحالي) لكل سيلز: التاريخ واسم اليوم
+// ووقت الحضور والانصراف والتأخير والحالة — عشان المحاسبة تشوف «أنهي أيام» مش العدد بس.
+
+export const DAY_NAMES_AR = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
+export type AttendanceDayRecord = { date: string; checkInAt: string; checkOutAt?: string };
+
+export type AttendanceDayRow = {
+  date: string; // YYYY-MM-DD
+  dayName: string;
+  checkIn: string; // "10:12" أو "—"
+  checkOut: string;
+  late: number; // دقائق التأخير بعد السماحية
+  early: number; // دقائق الانصراف المبكر
+  workedHours: number;
+  status: string; // حاضر / متأخر / انصراف مبكر / بلا انصراف / غياب / راحة
+};
+
+export const attendanceDayRows = ({
+  year,
+  month, // 1-12
+  records,
+  start = ATTENDANCE_START_DEFAULT,
+  grace = ATTENDANCE_GRACE_DEFAULT,
+  end = ATTENDANCE_END_DEFAULT,
+  restDay = '5', // رقم اليوم (0 = الأحد) أو 'none'
+  today = new Date(),
+}: {
+  year: number;
+  month: number;
+  records: AttendanceDayRecord[];
+  start?: string;
+  grace?: number;
+  end?: string;
+  restDay?: string;
+  today?: Date;
+}): AttendanceDayRow[] => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const last = new Date(year, month, 0).getDate();
+  const isCurrentMonth = today.getFullYear() === year && today.getMonth() + 1 === month;
+  const isFutureMonth = year > today.getFullYear() || (year === today.getFullYear() && month > today.getMonth() + 1);
+  const upto = isFutureMonth ? 0 : isCurrentMonth ? today.getDate() : last;
+  const byDate = new Map<string, AttendanceDayRecord>();
+  for (const rec of records || []) if (rec?.date && !byDate.has(rec.date)) byDate.set(rec.date, rec);
+
+  const rows: AttendanceDayRow[] = [];
+  for (let day = 1; day <= upto; day += 1) {
+    const date = `${year}-${pad(month)}-${pad(day)}`;
+    const weekday = new Date(year, month - 1, day).getDay();
+    const rec = byDate.get(date);
+    const isRest = restDay !== 'none' && weekday === Number(restDay);
+    const late = rec ? lateMinutes(rec.checkInAt, start, grace) : 0;
+    const early = rec?.checkOutAt ? earlyMinutes(rec.checkOutAt, end) : 0;
+    const worked = rec?.checkOutAt
+      ? Math.max(0, Math.round((Date.parse(rec.checkOutAt) - Date.parse(rec.checkInAt)) / 60000))
+      : 0;
+    let status = 'حاضر';
+    if (!rec) status = isRest ? 'راحة' : 'غياب';
+    else if (!rec.checkOutAt) status = late ? 'متأخر • بلا انصراف' : 'بلا انصراف';
+    else if (late && early) status = 'متأخر • انصراف مبكر';
+    else if (late) status = 'متأخر';
+    else if (early) status = 'انصراف مبكر';
+    rows.push({
+      date,
+      dayName: DAY_NAMES_AR[weekday],
+      checkIn: rec ? clockLabel(minutesOfIso(rec.checkInAt)) : '—',
+      checkOut: rec?.checkOutAt ? clockLabel(minutesOfIso(rec.checkOutAt)) : '—',
+      late,
+      early,
+      workedHours: Math.round((worked / 60) * 10) / 10,
+      status,
+    });
+  }
+  return rows;
+};
