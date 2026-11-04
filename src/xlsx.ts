@@ -17,6 +17,10 @@ export type XlsxOptions = {
   columnWidths?: number[];
   /** نطاقات دمج مثل A1:L1 */
   merges?: string[];
+  /** اتجاه الورقة: يمين لشمال (الافتراضي) أو شمال ليمين */
+  rightToLeft?: boolean;
+  /** تثبيت أول صفوف/أعمدة وقت التمرير (رأس الجدول وعمود التاريخ) */
+  freeze?: { rows?: number; cols?: number };
 };
 
 const XML_HEADER = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
@@ -150,8 +154,8 @@ const zipStore = (files: Array<{ name: string; data: Uint8Array }>): Uint8Array 
   return concatBytes([...parts, centralBytes, end]);
 };
 
-const sheetXml = (options: XlsxOptions): string => {
-  const { rows, headerRows = [], titleRows = [], columnWidths = [], merges = [] } = options;
+const sheetXml = (options: XlsxOptions, selected = true): string => {
+  const { rows, headerRows = [], titleRows = [], columnWidths = [], merges = [], rightToLeft = true, freeze } = options;
   const headerSet = new Set(headerRows);
   const titleSet = new Set(titleRows);
 
@@ -191,10 +195,17 @@ const sheetXml = (options: XlsxOptions): string => {
         .join('')}</mergeCells>`
     : '';
 
+  const frozenRows = Math.max(0, freeze?.rows || 0);
+  const frozenCols = Math.max(0, freeze?.cols || 0);
+  const pane = frozenRows || frozenCols
+    ? `<pane${frozenCols ? ` xSplit="${frozenCols}"` : ''}${frozenRows ? ` ySplit="${frozenRows}"` : ''} topLeftCell="${columnName(frozenCols)}${frozenRows + 1}" activePane="${frozenRows && frozenCols ? 'bottomRight' : frozenRows ? 'bottomLeft' : 'topRight'}" state="frozen"/>`
+    : '';
+  const viewAttrs = `${rightToLeft ? ' rightToLeft="1"' : ''}${selected ? ' tabSelected="1"' : ''}`;
+
   return `${XML_HEADER}
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <dimension ref="${dimension}"/>
-<sheetViews><sheetView rightToLeft="1" tabSelected="1" workbookViewId="0"/></sheetViews>
+<sheetViews><sheetView${viewAttrs} workbookViewId="0">${pane}</sheetView></sheetViews>
 <sheetFormatPr defaultRowHeight="15"/>
 ${cols}
 <sheetData>${sheetRows}</sheetData>
@@ -203,10 +214,12 @@ ${mergeXml}
 </worksheet>`;
 };
 
-const workbookXml = (sheetName: string): string => `${XML_HEADER}
+const workbookXml = (sheetNames: string[]): string => `${XML_HEADER}
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
 <bookViews><workbookView/></bookViews>
-<sheets><sheet name="${escapeAttr(sheetName)}" sheetId="1" r:id="rId1"/></sheets>
+<sheets>${sheetNames
+  .map((name, i) => `<sheet name="${escapeAttr(name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`)
+  .join('')}</sheets>
 </workbook>`;
 
 const stylesXml = (): string => `${XML_HEADER}
@@ -230,12 +243,12 @@ const stylesXml = (): string => `${XML_HEADER}
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;
 
-const contentTypesXml = (): string => `${XML_HEADER}
+const contentTypesXml = (sheetCount: number): string => `${XML_HEADER}
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
 <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+${Array.from({ length: sheetCount }, (_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('\n')}
 <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 </Types>`;
 
@@ -244,10 +257,10 @@ const rootRelsXml = (): string => `${XML_HEADER}
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
 </Relationships>`;
 
-const workbookRelsXml = (): string => `${XML_HEADER}
+const workbookRelsXml = (sheetCount: number): string => `${XML_HEADER}
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+${Array.from({ length: sheetCount }, (_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('\n')}
+<Relationship Id="rId${sheetCount + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`;
 
 /**
@@ -255,16 +268,32 @@ const workbookRelsXml = (): string => `${XML_HEADER}
  * كل النصوص inline (بلا sharedStrings) لتقليل التعقيد، والورقة RTL.
  */
 export function buildXlsx(options: XlsxOptions): Blob {
-  const rawName = String(options.sheetName || 'Sheet1').replace(/[\[\]:*?/\\]/g, ' ').trim();
-  const sheetName = (rawName || 'Sheet1').slice(0, 31);
+  return buildXlsxBook([options]);
+}
+
+/** نفس buildXlsx بس بأكتر من ورقة (تبويبات تحت في إكسيل) — الأولى هي اللي بتفتح */
+export function buildXlsxBook(sheets: XlsxOptions[]): Blob {
+  const list = sheets.length ? sheets : [{ sheetName: 'Sheet1', rows: [] }];
+  const used = new Set<string>();
+  const names = list.map((sheet, i) => {
+    const raw = String(sheet.sheetName || `Sheet${i + 1}`).replace(/[\[\]:*?/\\]/g, ' ').trim();
+    let name = (raw || `Sheet${i + 1}`).slice(0, 31);
+    // اسم الورقة لازم يكون فريد في الملف
+    while (used.has(name)) name = `${name.slice(0, 28)} ${i + 1}`;
+    used.add(name);
+    return name;
+  });
   const encoder = new TextEncoder();
   const files = [
-    { name: '[Content_Types].xml', data: encoder.encode(contentTypesXml()) },
+    { name: '[Content_Types].xml', data: encoder.encode(contentTypesXml(list.length)) },
     { name: '_rels/.rels', data: encoder.encode(rootRelsXml()) },
-    { name: 'xl/workbook.xml', data: encoder.encode(workbookXml(sheetName)) },
-    { name: 'xl/_rels/workbook.xml.rels', data: encoder.encode(workbookRelsXml()) },
+    { name: 'xl/workbook.xml', data: encoder.encode(workbookXml(names)) },
+    { name: 'xl/_rels/workbook.xml.rels', data: encoder.encode(workbookRelsXml(list.length)) },
     { name: 'xl/styles.xml', data: encoder.encode(stylesXml()) },
-    { name: 'xl/worksheets/sheet1.xml', data: encoder.encode(sheetXml(options)) },
+    ...list.map((sheet, i) => ({
+      name: `xl/worksheets/sheet${i + 1}.xml`,
+      data: encoder.encode(sheetXml(sheet, i === 0)),
+    })),
   ];
   const zip = zipStore(files);
   // نسخة صريحة على ArrayBuffer حتى يقبلها نوع Blob في TypeScript

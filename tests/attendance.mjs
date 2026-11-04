@@ -11,6 +11,7 @@ const {
   earlyMinutes,
   clockLabel,
   attendanceDayRows,
+  attendanceCellText,
 } = await import('../src/attendance.ts');
 
 let passed = 0;
@@ -73,6 +74,11 @@ check('دقائق التأخير بعد السماحية', days[2].late, 30);
 check('حضور من غير انصراف', days[3].status, 'بلا انصراف');
 check('يوم عمل من غير حضور = غياب', days[4].status, 'غياب');
 check('ساعات العمل', days[0].workedHours, 7.9);
+check('خانة يوم عادي في الإكسيل', attendanceCellText(days[0]), '10:05 - 18:00');
+check('خانة يوم متأخر وانصرف بدري', attendanceCellText(days[2]), '11:00 - 17:00 • متأخر 30د • مبكر 60د');
+check('خانة يوم بلا انصراف', attendanceCellText(days[3]), '10:00 - ؟ • بلا انصراف');
+check('خانة الغياب', attendanceCellText(days[4]), 'غياب');
+check('خانة الراحة', attendanceCellText(days[1]), 'راحة');
 check('شهر لسه ما جاش = مفيش أيام', attendanceDayRows({ year: 2027, month: 1, records: [], today: new Date(2026, 9, 5) }).length, 0);
 
 console.log(`\n✅ كل اختبارات الحضور والانصراف نجحت (${passed}).`);

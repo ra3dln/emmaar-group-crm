@@ -125,3 +125,15 @@ export const attendanceDayRows = ({
   }
   return rows;
 };
+
+// نص خانة اليوم في ورقة «الأيام» بالإكسيل: الحضور - الانصراف + أي ملاحظة
+// («10:05 - 18:00» / «10:45 - 18:00 • متأخر 15د» / «غياب» / «راحة»)
+export const attendanceCellText = (row: AttendanceDayRow): string => {
+  if (row.status === 'غياب' || row.status === 'راحة') return row.status;
+  const notes: string[] = [];
+  if (row.late) notes.push(`متأخر ${row.late}د`);
+  if (row.early) notes.push(`مبكر ${row.early}د`);
+  if (row.checkOut === '—') notes.push('بلا انصراف');
+  const times = `${row.checkIn} - ${row.checkOut === '—' ? '؟' : row.checkOut}`;
+  return notes.length ? `${times} • ${notes.join(' • ')}` : times;
+};

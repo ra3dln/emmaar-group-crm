@@ -30,7 +30,7 @@ import {
   numberWordValue,
   roomsFromText,
 } from './arabicNumbers';
-import { buildXlsx, downloadBlob } from './xlsx';
+import { buildXlsx, buildXlsxBook, downloadBlob, xlsxColumnName } from './xlsx';
 import { matchLeadSearch } from './leadSearch';
 import { formNameOf, formKeyOf, activeFormNamesOf, isSelectedFormRecord, UNKNOWN_FORM, ACTIVE_FORMS_EVENT } from './campaignForms';
 import { formNameFromFileName, saveExtraFormName } from './leadForms';
@@ -85,6 +85,7 @@ import {
   ATTENDANCE_END_DEFAULT,
   ATTENDANCE_GRACE_DEFAULT,
   ATTENDANCE_START_DEFAULT,
+  attendanceCellText,
   attendanceDayRows,
   clockLabel,
   clockToMinutes,
@@ -8596,39 +8597,49 @@ function AttendanceMonthlyReport({ users }: any) {
     ];
     const note = `«بلا تسجيل» = أيام العمل المتوقعة (${expectedDays} يوم، ${restPhrase}) ناقص أيام الحضور. • التأخير يُحسب بعد ${graceMinutes} دقيقة سماح من ${workStart} (أي بعد ${clockLabel(lateAfterMinutes)}). • الانصراف المبكر قبل ${workEnd}.`;
     const noteRow = rows.length + 5; // عنوان + سطر الإعدادات + العنوان + البيانات + الإجمالي
-    // تحت الملخص: تفاصيل الأيام بالتاريخ لكل سيلز (سطر فاضي ثم عنوان القسم ثم رأس الجدول)
-    const detailTitleRow = noteRow + 2;
-    const detailHeaderRow = noteRow + 3;
-    const detailHeader = [
-      'السيلز', 'التاريخ', 'اليوم', 'الحضور', 'الانصراف',
-      'التأخير (دقيقة)', 'انصراف مبكر (دقيقة)', 'ساعات العمل', 'الحالة',
-    ];
-    const detailData = rows.flatMap((row) =>
-      dayRowsOf(row.user).map((d) => [
-        row.user.name, d.date, d.dayName, d.checkIn, d.checkOut,
-        d.late || '', d.early || '', d.workedHours || '', d.status,
-      ])
-    );
 
-    const blob = buildXlsx({
-      sheetName: 'الحضور',
-      rows: [
-        [`تقرير الحضور الشهري — ${monthLabel}`],
-        [`بداية الدوام ${workStart} • سماحية التأخير ${graceMinutes} دقيقة • نهاية الدوام ${workEnd} • يوم الراحة ${restLabel}`],
-        header,
-        ...data,
-        totalRow,
-        [note],
-        [],
-        [`تفاصيل الأيام — ${monthLabel}`],
-        detailHeader,
-        ...detailData,
-      ],
-      headerRows: [3, detailHeaderRow],
-      titleRows: [1, detailTitleRow],
-      columnWidths: [22, 12, 12, 18, 14, 16, 20, 14, 16, 16, 12, 12],
-      merges: ['A1:L1', 'A2:L2', `A${noteRow}:L${noteRow}`, `A${detailTitleRow}:I${detailTitleRow}`],
-    });
+    // ===== ورقة «الأيام»: التاريخ واليوم على الشمال، وجنبهم عمود لكل سيلز =====
+    // كل صف = يوم، وكل خانة = حضور/انصراف السيلز في اليوم ده (أو غياب/راحة).
+    // الورقة شمال لليمين والتاريخ واسم السيلز متثبّتين وقت التمرير.
+    const perUser = rows.map((row) => dayRowsOf(row.user));
+    const dayList = perUser[0] || [];
+    const daysSheetRows = [
+      [`تفاصيل الأيام — ${monthLabel}`],
+      ['التاريخ', 'اليوم', ...rows.map((row) => row.user.name)],
+      ...dayList.map((day, index) => [
+        day.date,
+        day.dayName,
+        ...perUser.map((list) => attendanceCellText(list[index])),
+      ]),
+    ];
+
+    const blob = buildXlsxBook([
+      {
+        sheetName: 'الملخص',
+        rows: [
+          [`تقرير الحضور الشهري — ${monthLabel}`],
+          [`بداية الدوام ${workStart} • سماحية التأخير ${graceMinutes} دقيقة • نهاية الدوام ${workEnd} • يوم الراحة ${restLabel}`],
+          header,
+          ...data,
+          totalRow,
+          [note],
+        ],
+        headerRows: [3],
+        titleRows: [1],
+        columnWidths: [22, 12, 12, 18, 14, 16, 20, 14, 16, 16, 12, 12],
+        merges: ['A1:L1', 'A2:L2', `A${noteRow}:L${noteRow}`],
+      },
+      {
+        sheetName: 'الأيام',
+        rows: daysSheetRows,
+        rightToLeft: false,
+        freeze: { rows: 2, cols: 2 },
+        headerRows: [2],
+        titleRows: [1],
+        columnWidths: [13, 11, ...rows.map(() => 26)],
+        merges: [`A1:${xlsxColumnName(Math.max(1, rows.length + 1))}1`],
+      },
+    ]);
     downloadBlob(blob, `تقرير-الحضور-${month}.xlsx`);
   };
 

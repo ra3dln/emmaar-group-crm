@@ -3,7 +3,7 @@
 // التشغيل: node tests/xlsx-export.mjs
 import assert from 'node:assert/strict';
 
-const { buildXlsx } = await import('../src/xlsx.ts');
+const { buildXlsx, buildXlsxBook } = await import('../src/xlsx.ts');
 
 let passed = 0;
 const check = (label, condition, extra = '') => {
@@ -73,5 +73,42 @@ check('الخلايا النصية inlineStr', sheet.includes('t="inlineStr"'));
 check('الدمج موجود', sheet.includes('<mergeCell ref="A1:C1"/>'));
 check('اسم الورقة في workbook', workbook.includes('name="الحضور"'));
 check('نوع المحتوى xlsx', contentTypes.includes('spreadsheetml.sheet.main+xml'));
+
+// ===== ملف بأكتر من ورقة: «الملخص» + «الأيام» (شمال ليمين ومتثبّت) =====
+const unzip = async (b) => {
+  const u8 = new Uint8Array(await b.arrayBuffer());
+  const dv = new DataView(u8.buffer);
+  const out = new Map();
+  let at = 0;
+  while (at + 30 <= u8.length && dv.getUint32(at, true) === 0x04034b50) {
+    const size = dv.getUint32(at + 18, true);
+    const nameLen = dv.getUint16(at + 26, true);
+    const extraLen = dv.getUint16(at + 28, true);
+    const name = decoder.decode(u8.slice(at + 30, at + 30 + nameLen));
+    const start = at + 30 + nameLen + extraLen;
+    out.set(name, decoder.decode(u8.slice(start, start + size)));
+    at = start + size;
+  }
+  return out;
+};
+const book = await unzip(buildXlsxBook([
+  { sheetName: 'الملخص', rows },
+  {
+    sheetName: 'الأيام',
+    rows: [['تفاصيل الأيام'], ['التاريخ', 'اليوم', 'أحمد'], ['2026-10-01', 'الخميس', '10:05 - 18:00']],
+    rightToLeft: false,
+    freeze: { rows: 2, cols: 2 },
+  },
+]));
+check('ورقتين في الملف', book.has('xl/worksheets/sheet1.xml') && book.has('xl/worksheets/sheet2.xml'));
+check('اسم الورقتين في workbook', /name="الملخص"[\s\S]*name="الأيام"/.test(book.get('xl/workbook.xml')));
+check('الورقتين متسجّلين في الأنواع والعلاقات',
+  book.get('[Content_Types].xml').includes('/xl/worksheets/sheet2.xml') &&
+    book.get('xl/_rels/workbook.xml.rels').includes('Target="worksheets/sheet2.xml"') &&
+    book.get('xl/_rels/workbook.xml.rels').includes('Id="rId3"'));
+const daysSheet = book.get('xl/worksheets/sheet2.xml');
+check('ورقة الأيام شمال ليمين (التاريخ على الشمال)', !daysSheet.includes('rightToLeft="1"') && book.get('xl/worksheets/sheet1.xml').includes('rightToLeft="1"'));
+check('التاريخ وأسماء السيلز متثبّتين وقت التمرير', daysSheet.includes('xSplit="2" ySplit="2" topLeftCell="C3"') && daysSheet.includes('state="frozen"'));
+check('الورقة الأولى بس هي المختارة', book.get('xl/worksheets/sheet1.xml').includes('tabSelected="1"') && !daysSheet.includes('tabSelected'));
 
 console.log(`\n✅ كل اختبارات تصدير Excel نجحت (${passed}).`);
