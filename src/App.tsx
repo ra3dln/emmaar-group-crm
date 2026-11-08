@@ -81,6 +81,8 @@ import { isPartnerOf, isRecordOwner, ownsPhone, partnerPhonesOf, partnersOnPhone
 import { installBackGuard } from './backNav';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import { PartnerPanel } from './PartnerPanel';
+import { ManualFormsView, useManualFormNames } from './ManualFormsView';
+import { withManualTag } from './manualForms';
 import {
   ATTENDANCE_END_DEFAULT,
   ATTENDANCE_GRACE_DEFAULT,
@@ -3913,6 +3915,7 @@ function App() {
               ));
             }}
           />}
+          {activeTab === 'admin-add-form' && currentUser.role === 'admin' && <ManualFormsView currentUser={currentUser} activeForms={activeCampaignForms} onChanged={loadData} />}
           {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={fullLeads} users={scopedUsers} currentUser={currentUser} activeForms={activeCampaignForms} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
             // الحذف يقع على القائمة الكاملة المحفوظة لا على المعروض في الذاكرة:
             // الحساب محدود النطاق يحمل أرقامه وحده، والكتابة من نسخته المعروضة
@@ -4631,6 +4634,7 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
         { id: 'calculator', icon: Calculator, label: 'حساب المقدم والأقساط' },
         { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
+        { id: 'admin-add-form', icon: Upload, label: 'إضافة فورم' },
         { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
         { id: 'admin-chat', icon: MessagesSquare, label: 'المحادثات' },
       ],
@@ -10864,6 +10868,7 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
 // كل عملاء الشركة في مكان واحد: العدد الحالي في المقدمة، وكارت لكل عميل يفتح
 // نافذة التفاصيل نفسها المستخدمة في «المراحل» (البيانات + الخط الزمني + الاتصال).
 function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd, onImport, activeForms = [] }: any) {
+  const manualFormNames = useManualFormNames();
   const [query, setQuery] = useState('');
   const [stage, setStage] = useState<'all' | Client['stage']>('all');
   // افتراضياً عملاء الكامبين فقط — وزر واحد يعرض كل العملاء (بما فيهم المضافون يدوياً)
@@ -11078,7 +11083,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
             <option value="all" className="bg-gray-900">كل الفورمات ({totalCampaign})</option>
             {formOptions.map((option) => (
               <option key={option.name} value={option.name} className="bg-gray-900">
-                {option.name} — {option.clients} عميل مسجّل • {option.leads} في التوزيع
+                {withManualTag(option.name, manualFormNames)} — {option.clients} عميل مسجّل • {option.leads} في التوزيع
               </option>
             ))}
           </select>
@@ -11114,7 +11119,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
             <div className="min-w-0 flex items-start gap-2">
               <Megaphone className="w-4 h-4 text-[var(--brand)] mt-0.5 shrink-0" />
               <div className="min-w-0">
-                <h3 className="font-extrabold text-[var(--text-strong)] truncate">{group.name}</h3>
+                <h3 className="font-extrabold text-[var(--text-strong)] truncate">{withManualTag(group.name, manualFormNames)}</h3>
                 <p className="text-[11px] text-[var(--text-muted)]">
                   <b className="text-[var(--text)]" dir="ltr">{group.clients.length + group.leads.length}</b> رقم •{' '}
                   {group.clients.length} عميل مسجّل • {group.leads.length} لسه في «توزيع الأرقام»
@@ -11188,7 +11193,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
                   <p>المسؤول: <span className="text-[var(--text)] font-bold">{userName(lead.salesId)}</span></p>
                   <p className="truncate">المصدر: {formatLeadDescription(lead.description) || 'رقم كامبين'}</p>
                   {formNameOf(lead) && (
-                    <p className="truncate text-[var(--brand)] font-bold">الفورم: {formNameOf(lead)}</p>
+                    <p className="truncate text-[var(--brand)] font-bold">الفورم: {withManualTag(formNameOf(lead), manualFormNames)}</p>
                   )}
                   <p>
                     {campaignTimeOf(lead).kind === 'campaign' ? 'سُجّل في الكامبين: ' : 'أُضيف في النظام: '}
@@ -11225,6 +11230,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
 }
 
 function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onDeleteMany, onImport, onAssign, onSave, activeForms = [], autoRules = [], onSaveAutoRule, onRebalanceForm }: any) {
+  const manualFormNames = useManualFormNames();
   // نفس قاعدة السيرفر حرفياً (isAssignableSales): سيلز/قائد فريق + حساب «مطوّر»
   // إداري يعمل سيلزاً أيضاً. والاشتراط بـ u.isActive كان يُخفي أي حساب قديم
   // لم يُكتب له الحقل أصلاً، فلا يظهر في توزيع الأرقام ولا يقبل رقمأ.
@@ -11414,7 +11420,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
             <option value="all" className="bg-gray-900">كل الفورمات ({openLeads.length})</option>
             {formOptions.map((option) => (
               <option key={option.name} value={option.name} className="bg-gray-900">
-                {option.name} ({option.count} رقم)
+                {withManualTag(option.name, manualFormNames)} ({option.count} رقم)
               </option>
             ))}
           </select>
@@ -11462,7 +11468,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                 <option value="" className="bg-gray-900">— اختر الفورم —</option>
                 {formOptions.map((option) => (
                   <option key={option.name} value={option.name} className="bg-gray-900">
-                    {option.name} ({option.count} رقم)
+                    {withManualTag(option.name, manualFormNames)} ({option.count} رقم)
                   </option>
                 ))}
               </select>

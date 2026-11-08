@@ -93,6 +93,8 @@ const SYNC_KEYS: string[] = [
   'crm_call_logs',
   // قواعد «التوزيع التلقائي» (فورم ← مندوبون بعينهم): سياسة مشتركة لازم توصل لكل الأجهزة
   'crm_lead_auto_assign',
+  // الفورمات المضافة يدوي من تبويب «إضافة فورم» (src/manualForms.ts)
+  'crm_manual_forms',
 ];
 const ALL_KEYS = [...SYNC_KEYS, TOMBSTONE_KEY];
 // مفاتيح البيانات التي تُستبدل بالكامل عند إعادة الضبط

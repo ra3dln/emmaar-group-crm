@@ -16,6 +16,8 @@ export type ImportedLead = {
 export type ImportPreview = {
   rows: ImportedLead[];
   mapping: { phone?: string; name?: string; source?: string; date?: string; note?: string };
+  // صف العناوين اللي اتقرا (فاضي لو الشيت من غير عناوين)
+  header?: string[];
   total: number;
   fresh: number;
   duplicates: number;
@@ -109,7 +111,11 @@ const toLatinDigits = (value: string): string =>
     .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
 
 export function normalizeEgyptPhone(raw: string): string {
-  let digits = toLatinDigits(String(raw ?? '')).replace(/\D/g, '');
+  const text = toLatinDigits(String(raw ?? '')).trim();
+  // «2.01E+11»: إكسل قرّب الرقم وضاعت خاناته — ما نخمّنش رقم عميل، يتعلّم غير صالح
+  if (/^\d+(\.\d+)?e\+?\d+$/i.test(text)) return '';
+  // «1001234567.0»: الكسر مش جزء من الرقم
+  let digits = text.replace(/\.0+$/, '').replace(/\D/g, '');
   if (!digits) return '';
 
   while (digits.startsWith('00')) digits = digits.slice(2);
@@ -167,6 +173,28 @@ const phoneScoreOf = (body: string[][], index: number): number => {
   return values.filter(isPhoneLike).length / values.length;
 };
 
+// كام قيمة في العمود موبايل مصري كامل (0..1) — أدق من «شكله رقم» لأن عمود المعرّف
+// (lead id) كمان أرقام طويلة
+const mobileScoreOf = (body: string[][], index: number): number => {
+  if (index < 0) return 0;
+  const values = body.map((row) => row[index] || '').filter((value) => value !== '');
+  if (!values.length) return 0;
+  return values.filter((value) => /^01[0125]\d{8}$/.test(normalizeEgyptPhone(value))).length / values.length;
+};
+
+// عناوين فيها كلمة «name» بس مش اسم العميل (ad_name / campaign_name / form_name…)
+const NOT_CLIENT_NAME = /(^|\s)(ad|adset|campaign|form|platform|page|user|file|email)(\s|$)|حمل|فورم|نموذج|إعلان|اعلان|مصدر|بريد/;
+
+// كام قيمة في العمود شكلها اسم شخص (0..1): حروف، مش إيميل أو لينك أو رقم، ومتنوعة
+// (عمود زي «fb / ig» حروف برضه بس بيتكرر)
+const nameScoreOf = (body: string[][], index: number): number => {
+  if (index < 0) return 0;
+  const values = body.map((row) => row[index] || '').filter((value) => value !== '');
+  if (!values.length) return 0;
+  const named = values.filter((value) => /\p{L}/u.test(value) && !/[@/]/.test(value) && !/\d{4,}/.test(value));
+  return (named.length / values.length) * Math.min(1, new Set(values).size / values.length);
+};
+
 export function guessColumns(header: string[], body: string[][]): ImportPreview['mapping'] {
   const columns: ImportPreview['mapping'] = {};
   const used = new Set<number>();
@@ -175,6 +203,7 @@ export function guessColumns(header: string[], body: string[][]): ImportPreview[
     for (let i = 0; i < header.length; i += 1) {
       if (used.has(i)) continue;
       const cell = normalizeHeader(header[i]);
+      if (key === 'name' && NOT_CLIENT_NAME.test(cell)) continue;
       if (words.some((word) => headerMatches(cell, word))) {
         columns[key] = header[i];
         used.add(i);
@@ -204,6 +233,41 @@ export function guessColumns(header: string[], body: string[][]): ImportPreview[
     }
   }
 
+  // لو في عمود موبايلات مصرية أوضح بكتير من اللي اتختار (معرّف طويل مثلاً) ناخده هو
+  const width = Math.max(...body.map((row) => row.length), 0);
+  const labelOf = (index: number) => header[index] || `العمود ${index + 1}`;
+  let bestMobile = -1;
+  let bestMobileScore = 0;
+  for (let i = 0; i < width; i += 1) {
+    const score = mobileScoreOf(body, i);
+    if (score > bestMobileScore) {
+      bestMobileScore = score;
+      bestMobile = i;
+    }
+  }
+  if (bestMobile >= 0 && bestMobileScore >= 0.5 && bestMobileScore > mobileScoreOf(body, columnIndexOf(header, columns.phone)) + 0.3) {
+    columns.phone = labelOf(bestMobile);
+  }
+
+  // ===== عمود الاسم: لازم قيمه تشبه أسماء، ومايبقاش عمود الرقم =====
+  const phoneIndex = columnIndexOf(header, columns.phone);
+  const nameIndex = columnIndexOf(header, columns.name);
+  const taken = new Set([columns.source, columns.date, columns.note].map((label) => columnIndexOf(header, label)));
+  const currentName = nameIndex === phoneIndex ? 0 : nameScoreOf(body, nameIndex);
+  if (currentName < 0.5) {
+    let bestName = -1;
+    let bestNameScore = currentName;
+    for (let i = 0; i < width; i += 1) {
+      if (i === phoneIndex || taken.has(i) || NOT_CLIENT_NAME.test(normalizeHeader(header[i] || ''))) continue;
+      const score = nameScoreOf(body, i);
+      if (score > bestNameScore) {
+        bestNameScore = score;
+        bestName = i;
+      }
+    }
+    if (bestName >= 0 && bestNameScore >= 0.5) columns.name = labelOf(bestName);
+  }
+
   return columns;
 }
 
@@ -224,9 +288,15 @@ export function buildPreview(
   const empty: ImportPreview = { rows: [], mapping: {}, total: 0, fresh: 0, duplicates: 0, invalid: 0 };
   if (!table.length) return empty;
 
-  const hasHeader = looksLikeHeader(table[0]);
-  const header = hasHeader ? table[0] : [];
-  const body = hasHeader ? table.slice(1) : table;
+  // شيت فوقه سطور عنوان (مثلاً «عملاء أكتوبر» ثم العناوين): نبدأ من صف العناوين الحقيقي
+  const firstPhoneRow = table.slice(0, 6).findIndex((row) => row.some(isPhoneLike));
+  const start =
+    firstPhoneRow >= 2 && table[firstPhoneRow - 1].filter((cell) => cell !== '').length >= 2 ? firstPhoneRow - 1 : 0;
+  const sheet = table.slice(start);
+
+  const hasHeader = looksLikeHeader(sheet[0]);
+  const header = hasHeader ? sheet[0] : [];
+  const body = hasHeader ? sheet.slice(1) : sheet;
   // تعرّف تلقائي على الأعمدة — والمدير يقدر يصحّحها يدوياً (عمود الاسم/الرقم)
   const mapping = {
     ...guessColumns(header, body),
@@ -279,7 +349,7 @@ export function buildPreview(
     });
   }
 
-  return { rows, mapping, total: body.length, fresh: rows.length - duplicates - invalid, duplicates, invalid };
+  return { rows, mapping, header, total: body.length, fresh: rows.length - duplicates - invalid, duplicates, invalid };
 }
 
 // --- 6) قراءة أي شيت: CSV / TXT / إكسل (xlsx) ---

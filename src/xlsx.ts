@@ -426,7 +426,7 @@ const parseSheetXml = (xml: string, shared: string[]): string[][] => {
       } else if (type === 'inlineStr') {
         value = [...body.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((t) => decodeXmlEntities(t[1])).join('');
       } else {
-        value = decodeXmlEntities((body.match(/<v>([\s\S]*?)<\/v>/) || [])[1] || '');
+        value = plainNumberText(decodeXmlEntities((body.match(/<v>([\s\S]*?)<\/v>/) || [])[1] || ''));
       }
       const index = ref ? columnIndexOf(ref) : cells.length;
       while (cells.length < index) cells.push('');
@@ -436,6 +436,13 @@ const parseSheetXml = (xml: string, shared: string[]): string[][] => {
   }
   return rows.filter((row) => row.some((cell) => cell !== ''));
 };
+
+/** إكسل ممكن يخزّن الرقم «2.01001234567E11» — القيمة كاملة، فبنرجّعها رقم عادي */
+export function plainNumberText(value: string): string {
+  if (!/^\d+(\.\d+)?[eE]\+?\d+$/.test(value)) return value;
+  const number = Number(value);
+  return Number.isSafeInteger(number) ? String(number) : value;
+}
 
 /** يقرأ أول ورقة في ملف .xlsx ويعيدها كجدول نصوص */
 export async function readXlsx(buffer: ArrayBuffer): Promise<string[][]> {

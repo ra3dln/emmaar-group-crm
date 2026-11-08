@@ -63,6 +63,39 @@ export const readLeadSourceConfig = async (): Promise<any> => {
   }
 };
 
+// ===== شيل فورم من إعدادات السحب (لما فورم يدوي يتحذف) =====
+export const removeExtraFormName = async (name: string): Promise<boolean> => {
+  const clean = String(name || '').trim().toLowerCase();
+  if (!clean) return true;
+  const without = (list: any[]) => list.filter((item) => String(item || '').trim().toLowerCase() !== clean);
+  try {
+    const res = await fetch(LEAD_SOURCE_PATH, { cache: 'no-store', credentials: 'same-origin' });
+    const json = res.ok ? await res.json().catch(() => ({})) : {};
+    const local = Array.isArray(readLocalConfig().extraForms) ? readLocalConfig().extraForms : [];
+    const current = Array.isArray(json?.config?.extraForms) ? json.config.extraForms : local;
+    if (json?.stateless) {
+      writeLocalExtraForms(without(current));
+    } else {
+      const save = await fetch(LEAD_SOURCE_PATH, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ channel: 'facebook', extraForms: without(current) }),
+      });
+      const saved = await save.json().catch(() => ({}));
+      if (!save.ok || !saved?.ok) return false;
+    }
+    try {
+      window.dispatchEvent(new Event(ACTIVE_FORMS_EVENT));
+    } catch {
+      /* بلا نافذة (اختبار) — لا بأس */
+    }
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 // ===== حفظ فورم جديد في إعدادات السحب =====
 // يرجّع true عند النجاح. الفشل معناه أن الأرقام المسجّلة باسم الفورم لن تظهر في
 // القوائم المسندلة (لأنها مُخفّاة بكل فورم غير مفعّل) — فالمستدعي يوقف الحفظ.
