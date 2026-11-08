@@ -3264,7 +3264,7 @@ function App() {
     return ok;
   };
 
-  const handleSaveCall = (payload: { result: 'answered' | 'no-answer'; comment: string; status?: string; cancelReason?: string; nextCallAt: string }) => {
+  const handleSaveCall = async (payload: { result: 'answered' | 'no-answer'; comment: string; status?: string; cancelReason?: string; nextCallAt: string }) => {
     const target = callClient;
     if (!target) return;
     // الحالة المختارة من القائمة المنسدلة (follow up / done deal …) هي الحالة المسجّلة،
@@ -3290,8 +3290,7 @@ function App() {
     saveCallLogs([log, ...getCallLogs()]);
     // سجل المكالمات كان محلياً فقط — يُرفع الآن حتى يظهر في «كل التعليقات»
     // وفي أرقام الفيدباك اليومي عند الإدارة.
-    void pushKey('crm_call_logs');
-    void pushKey('crm_clients');
+    // (الرفع في آخر الدالة — بعد ما الكومنت يتكتب في خط العميل)
     // سجل هذا الحساب فقط — بنفس نطاقه (الإدارة الكاملة ترى الكل، والحساب المحدود النطاق
     // يبقى على سجله هو؛ كان الاعتماد على الرتبة يرمي كل مكالمات الشركة في ذاكرته
     // فتظهر أرقام وفيدباك الجميع على لوحته).
@@ -3413,12 +3412,18 @@ function App() {
       loadData();
     }
 
-    setInAppNotification({
-      title: ' تم تسجيل الاتصال',
-      body: `كومنتك اتسجلت في الفيدباك اليومي — ${target.name}`,
-    });
-    setTimeout(() => setInAppNotification(null), 6000);
+    // الكارت و«Last comments» يتحدّثوا فوراً بالكومنت الجديد
+    loadData();
     setCallClient(null);
+    // الرفع بعد كل الكتابة: كان crm_clients بيترفع قبل ما الكومنت يتكتب في خط العميل،
+    // فآخر كومنت يفضل على الجهاز ده وما يوصلش لباقي الأجهزة
+    const results = await Promise.all([pushKey('crm_clients'), pushKey('crm_call_logs'), pushKey('crm_daily_feedback')]);
+    setInAppNotification(
+      results.every(Boolean)
+        ? { title: ' تم تسجيل الاتصال', body: `كومنتك اتسجلت في الفيدباك اليومي — ${target.name}` }
+        : { title: 'الكومنت اتحفظ على الجهاز بس', body: `ماوصلش للسيرفر — هيترفع لما النت يرجع — ${target.name}` }
+    );
+    setTimeout(() => setInAppNotification(null), 6000);
   };
 
   // ملاحظة: الدخول بتلاشي فقط، بلا `scale` عمداً.
@@ -3970,7 +3975,8 @@ function App() {
           client={callClient}
           user={currentUser}
           fromReminder={!!reminderCallId}
-          comments={commentsOfTarget(callClient, clients, dailyFeedbacks, callLogs, users)}
+          // كل كومنتات الرقم ده مهما كان كاتبها (سيلز قبله / إدارة / شريك) — مش نطاق الحساب بس
+          comments={commentsOfTarget(callClient, clients, JSON.parse(localStorage.getItem('crm_daily_feedback') || '[]'), getCallLogs(), users)}
           partners={partnersOnPhone(myPartnerRecords, callClient.phone)
             .map((id) => users.find((u: User) => u.id === id))
             .filter((u): u is User => !!u)}
@@ -15095,10 +15101,14 @@ function ClientDetailModal({ client, users = [], onClose, onSuccess, onCall, cal
   const feedbackEntries = useMemo(() => {
     const digits = normalizeDigits(String(client?.phone || '')).replace(/\D/g, '');
     const list: Array<{ id: string; text: string; type: string; by?: string; at: string; status?: string }> = [];
-    for (const a of commentActivitiesOf(client)) {
+    // نص نتيجة الاتصال («No answer») كومنت حقيقي هنا برضه
+    for (const a of (client?.activities || []) as ClientActivity[]) {
+      if (!isCommentActivity(a)) continue;
+      const activityText = cleanCommentText(a.text);
+      if (!activityText || (isSystemOnlyText(activityText) && !isCallResultText(activityText))) continue;
       list.push({
         id: `act-${a.id}`,
-        text: a.text,
+        text: activityText,
         type: String(a.type || 'comment'),
         by: a.by,
         at: a.at,
@@ -15110,7 +15120,7 @@ function ClientDetailModal({ client, users = [], onClose, onSuccess, onCall, cal
       const logPhone = normalizeDigits(String(log?.clientPhone || '')).replace(/\D/g, '');
       if (!digits || logPhone !== digits) continue;
       const text = cleanCommentText(log?.comment);
-      if (!text || isSystemOnlyText(text)) continue;
+      if (!text || (isSystemOnlyText(text) && !isCallResultText(text))) continue;
       list.push({
         id: `log-${log?.id}`,
         text,
@@ -15123,7 +15133,7 @@ function ClientDetailModal({ client, users = [], onClose, onSuccess, onCall, cal
     // الأحدث أولاً — ونفس الكومنت مرة واحدة بس
     return dedupeComments(list)
       .sort((a: any, b: any) => String(b.at).localeCompare(String(a.at)))
-      .slice(0, 12);
+      .slice(0, 60);
   }, [client, callLogs]);
   const logActivity = (type: string, text: string) => {
     addClientActivity(client.id, type, text);

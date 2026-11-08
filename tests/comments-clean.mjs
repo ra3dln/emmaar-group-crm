@@ -95,6 +95,19 @@ check(
   'نص البطاقة التلقائية («عميل جديد») مش كلام مندوب',
   isSystemOnlyText('عميل جديد — لم يتم التواصل معه بعد')
 );
+check('كومنت بيبدأ بـ«عميل جديد» كلام مندوب مش نص آلي', !isSystemOnlyText('عميل جديد عايز شقة في التجمع'));
+{
+  const kept = sanitizeClientRecord({
+    activities: [
+      { id: 'k1', type: 'feedback', text: 'لم يرد', at: '2026-11-08T10:00:00.000Z' },
+      { id: 'k2', type: 'feedback', text: 'اتصال: تم الرد', at: '2026-11-08T10:01:00.000Z' },
+    ],
+  });
+  check('«لم يرد» اللي كتبها المندوب ما بتتمسحش من البيانات', kept.activities.some((a) => a.id === 'k1'));
+  check('اللوج ببادئة «اتصال:» لسه بيتشال', !kept.activities.some((a) => a.id === 'k2'));
+  const keptCards = sanitizeDailyFeedbackCards([{ id: 'c1', clientPhone: '010', feedback: 'مشغول', date: '2026-11-08T10:00:00.000Z' }]);
+  check('بطاقة فيدباك كلامها «مشغول» ما بتتمسحش', keptCards.length === 1);
+}
 check('كلام المندوب مش نظام', !isSystemOnlyText('طلب معاينة العقار Saturday'));
 check('نشاط الكومنت يتعرف عليه', isCommentActivity({ type: 'feedback' }) && !isCommentActivity({ type: 'call' }));
 

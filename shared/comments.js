@@ -29,7 +29,8 @@ const PURE_LOG_TEXT_RE =
   /^(?:اتصال|تم\s*الرد|لم\s*يرد|مشغول|تم\s+إنشاء\s+تذكير.*|تم\s+فتح\s+واتساب.*)[:\-]?\s*$/i;
 
 // نص البطاقة التلقائية (عميل جديد من غير كومنت) — مش كلام مندوب، فمخفي من العرض
-const AUTO_CLIENT_TEXT_RE = /^عميل\s+جديد/;
+// (النص الآلي بالظبط — كومنت زي «عميل جديد عايز شقة» كلام مندوب وكان بيستخبى)
+const AUTO_CLIENT_TEXT_RE = /^عميل\s+جديد\s*[—–-]\s*لم\s+يتم/;
 
 // نص الكومنت بعد شيل البادئات
 export const cleanCommentText = (value) =>
@@ -50,6 +51,9 @@ export const isCallResultText = (value) => CALL_RESULT_RE.test(cleanCommentText(
 export const isPureLogText = (value) => {
   const clean = cleanCommentText(value);
   if (!clean) return true;
+  // «لم يرد» / «مشغول» / «تم الرد» اللي كتبها المندوب كومنت — كانت بتتمسح من البيانات.
+  // اللوج هو اللي مكتوب ببادئة «اتصال: تم الرد».
+  if (CALL_RESULT_RE.test(clean) && !/^\s*اتصال/.test(String(value))) return false;
   return PURE_LOG_TEXT_RE.test(clean);
 };
 
@@ -110,7 +114,7 @@ export const sanitizeClientRecord = (client) => {
     if (LOG_TYPES.includes(type)) continue;
     if (COMMENT_TYPES.includes(type)) {
       const text = cleanCommentText(a?.text);
-      if (!text || isPureLogText(text)) continue;
+      if (!text || isPureLogText(a?.text)) continue;
       const sig = commentSignature(text, a?.at);
       if (seen.has(sig)) continue;
       seen.add(sig);
@@ -185,7 +189,7 @@ export const sanitizeDailyFeedbackCards = (cards) => {
   for (const card of cards || []) {
     if (!card || typeof card !== 'object') continue;
     const text = cleanCommentText(card.feedback);
-    if (!text || isPureLogText(text)) continue;
+    if (!text || isPureLogText(card.feedback)) continue;
     const phone = String(card.clientPhone || '').replace(/\D/g, '');
     const at = String(card.date || card.createdAt || '');
     const sig = `${phone}|${text}|${at.slice(0, 16)}`;

@@ -190,6 +190,21 @@ check(
   'آخر التعليقات بتحتفظ بنص نتيجة الاتصال',
   /isCallResultText\(text\)/.test(app) && /isSystemOnlyText\(text\)/.test(app)
 );
+// الرفع بعد ما الكومنت يتكتب في خط العميل، والشاشة تتحدث فوراً
+{
+  const saveCall = app.slice(app.indexOf('const handleSaveCall = async'), app.indexOf('// ملاحظة: الدخول بتلاشي فقط'));
+  check(
+    'crm_clients بيترفع بعد كتابة الكومنت في خط العميل (مش قبله)',
+    saveCall.indexOf("addClientActivity(target.id, 'feedback'") > 0 &&
+      saveCall.indexOf("pushKey('crm_clients')") > saveCall.indexOf("addClientActivity(target.id, 'feedback'") &&
+      /await Promise\.all\(\[pushKey\('crm_clients'\)/.test(saveCall)
+  );
+  check('الكارت وLast comments بيتحدّثوا بعد الحفظ', /loadData\(\);\s*\n\s*setCallClient\(null\);\s*\n\s*\/\/ الرفع بعد كل الكتابة/.test(saveCall));
+  check(
+    'Last comments بتقرا كل كومنتات الرقم مش نطاق الحساب بس',
+    /commentsOfTarget\(callClient, clients, JSON\.parse\(localStorage\.getItem\('crm_daily_feedback'\) \|\| '\[\]'\), getCallLogs\(\), users\)/.test(app)
+  );
+}
 // الموعد اللي اختاره المندوب ما يتغيّرش لما يضغط No Answer / Answered
 check(
   'No Answer / Answered ما بيغيّروش الموعد اللي اختاره المندوب',

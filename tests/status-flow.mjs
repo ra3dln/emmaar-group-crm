@@ -320,6 +320,30 @@ check(
   workNoAnswer[0]?.salesNote === 'No answer' && workNoAnswer[0]?.salesNoteBy === 'mohamed',
   JSON.stringify(workNoAnswer[0]?.salesNote)
 );
+// الكومنت وصل بطاقة الفيدباك ولسه ما وصلش خط العميل → الكارت يعرض الأحدث
+const newerCard = buildWorkNumbers(
+  [{
+    id: 'c-card', name: 'عميل', phone: PHONE, stage: 'contacted',
+    activities: [{ id: 'a1', type: 'feedback', text: 'كومنت قديم', status: 'follow-up', at: '2026-11-07T14:43:20.000Z', by: 'Abdallah' }],
+  }],
+  [],
+  feedbackByPhone(
+    [{ ...feedback('follow-up', '2026-11-08T14:59:42.000Z'), feedback: 'كومنت جديد' }],
+    [],
+    [{ id: 'u1', name: 'Abdallah' }]
+  )
+)[0];
+check('كومنت البطاقة الأحدث يظهر على الكارت', newerCard?.salesNote === 'كومنت جديد' && newerCard?.salesNoteBy === 'Abdallah', newerCard?.salesNote);
+const newerActivity = buildWorkNumbers(
+  [{
+    id: 'c-act', name: 'عميل', phone: PHONE, stage: 'contacted',
+    activities: [{ id: 'a1', type: 'feedback', text: 'كومنت أحدث في الخط', at: '2026-11-08T15:00:00.000Z', by: 'Abdallah' }],
+  }],
+  [],
+  feedbackByPhone([{ ...feedback('follow-up', '2026-11-08T14:00:00.000Z'), feedback: 'أقدم' }], [])
+)[0];
+check('كومنت خط العميل الأحدث يفضل هو اللي ظاهر', newerActivity?.salesNote === 'كومنت أحدث في الخط');
+
 // لوج خالص («تم إنشاء تذكير …») لسه مش بيظهر كملاحظة
 check(
   'اللوج الخالص لسه ما بيظهرش كملاحظة',

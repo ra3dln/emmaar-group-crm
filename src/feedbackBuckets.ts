@@ -90,6 +90,8 @@ export type PhoneSnapshot = {
   note: string;
   // اسم كاتب آخر كلام على الرقم (يتبان جنب الملاحظة)
   noteBy?: string;
+  // وقت آخر كلام — عشان نقارنه بآخر كومنت في خط العميل
+  noteAt?: string;
   at: string;
   // وقت الحالة نفسها (at ممكن يكون أحدث: حدث «لم يرد» بعدها ما غيّرش الحالة)
   statusAt?: string;
@@ -177,6 +179,7 @@ export const feedbackByPhone = (
     if (note) {
       entry.note = note.note;
       entry.noteBy = note.by;
+      entry.noteAt = note.at;
     }
   }
 
@@ -314,6 +317,11 @@ export const buildWorkNumbers = (
       null
     );
     const snapshot = snapshots.get(key);
+    // آخر كلام على الرقم: الأحدث بين خط العميل وبطاقات الفيدباك/المكالمات — الكومنت
+    // ممكن يكون وصل البطاقة وما وصلش خط العميل (جهاز تاني أو رفع متأخر)
+    const cardIsNewer = !!snapshot?.note && String(snapshot?.noteAt || '') > String(lastActivity?.at || '');
+    const noteText = String(cardIsNewer ? snapshot?.note : lastActivity?.text || '');
+    const noteBy = String(cardIsNewer ? snapshot?.noteBy || '' : lastActivity?.by || '');
     // حالة العميل: الصريحة في خطّه الزمني، وإلا آخر فيدباك/مكالمة على نفس الرقم
     // (مكالمة من جهاز تاني أو رقم اتحوّل لعميل بعد ما اتصلنا بيه).
     // («لم يرد» مش خانة — بيتعدّى عليها في الاتنين)
@@ -346,10 +354,10 @@ export const buildWorkNumbers = (
           activities.find((a: any) => !!String(a?.cancelReason || '').trim())?.cancelReason ||
           ''
       ),
-      note: String(lastActivity?.text || client?.feedback || ''),
-      salesNote: String(lastActivity?.text || ''),
-      // اسم كاتب آخر كلام (من خط العميل الزمني) — الاسم محفوظ مع الكومنت
-      salesNoteBy: String(lastActivity?.by || ''),
+      note: noteText || String(client?.feedback || ''),
+      salesNote: noteText,
+      // اسم كاتب آخر كلام — محفوظ مع الكومنت أو مع بطاقة الفيدباك
+      salesNoteBy: noteBy,
       client,
       opened: openedBySales || commentActs.length > 0 || !lead,
       // وقت نزول الرقم: توزيعه على المندوب (وإلا وقت استيراده)
