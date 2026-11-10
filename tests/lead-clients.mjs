@@ -272,4 +272,24 @@ check(
   /\.login-brand \{[\s\S]{0,400}padding-top: calc\(34px \+ var\(--safe-top\)\)/.test(css)
 );
 
+// ===== رقم تاني للعميل (اختياري) =====
+const twoPhones = buildLeadClients({
+  leads: [lead('l9', { salesId: 'u-ahmed', phone: '01000000009', phones: ['0111 222 3334', '01000000009', ''] })],
+  at: AT,
+});
+check(
+  'الرقم التاني بينزل مع العميل (ومن غير تكرار الرقم الأساسي أو خانة فاضية)',
+  twoPhones.length === 1 && twoPhones[0].phones.length === 1 && twoPhones[0].phones[0] === '0111 222 3334',
+  JSON.stringify(twoPhones[0]?.phones)
+);
+check('رقم من غير رقم تاني: القائمة فاضية', buildLeadClients({ leads: [lead('l10', { salesId: 'u-ahmed', phone: '01000000010' })], at: AT })[0].phones.length === 0);
+check(
+  '«إضافة رقم»: خانة «رقم آخر (اختياري)» وبتتحفظ على الرقم',
+  /placeholder="رقم آخر \(اختياري\)" value=\{form\.phone2\}/.test(app) && /\.\.\.\(extraPhone \? \{ phones: \[extraPhone\] \} : \{\}\)/.test(app)
+);
+check(
+  '«عميل جديد»: الخانة ظاهرة في نموذج الإدارة، والرقم المكتوب من غير «+» ما بيضيعش',
+  /placeholder="رقم آخر \(اختياري\)" value=\{newPhone\}/.test(app) && /phones: extraPhones,/.test(app)
+);
+
 console.log(`\n✅ نجحت ${passed} فحوصات لتحويل الرقم الموزَّع إلى عميل + الشاشة الآمنة`);

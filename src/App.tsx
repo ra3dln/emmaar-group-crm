@@ -13117,6 +13117,13 @@ function AddClientModal({ currentUser, users, onClose, onSuccess, preset }: any)
       setError('اختر سبب الإلغاء أولاً');
       return;
     }
+    // الرقم الإضافي المكتوب من غير ما يتضغط «+» كان بيضيع — بيتحفظ هو كمان
+    const pendingPhone = newPhone.trim();
+    const extraPhones = pendingPhone && !form.phones.includes(pendingPhone) ? [...form.phones, pendingPhone] : form.phones;
+    if (extraPhones.some((p) => phoneKeyOf(p) === phoneKeyOf(form.phone))) {
+      setError('الرقم الإضافي هو نفس الرقم الأساسي');
+      return;
+    }
     const comment = form.feedback.trim();
     setSaving(true);
     try {
@@ -13128,6 +13135,7 @@ function AddClientModal({ currentUser, users, onClose, onSuccess, preset }: any)
         const { ownerId, feedbackStatus, reminderAt, cancelReason, ...rest } = form;
         const newClient: Client = {
           ...rest,
+          phones: extraPhones,
           id: crypto.randomUUID(),
           userId: owner,
           assignedTo: owner,
@@ -13231,6 +13239,9 @@ function AddClientModal({ currentUser, users, onClose, onSuccess, preset }: any)
           )}
           <input type="text" placeholder="الاسم *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
           <input type="tel" placeholder="رقم الهاتف الرئيسي *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
+          {simple && (
+            <input type="tel" placeholder="رقم آخر (اختياري)" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" />
+          )}
           {simple && (
             <p className="text-[11px] text-[var(--text-dim)] -mt-1">
               النموذج مبسّط للإدارة: اسم + رقم. متابعة العميل وفيدباكه وتذكيره من شغل السيلز.
@@ -14716,7 +14727,7 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
   // السيلز مابيوزعش لنفسه على حد: الرقم اللي بيكتبه بينزل باسمه هو مباشرة،
   // فقائمة اختيار السيلز تختفي تماماً من حسابه (وقرار التوزيع يظل للإدارة).
   const isSalesAgent = currentUser?.role === 'sales';
-  const [form, setForm] = useState({ name: '', phone: '', description: '', salesId: isSalesAgent ? currentUser.id : '' });
+  const [form, setForm] = useState({ name: '', phone: '', phone2: '', description: '', salesId: isSalesAgent ? currentUser.id : '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -14728,11 +14739,19 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
       setError('اختر السيلز المسؤول عن الرقم');
       return;
     }
+    // الرقم التاني (اختياري) — لو العميل عنده رقمين
+    const { phone2, ...fields } = form;
+    const extraPhone = phone2.trim();
+    if (extraPhone && phoneKeyOf(extraPhone) === phoneKeyOf(form.phone)) {
+      setError('الرقم التاني هو نفس الرقم الأساسي');
+      return;
+    }
     setError('');
     setSaving(true);
     const leads = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
     const newLead: AssignedLead = {
-      ...form,
+      ...fields,
+      ...(extraPhone ? { phones: [extraPhone] } : {}),
       salesId,
       id: crypto.randomUUID(),
       adminId: currentUser.id,
@@ -14768,6 +14787,7 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
         <form onSubmit={handleSubmit} className="space-y-4">
           <input type="text" placeholder="اسم العميل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
           <input type="tel" placeholder="رقم الهاتف *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
+          <input type="tel" placeholder="رقم آخر (اختياري)" value={form.phone2} onChange={(e) => setForm({ ...form, phone2: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" />
           <textarea placeholder="وصف/ملاحظات" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-20" />
           {isSalesAgent ? (
             <div className="flex items-center justify-between gap-2 rounded-[var(--r-md)] border border-[var(--brand-primary-soft)] bg-[var(--brand-primary-softer)] px-4 py-3">

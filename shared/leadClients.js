@@ -129,7 +129,10 @@ export function buildLeadClients({
       assignedTo: owner,
       name: String(lead?.name || '').trim() || 'عميل بدون اسم',
       phone: String(lead?.phone || ''),
-      phones: [],
+      // الرقم التاني (اختياري) اللي اتكتب مع الرقم — بينزل مع العميل
+      phones: asList(lead?.phones)
+        .map((phone) => String(phone || '').trim())
+        .filter((phone) => phoneKeyOf(phone) && phoneKeyOf(phone) !== key),
       property: '',
       budget: '',
       monthlyInstallment: '',

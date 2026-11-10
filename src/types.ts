@@ -107,6 +107,8 @@ export interface AssignedLead {
   partnerIds?: string[];
   name: string;
   phone: string;
+  // رقم تاني للعميل (اختياري) — بينزل مع العميل لما الرقم يتحوّل لعميل
+  phones?: string[];
   description: string;
   status: 'new' | 'viewed' | 'contacted' | 'closed';
   viewedAt?: string;
