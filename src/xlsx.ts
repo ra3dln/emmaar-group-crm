@@ -21,6 +21,8 @@ export type XlsxOptions = {
   rightToLeft?: boolean;
   /** تثبيت أول صفوف/أعمدة وقت التمرير (رأس الجدول وعمود التاريخ) */
   freeze?: { rows?: number; cols?: number };
+  /** أعمدة (0-based) نصها بيلف على كذا سطر — زي عمود الفيدباك */
+  wrapColumns?: number[];
 };
 
 const XML_HEADER = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
@@ -155,9 +157,10 @@ const zipStore = (files: Array<{ name: string; data: Uint8Array }>): Uint8Array 
 };
 
 const sheetXml = (options: XlsxOptions, selected = true): string => {
-  const { rows, headerRows = [], titleRows = [], columnWidths = [], merges = [], rightToLeft = true, freeze } = options;
+  const { rows, headerRows = [], titleRows = [], columnWidths = [], merges = [], rightToLeft = true, freeze, wrapColumns = [] } = options;
   const headerSet = new Set(headerRows);
   const titleSet = new Set(titleRows);
+  const wrapSet = new Set(wrapColumns);
 
   const cols = columnWidths.length
     ? `<cols>${columnWidths
@@ -168,10 +171,11 @@ const sheetXml = (options: XlsxOptions, selected = true): string => {
   const sheetRows = rows
     .map((cells, rowIndex) => {
       const r = rowIndex + 1;
-      const style = titleSet.has(r) ? 2 : headerSet.has(r) ? 1 : 0;
+      const rowStyle = titleSet.has(r) ? 2 : headerSet.has(r) ? 1 : 0;
       const xmlCells = cells
         .map((cell, cellIndex) => {
           if (cell === null || cell === undefined || cell === '') return '';
+          const style = rowStyle || (wrapSet.has(cellIndex) ? 3 : 0);
           const ref = `${columnName(cellIndex)}${r}`;
           if (typeof cell === 'number' && Number.isFinite(cell)) {
             return `<c r="${ref}"${style ? ` s="${style}"` : ''}><v>${cell}</v></c>`;
@@ -235,10 +239,11 @@ const stylesXml = (): string => `${XML_HEADER}
 </fills>
 <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="3">
+<cellXfs count="4">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
 <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
 </cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;

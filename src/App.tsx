@@ -82,6 +82,7 @@ import { installBackGuard } from './backNav';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import { PartnerPanel } from './PartnerPanel';
 import { ManualFormsView, useManualFormNames } from './ManualFormsView';
+import { SalesExportView } from './SalesExportView';
 import { withManualTag } from './manualForms';
 import {
   ATTENDANCE_END_DEFAULT,
@@ -3920,6 +3921,7 @@ function App() {
               ));
             }}
           />}
+          {activeTab === 'admin-export' && currentUser.role === 'admin' && <SalesExportView />}
           {activeTab === 'admin-add-form' && currentUser.role === 'admin' && <ManualFormsView currentUser={currentUser} activeForms={activeCampaignForms} onChanged={loadData} />}
           {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={fullLeads} users={scopedUsers} currentUser={currentUser} activeForms={activeCampaignForms} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
             // الحذف يقع على القائمة الكاملة المحفوظة لا على المعروض في الذاكرة:
@@ -4641,6 +4643,7 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
         { id: 'calculator', icon: Calculator, label: 'حساب المقدم والأقساط' },
         { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
         { id: 'admin-add-form', icon: Upload, label: 'إضافة فورم' },
+        { id: 'admin-export', icon: Download, label: 'تصدير الأرقام' },
         { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
         { id: 'admin-chat', icon: MessagesSquare, label: 'المحادثات' },
       ],
