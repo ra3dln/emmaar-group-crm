@@ -21,6 +21,8 @@
 // أي محاولة لاستدعاء `/api/store` على الاستضافة ترجع 503 (لا توجد قاعدة)،
 // وفيها النظام يظل يعمل بالكامل من localStorage.
 
+import { keepManualOwner } from '../shared/ownerGuard.js';
+
 export const SYNC_EVENT = 'crm-sync';
 // يُطلَق عندما يرفض السيرفر الطلب (401/403): لا جلسة أو كلمة مرور ضعيفة
 // => التطبيق يعرض شاشة الدخول ويتوقف عن أي محاولة حتى يسجّل المستخدم دخوله.
@@ -283,7 +285,7 @@ const changeStamp = (record: any): number => {
 // القديمة: المزامنة تجلب نسخة السيرفر **قبل** ما ترفع تغيير هذا الجهاز، فتتراجع
 // التوزيعات إلى «غير مخصص» بعد ثانيتين، ويضيع الحذف، ولا يتوقف التوزيع التلقائي.
 // الآن: لو نسختنا أحدث فهي الأصح، وعند التساوي يبقى السيرفر هو المرجع.
-const mergeUnion = (remote: any[], local: any[]): any[] => {
+const mergeUnion = (remote: any[], local: any[], key = ''): any[] => {
   const byId = new Map<string, any>();
   for (const item of local) {
     if (item && item.id) byId.set(String(item.id), item);
@@ -292,8 +294,12 @@ const mergeUnion = (remote: any[], local: any[]): any[] => {
     if (!item || !item.id) continue;
     const id = String(item.id);
     const mine = byId.get(id);
-    if (mine && changeStamp(mine) > changeStamp(item)) continue; // نسختنا أحدث ⇒ هي الأصح
-    byId.set(id, item);
+    // التوزيع اليدوي يكسب التلقائي مهما كان وقت الحفظ (shared/ownerGuard.js)
+    if (mine && changeStamp(mine) > changeStamp(item)) {
+      byId.set(id, keepManualOwner(key, mine, item)); // نسختنا أحدث ⇒ هي الأصح
+      continue;
+    }
+    byId.set(id, mine ? keepManualOwner(key, item, mine) : item);
   }
   return Array.from(byId.values());
 };
@@ -415,7 +421,7 @@ const tick = async (): Promise<void> => {
       }
       const remote: any[] = Array.isArray(store.data?.[key]) ? store.data[key] : [];
       const local = safeParse(latest[key]);
-      const union = mergeUnion(remote, local);
+      const union = mergeUnion(remote, local, key);
       const kept = dropResurrected(key, union, allTombstones);
       if (kept.length !== allTombstones.length) {
         allTombstones.splice(0, allTombstones.length, ...kept);
@@ -570,7 +576,7 @@ export async function startSync(): Promise<void> {
         for (const key of SYNC_KEYS) {
           const remote: any[] = Array.isArray(store.data?.[key]) ? store.data[key] : [];
           const local = safeParse(localStorage.getItem(key));
-          const union = mergeUnion(remote, local);
+          const union = mergeUnion(remote, local, key);
           const kept = dropResurrected(key, union, tombstones);
           if (kept.length !== tombstones.length) {
             tombstones.splice(0, tombstones.length, ...kept);

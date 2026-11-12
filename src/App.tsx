@@ -2402,7 +2402,8 @@ function App() {
   // ownerOf = «رقم ← مندوب» لكل رقم على حدة، فتصلح لحالة واحدة:
   //   • توزيع دفعة على مندوب واحد (كل القيم نفس المعرّف)
   //   • التوزيع التلقائي بالتساوي على عدة مندوبين (كل رقم يأخذ مندوبه)
-  const applyLeadOwners = (ownerOf: Map<string, string>) => {
+  // via: «manual» = الإدارة اختارت بنفسها — بيكسب أي توزيع تلقائي (shared/ownerGuard.js)
+  const applyLeadOwners = (ownerOf: Map<string, string>, via: 'manual' | 'auto' = 'auto') => {
     if (!currentUser || !ownerOf.size) return null;
     const movedAt = new Date().toISOString();
     // `assignedAt` = وقت آخر تغيير في التوزيع (توزيع أو سحب رقم من السيلز):
@@ -2413,8 +2414,8 @@ function App() {
       all.map((l: AssignedLead) => {
         if (!ownerOf.has(l.id)) return l;
         const owner = ownerOf.get(l.id) || '';
-        if (owner === String(l.salesId || '')) return l;
-        return { ...l, salesId: owner, assignedAt: movedAt };
+        if (owner === String(l.salesId || '') && (via !== 'manual' || l.assignedVia === 'manual')) return l;
+        return { ...l, salesId: owner, assignedAt: movedAt, assignedVia: via };
       })
     );
 
@@ -2478,6 +2479,7 @@ function App() {
           ...c,
           userId: owner,
           assignedTo: owner,
+          ownerVia: via,
           updatedAt: movedAt,
           // «الفيدباك» = آخر كلام على العميل — يبان في الكارت من أول نظرة
           feedback: note?.text || c.feedback,
@@ -2573,7 +2575,8 @@ function App() {
   const handleAssignLeads = (ids: string[], salesId: string) => {
     const unique = [...new Set((ids || []).filter(Boolean))];
     if (!unique.length) return;
-    const synced = applyLeadOwners(new Map(unique.map((id) => [id, salesId])));
+    // توزيع الإدارة بنفسها = يدوي: التوزيع التلقائي على أي جهاز ما يغيّرهوش
+    const synced = applyLeadOwners(new Map(unique.map((id) => [id, salesId])), 'manual');
     // الإشعار الخارجي للمندوب ينطلق بعد ما يوصل التوزيع للسيرفر — بدل انتظار الدورة
     if (synced) void synced.then(() => flushPush(true)).catch(() => {});
   };
@@ -15055,7 +15058,7 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
       // رقم أضافه السيلز بنفسه (مش رقم كامبين) — فتبقى في تبويب «العملاء».
       // رقم الإدارة على فورم رقم كامبين عادي.
       ...(chosenForm ? {} : { manual: true }),
-      ...(salesId ? { assignedAt: now } : {}),
+      ...(salesId ? { assignedAt: now, assignedVia: 'manual' as const } : {}),
       createdAt: now,
     };
     localStorage.setItem('crm_assigned_leads', JSON.stringify([newLead, ...leads]));

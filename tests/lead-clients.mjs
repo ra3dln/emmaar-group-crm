@@ -338,4 +338,21 @@ check(
 check('اسم السيلز ظاهر على الكارت وجنب كل رقم', /top\.slice\(0, 4\)\.map\(\(\[name, count\]\) => `\$\{name\} \$\{count\}`\)/.test(app) && /مع \{n\.ownerName\}/.test(app));
 check('الضغط على الرقم يفتح كل الكومنتات', /كل الكومنتات \(\{commentList\.length\}\)/.test(app) && /commentsOfTarget\(\s*\{ id: commentsOf\.client\?\.id \|\| '', phone: commentsOf\.phone \}/.test(app));
 
+// ===== التوزيع اليدوي يكسب التلقائي (على كل جهاز) =====
+{
+  const { keepManualOwner } = await import('../shared/ownerGuard.js');
+  const { distributeLeads } = await import('../shared/autoAssign.js');
+  const manual = { id: 'x', salesId: 'u-1', assignedVia: 'manual', assignedAt: '2026-11-13T10:00:00.000Z' };
+  const auto = { id: 'x', salesId: 'u-2', assignedVia: 'auto', assignedAt: '2026-11-13T10:00:05.000Z', status: 'viewed' };
+  const merged = keepManualOwner('crm_assigned_leads', auto, manual);
+  check('الدمج: صاحب اليدوي يفضل وباقي التحديث يمشي', merged.salesId === 'u-1' && merged.assignedVia === 'manual' && merged.status === 'viewed');
+  check('العميل كمان: صاحبه اليدوي يفضل', keepManualOwner('crm_clients', { id: 'c', userId: 'u-2', ownerVia: 'auto' }, { id: 'c', userId: 'u-1', ownerVia: 'manual' }).userId === 'u-1');
+  check('الاتنين تلقائي: الأحدث يكسب زي الأول', keepManualOwner('crm_assigned_leads', auto, { ...auto, salesId: 'u-9' }).salesId === 'u-2');
+  const pending = distributeLeads({ leads: [{ id: 'a', salesId: '', assignedVia: 'manual' }, { id: 'b', salesId: '' }], salesIds: ['u-1'], formOf: () => '' });
+  check('رقم الإدارة سحبته بإيدها ما بيتوزّعش تلقائي تاني', pending.assignments.length === 1 && pending.assignments[0].id === 'b');
+  const sync = fs.readFileSync('src/sync.ts', 'utf8');
+  check('مزامنة الأجهزة بتطبّق نفس القاعدة', /keepManualOwner\(key, mine, item\)/.test(sync) && (sync.match(/mergeUnion\(remote, local, key\)/g) || []).length === 2);
+  check('توزيع الإدارة من الشاشة متعلّم يدوي', /applyLeadOwners\(new Map\(unique\.map\(\(id\) => \[id, salesId\]\)\), 'manual'\)/.test(app) && /assignedVia: via/.test(app) && /ownerVia: via/.test(app));
+}
+
 console.log(`\n✅ نجحت ${passed} فحوصات لتحويل الرقم الموزَّع إلى عميل + الشاشة الآمنة`);

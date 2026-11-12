@@ -24,6 +24,7 @@ import {
 import { sanitizeClientRecord, sanitizeDailyFeedbackCards } from '../shared/comments.js';
 // حكم «مين حساب المطوّر» — نفس الملف في الواجهة (shared/roles.js)
 import { isDeveloperAccount } from '../shared/roles.js';
+import { keepManualOwner } from '../shared/ownerGuard.js';
 
 const KEY_PATTERN = /^crm_[a-z_]+$/;
 // صور العقارات تُخزَّن داخل نفس قاعدة البيانات (base64)، فحجم الطلب الواحد يهم:
@@ -148,8 +149,13 @@ export function mergeKeepingRecords(key, incoming, stored, tombstones = []) {
   for (const row of incoming) {
     const id = String(row.id);
     const prev = byId.get(id);
-    if (prev && changeStamp(prev) > changeStamp(row)) continue;
-    byId.set(id, row);
+    if (!prev) {
+      byId.set(id, row);
+      continue;
+    }
+    // التوزيع اليدوي يكسب التلقائي مهما كان وقت الحفظ (shared/ownerGuard.js)
+    if (changeStamp(prev) > changeStamp(row)) byId.set(id, keepManualOwner(key, prev, row));
+    else byId.set(id, keepManualOwner(key, row, prev));
   }
 
   const deletedAt = new Map();

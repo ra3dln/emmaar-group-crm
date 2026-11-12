@@ -58,6 +58,8 @@ export interface Client {
   name: string;
   phone: string;
   phones: string[];
+  // صاحب العميل اتحدد يدوي ولا تلقائي (مع توزيع الرقم) — اليدوي بيكسب
+  ownerVia?: 'manual' | 'auto';
   // ملحوظة السيلز على كل رقم إضافي — المفتاح أرقام الرقم (src/extraPhones.ts)
   phoneNotes?: Record<string, string>;
   property: string;
@@ -109,6 +111,8 @@ export interface AssignedLead {
   phone: string;
   // رقم تاني للعميل (اختياري) — بينزل مع العميل لما الرقم يتحوّل لعميل
   phones?: string[];
+  // اتوزّع يدوي (الإدارة اختارت) ولا تلقائي — اليدوي بيكسب (shared/ownerGuard.js)
+  assignedVia?: 'manual' | 'auto';
   // كومنت الإدارة على الرقم (من الشيت أو نافذة الإضافة) — بينزل للسيلز لما الرقم يتوزّع
   comment?: string;
   commentBy?: string;

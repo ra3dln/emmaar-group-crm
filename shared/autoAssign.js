@@ -130,7 +130,8 @@ export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName
       const phone = phoneKeyOf(lead.phone);
       if (phone && excluded.has(phone)) return false;
       const owner = String(lead.salesId || '');
-      if (onlyUnassigned) return !owner;
+      // رقم الإدارة سحبته بنفسها (يدوي) يفضل غير مخصص — التلقائي ما يرجّعهوش
+      if (onlyUnassigned) return !owner && lead.assignedVia !== 'manual';
       // إعادة توزيع: نعيد أرقام المندوبين المؤهّلين حتى لو كانوا في عهدتهم،
       // ومش بنلمس رقم حدّ خارج القائمة.
       return !owner || loads.has(owner) || eligible.includes(owner);

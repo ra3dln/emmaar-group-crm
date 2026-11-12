@@ -177,6 +177,20 @@ await push('crm_assigned_leads', [{ ...L_OLD, salesId: 'sales-1', assignedAt: '2
 await push('crm_assigned_leads', [L_OLD], cookie);
 check('توزيع رقم ما يرجعش «غير موزّع» من جهاز قديم', (await pull(cookie)).crm_assigned_leads.find((l) => l.id === 'l1')?.salesId === 'sales-1');
 
+// ===== ٥ج) التوزيع اليدوي يكسب التلقائي مهما كان وقت الحفظ =====
+// الإدارة وزّعت الرقم على سيلز بنفسها؛ جهاز تاني ما وصلوش الاختيار شاف الرقم
+// «غير مخصص» ووزّعه تلقائي بوقت أحدث — كان بيكتب فوق اختيار الإدارة.
+const MANUAL = { id: 'l2', phone: '0104', salesId: 'sales-1', assignedVia: 'manual', createdAt: '2026-04-03T00:00:00.000Z', assignedAt: '2026-11-13T10:00:00.000Z' };
+await push('crm_assigned_leads', [MANUAL], cookie);
+await push('crm_assigned_leads', [{ ...MANUAL, salesId: 'sales-2', assignedVia: 'auto', assignedAt: '2026-11-13T10:00:05.000Z' }], cookie);
+const ownerOfL2 = async () => (await pull(cookie)).crm_assigned_leads.find((l) => l.id === 'l2');
+check('توزيع تلقائي أحدث ما بيغيّرش اختيار الإدارة اليدوي', (await ownerOfL2())?.salesId === 'sales-1');
+await push('crm_assigned_leads', [{ ...MANUAL, salesId: 'sales-3', assignedVia: 'manual', assignedAt: '2026-11-13T11:00:00.000Z' }], cookie);
+check('وتوزيع يدوي جديد بيتسجّل عادي', (await ownerOfL2())?.salesId === 'sales-3');
+await push('crm_assigned_leads', [{ id: 'l3', phone: '0105', salesId: 'sales-2', assignedVia: 'auto', createdAt: '2026-04-03T00:00:00.000Z', assignedAt: '2026-11-13T12:00:05.000Z' }], cookie);
+await push('crm_assigned_leads', [{ id: 'l3', phone: '0105', salesId: 'sales-1', assignedVia: 'manual', createdAt: '2026-04-03T00:00:00.000Z', assignedAt: '2026-11-13T12:00:00.000Z' }], cookie);
+check('اليدوي يكسب حتى لو وصل السيرفر بعد التلقائي بوقت أقدم', (await pull(cookie)).crm_assigned_leads.find((l) => l.id === 'l3')?.salesId === 'sales-1');
+
 // ===== ٦) نطاق حساب المطوّر: «بياناته هو» دائماً (لا يرث أرقام غيره) =====
 // المشكلة: جهاز قديم يبقى عنده نسخة من سجل حساب المطوّر فيها «كل البيانات»
 // فيرفعها للسيرفر (نسخة المُرسل تكسب عند نفس المعرّف)، فيرث حسابه أرقام
