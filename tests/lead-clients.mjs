@@ -365,9 +365,16 @@ check('الضغط على الرقم يفتح كل الكومنتات', /كل ا�
   );
   check(
     'أي توزيع لأكتر من رقم بيسأل الأول بالعدد واسم السيلز',
-    /selectedIds\.length > 1 && !window\.confirm/.test(app) && /هيتوزّع كل المعروض \(\$\{visible\.length\} رقم\)/.test(app) &&
+    /selectedIds\.length > 1 && !window\.confirm/.test(app) && /هيتوزّع \$\{free\.length\} رقم غير مخصص من المعروض/.test(app) &&
       /تشغيل التوزيع التلقائي على «\$\{activeForm\}» هيوزّع \$\{autoNow\} رقم/.test(app) && /batch\.length > 1 && !window\.confirm/.test(app)
   );
 }
+
+// ===== التوزيع الجماعي ما بيسحبش أرقام سيلز تاني =====
+check(
+  'توزيع دفعة وتوزيع كل المعروض من غير المخصص بس',
+  /const batch = visible\.filter\(\(l: AssignedLead\) => !l\.salesId\)\.slice\(0, n\)/.test(app) &&
+    /const free = visible\.filter\(\(l: AssignedLead\) => !l\.salesId\)/.test(app)
+);
 
 console.log(`\n✅ نجحت ${passed} فحوصات لتحويل الرقم الموزَّع إلى عميل + الشاشة الآمنة`);

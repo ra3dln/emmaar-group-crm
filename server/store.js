@@ -128,12 +128,15 @@ const recordStamp = (record) =>
 
 // وقت آخر تغيير على السجل — نفس حقول الجهاز (src/sync.ts: changeStamp) عشان
 // السيرفر والأجهزة يختاروا نفس النسخة «الأحدث».
+// وقت في المستقبل (جهاز ساعته متقدّمة) ما يتحسبش: كان بيخلّي نسخة الجهاز ده «الأحدث»
+// على طول — فقاعدة توزيع تلقائي اتقفلت كانت بترجع تشتغل لوحدها بعد ثانيتين.
+export const CLOCK_SKEW_MS = 2 * 60 * 1000;
 const changeStamp = (record) =>
   Math.max(
     0,
     ...[record?.updatedAt, record?.assignedAt, record?.viewedAt, record?.createdAt]
       .map((value) => Date.parse(value || ''))
-      .filter((n) => Number.isFinite(n))
+      .filter((n) => Number.isFinite(n) && n <= Date.now() + CLOCK_SKEW_MS)
   );
 
 export function mergeKeepingRecords(key, incoming, stored, tombstones = []) {

@@ -11526,10 +11526,12 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
     return () => clearTimeout(timer);
   }, [flash]);
   const assignAllVisible = (salesId: string) => {
-    if (!salesId || !visible.length) return;
-    if (!window.confirm(`هيتوزّع كل المعروض (${visible.length} رقم) على ${nameOf(salesId)}. متأكد؟`)) return;
-    const count = visible.length;
-    onAssign?.(visible.map((l: AssignedLead) => l.id), salesId);
+    // غير المخصص بس — رقم مع سيلز تاني ما يتسحبش منه بالتوزيع الجماعي
+    const free = visible.filter((l: AssignedLead) => !l.salesId);
+    if (!salesId || !free.length) return;
+    if (!window.confirm(`هيتوزّع ${free.length} رقم غير مخصص من المعروض على ${nameOf(salesId)}. متأكد؟`)) return;
+    const count = free.length;
+    onAssign?.(free.map((l: AssignedLead) => l.id), salesId);
     setFlash(`تم توزيع ${count} ${count === 1 ? 'رقم' : 'أرقام'} على ${nameOf(salesId)} ✓`);
   };
 
@@ -11909,8 +11911,9 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
               onClick={() => {
                 const n = Math.floor(Number(batchCount) || 0);
                 if (!batchSalesId || n < 1) return;
-                const batch = visible.filter((l: AssignedLead) => l.salesId !== batchSalesId).slice(0, n);
-                if (!batch.length) { setFlash('كل الأرقام المعروضة عنده بالفعل'); return; }
+                // الدفعة من الأرقام غير المخصصة بس — كانت بتاخد أرقام سيلز تاني (اتسحبت أرقام Salma لـ Hassan)
+                const batch = visible.filter((l: AssignedLead) => !l.salesId).slice(0, n);
+                if (!batch.length) { setFlash('مفيش أرقام غير مخصصة في المعروض'); return; }
                 if (batch.length > 1 && !window.confirm(`هيتوزّع ${batch.length} رقم على ${nameOf(batchSalesId)}. متأكد؟`)) return;
                 onAssign?.(batch.map((l: AssignedLead) => l.id), batchSalesId);
                 setFlash(`تم توزيع ${batch.length} رقم على ${nameOf(batchSalesId)} ✓`);

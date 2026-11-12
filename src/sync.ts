@@ -270,13 +270,15 @@ const localData = (): StoreData => {
 
 // وقت آخر تعديل على السجل (أي حقل زمني معروف فيه) — يُستخدم لاختيار الأحدث
 // بين نسختين للسجل نفسه: نسخة هذا الجهاز ونسخة السيرفر.
+// وقت في المستقبل (جهاز ساعته متقدّمة) ما يتحسبش — نفس قاعدة السيرفر (server/store.js)
 const changeStamp = (record: any): number => {
+  const limit = Date.now() + 2 * 60 * 1000;
   const times = [
     Date.parse(record?.updatedAt || ''),
     Date.parse(record?.assignedAt || ''),
     Date.parse(record?.viewedAt || ''),
     Date.parse(record?.createdAt || ''),
-  ].filter((n) => Number.isFinite(n));
+  ].filter((n) => Number.isFinite(n) && n <= limit);
   return times.length ? Math.max(...times) : 0;
 };
 

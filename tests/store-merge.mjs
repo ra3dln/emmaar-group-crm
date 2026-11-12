@@ -191,6 +191,17 @@ await push('crm_assigned_leads', [{ id: 'l3', phone: '0105', salesId: 'sales-2',
 await push('crm_assigned_leads', [{ id: 'l3', phone: '0105', salesId: 'sales-1', assignedVia: 'manual', createdAt: '2026-04-03T00:00:00.000Z', assignedAt: '2026-11-13T12:00:00.000Z' }], cookie);
 check('اليدوي يكسب حتى لو وصل السيرفر بعد التلقائي بوقت أقدم', (await pull(cookie)).crm_assigned_leads.find((l) => l.id === 'l3')?.salesId === 'sales-1');
 
+// ===== ٥د) جهاز ساعته متقدّمة ما يكسبش على طول =====
+// قاعدة توزيع اتحفظت من جهاز ساعته قدّام ٧ ساعات: أي إيقاف بعدها كان بيخسر
+// قدّامها (هي «الأحدث»)، فالتوزيع التلقائي كان بيرجع يشتغل لوحده.
+const future = new Date(Date.now() + 7 * 3600e3).toISOString();
+await push('crm_lead_auto_assign', [{ id: 'GO', formName: 'GO', active: true, updatedAt: future }], cookie);
+await push('crm_lead_auto_assign', [{ id: 'GO', formName: 'GO', active: false, updatedAt: new Date().toISOString() }], cookie);
+const ruleNow = async () => (await pull(cookie)).crm_lead_auto_assign.find((r) => r.id === 'GO');
+check('إيقاف القاعدة بيكسب نسخة متسجّلة بوقت في المستقبل', (await ruleNow())?.active === false);
+await push('crm_lead_auto_assign', [{ id: 'GO', formName: 'GO', active: true, updatedAt: future }], cookie);
+check('والجهاز اللي ساعته غلط ما يقدرش يرجّعها شغالة', (await ruleNow())?.active === false);
+
 // ===== ٦) نطاق حساب المطوّر: «بياناته هو» دائماً (لا يرث أرقام غيره) =====
 // المشكلة: جهاز قديم يبقى عنده نسخة من سجل حساب المطوّر فيها «كل البيانات»
 // فيرفعها للسيرفر (نسخة المُرسل تكسب عند نفس المعرّف)، فيرث حسابه أرقام
