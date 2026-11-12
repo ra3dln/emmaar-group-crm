@@ -11290,6 +11290,39 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
   const [batchSalesId, setBatchSalesId] = useState('');
   const [batchCount, setBatchCount] = useState('');
 
+  // ===== تحديد أرقام بعينها وتوزيعها مرة واحدة على سيلز =====
+  // بدل ما كل رقم يتوزّع لوحده: علّم على الأرقام اللي عايزها ← اختار السيلز ← توزيع
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedSalesId, setSelectedSalesId] = useState('');
+  // المحدد = المعروض بس (رقم اختفى بالفلتر أو البحث ما يتوزّعش من غير ما تشوفه)
+  const selectedIds = visible.map((l: AssignedLead) => l.id).filter((id: string) => selected.has(id));
+  const allVisibleSelected = visible.length > 0 && selectedIds.length === visible.length;
+  const toggleSelected = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAllVisible = () =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const l of visible as AssignedLead[]) {
+        if (allVisibleSelected) next.delete(l.id);
+        else next.add(l.id);
+      }
+      return next;
+    });
+  const assignSelected = (salesId: string) => {
+    if (!selectedIds.length) return;
+    onAssign?.(selectedIds, salesId);
+    setFlash(salesId
+      ? `تم توزيع ${selectedIds.length} رقم على ${nameOf(salesId)} ✓`
+      : `تم سحب ${selectedIds.length} رقم من السيلز ✓`);
+    setSelected(new Set());
+    setSelectedSalesId('');
+  };
+
   // توزيع جماعي: كل الأرقام المعروضة تُنقل لمندوب واحد بضغطة واحدة (دفعة واحدة، لا رقم رقم)
   const [flash, setFlash] = useState('');
   useEffect(() => {
@@ -11692,15 +11725,47 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
         </div>
       )}
 
+      {/* شريط التحديد: تحديد الكل ← اختار السيلز ← توزيع المحدد */}
+      {visible.length > 0 && (
+        <div className="panel p-3 flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-xs font-bold text-[var(--text)] cursor-pointer">
+            <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} className="w-4 h-4" />
+            تحديد كل المعروض ({visible.length})
+          </label>
+          <span className="text-xs text-[var(--text-muted)]">محدد: <b className="text-[var(--text-strong)]">{selectedIds.length}</b></span>
+          {selectedIds.length > 0 && (
+            <>
+              <select value={selectedSalesId} onChange={(e) => setSelectedSalesId(e.target.value)} className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-sm text-[var(--text-strong)]">
+                <option value="" className="bg-gray-900">— وزّع المحدد على —</option>
+                {salesUsers.map((u: User) => (
+                  <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
+                ))}
+              </select>
+              <button type="button" disabled={!selectedSalesId} onClick={() => assignSelected(selectedSalesId)}
+                className="gradient-primary text-[var(--text-strong)] px-4 py-2 rounded-[var(--r-md)] font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                توزيع المحدد ({selectedIds.length})
+              </button>
+              <button type="button" onClick={() => assignSelected('')}
+                className="text-xs font-bold text-amber-300 border border-amber-400/40 bg-amber-500/10 px-3 py-2 rounded-[var(--r-sm)] hover:bg-amber-500/20">
+                إزالة المحدد من السيلز
+              </button>
+              <button type="button" onClick={() => setSelected(new Set())} className="text-xs text-[var(--text-muted)] underline">إلغاء التحديد</button>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="space-y-3">
         {visible.map((lead: AssignedLead) => {
           const owner = salesUsers.find((u: User) => u.id === lead.salesId);
           return (
             <motion.div key={lead.id} whileHover={{ scale: 1.005 }}
-              className="panel p-4">
+              className={`panel p-4 ${selected.has(lead.id) ? 'ring-2 ring-[var(--brand)]' : ''}`}>
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
+                    <input type="checkbox" checked={selected.has(lead.id)} onChange={() => toggleSelected(lead.id)}
+                      className="w-4 h-4 shrink-0 cursor-pointer" title="تحديد الرقم للتوزيع مع غيره" />
                     <h4 className="font-bold text-[var(--text-strong)] text-base">{lead.name}</h4>
                     <span className={`st-chip ${lead.status === 'new' ? 'st-new' : lead.status === 'viewed' ? 'st-meeting' : lead.status === 'contacted' ? 'st-contacted' : 'st-closed'}`}>
                       {lead.status === 'new' ? 'رقم جديد' : lead.status === 'viewed' ? 'تم العرض' : lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}

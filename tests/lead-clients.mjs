@@ -314,4 +314,16 @@ check(
     /setError\('الرقم ده موجود بالفعل في النظام'\)/.test(app)
 );
 
+// ===== توزيع الأرقام: تحديد أكتر من رقم وتوزيعهم مرة واحدة =====
+check(
+  'علامة تحديد على كل رقم + تحديد كل المعروض',
+  /checked=\{selected\.has\(lead\.id\)\} onChange=\{\(\) => toggleSelected\(lead\.id\)\}/.test(app) && /تحديد كل المعروض/.test(app)
+);
+check(
+  'توزيع المحدد على سيلز واحد دفعة واحدة (والمحدد = المعروض بس)',
+  /onAssign\?\.\(selectedIds, salesId\)/.test(app) &&
+    /const selectedIds = visible\.map\(\(l: AssignedLead\) => l\.id\)\.filter\(\(id: string\) => selected\.has\(id\)\)/.test(app) &&
+    /توزيع المحدد/.test(app) && /إزالة المحدد من السيلز/.test(app)
+);
+
 console.log(`\n✅ نجحت ${passed} فحوصات لتحويل الرقم الموزَّع إلى عميل + الشاشة الآمنة`);
