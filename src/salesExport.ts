@@ -12,6 +12,8 @@ import {
   isCommentActivity,
   isSystemOnlyText,
 } from '../shared/comments.js';
+import { leadCommentActivity } from '../shared/leadClients.js';
+import { formNameOf } from './campaignForms.ts';
 
 const STATUS_LABELS: Record<string, string> = {
   'fresh-stage': 'Fresh',
@@ -43,7 +45,7 @@ const stamp = (iso: string): string => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-export type ExportRow = { sales: string; salesId: string; name: string; phone: string; feedback: string };
+export type ExportRow = { key: string; sales: string; salesId: string; name: string; phone: string; form: string; feedback: string };
 
 type Comment = { id: string; at: string; by: string; text: string; status?: string };
 
@@ -106,10 +108,12 @@ export const buildSalesExportRows = ({
     if (!owner || !nameOf(owner)) continue;
     const extra = (Array.isArray(client?.phones) ? client.phones : []).map((p: any) => String(p || '').trim()).filter(Boolean);
     rows.push({
+      key: `c:${client?.id}`,
       sales: nameOf(owner),
       salesId: owner,
       name: String(client?.name || '').trim() || 'بدون اسم',
       phone: [String(client?.phone || ''), ...extra].join(' / '),
+      form: formNameOf(client),
       feedback: feedbackTextOf(client?.phone, client, cards, logs, nameOf),
     });
   }
@@ -120,12 +124,16 @@ export const buildSalesExportRows = ({
     if (!owner || !nameOf(owner) || !key || clientPhones.has(key) || lead?.status === 'closed') continue;
     clientPhones.add(key);
     const extra = (Array.isArray(lead?.phones) ? lead.phones : []).map((p: any) => String(p || '').trim()).filter(Boolean);
+    // كومنت الإدارة على الرقم (لسه ما اتحوّلش لعميل) جزء من الفيدباك برضه
+    const adminComment = leadCommentActivity(lead);
     rows.push({
+      key: `l:${lead?.id}`,
       sales: nameOf(owner),
       salesId: owner,
       name: String(lead?.name || '').trim() || 'بدون اسم',
       phone: [String(lead?.phone || ''), ...extra].join(' / '),
-      feedback: feedbackTextOf(lead?.phone, null, cards, logs, nameOf),
+      form: formNameOf(lead),
+      feedback: feedbackTextOf(lead?.phone, adminComment ? { activities: [adminComment] } : null, cards, logs, nameOf),
     });
   }
   return rows.sort((a, b) => a.sales.localeCompare(b.sales, 'ar') || a.name.localeCompare(b.name, 'ar'));

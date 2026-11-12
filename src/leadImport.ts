@@ -142,7 +142,7 @@ const HINTS: Array<{ key: 'phone' | 'name' | 'source' | 'date' | 'note'; words: 
   { key: 'phone', words: ['phone_number', 'phone', 'mobile', 'whatsapp', 'رقم الهاتف', 'الهاتف', 'رقم الموبايل', 'الموبايل', 'موبايل', 'تليفون', 'رقم العميل', 'الجوال', 'رقم'] },
   { key: 'name', words: ['full_name', 'fullname', 'name', 'client', 'الاسم', 'اسم', 'اسم العميل', 'العميل', 'الاسم الكامل'] },
   { key: 'date', words: ['created_time', 'created', 'date', 'time', 'التاريخ', 'تاريخ', 'الوقت'] },
-  { key: 'note', words: ['notes', 'note', 'description', 'comment', 'ملاحظات', 'ملاحظة', 'الوصف', 'تفاصيل'] },
+  { key: 'note', words: ['notes', 'note', 'description', 'comment', 'feedback', 'ملاحظات', 'ملاحظة', 'الوصف', 'تفاصيل', 'كومنت', 'تعليق', 'الفيدباك', 'فيدباك'] },
 ];
 
 const normalizeHeader = (value: string): string =>

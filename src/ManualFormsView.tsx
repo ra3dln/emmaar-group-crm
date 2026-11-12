@@ -7,7 +7,9 @@ import { removeExtraFormName, saveExtraFormName } from './leadForms';
 import {
   MANUAL_FORM_LABEL,
   MANUAL_FORMS_KEY,
+  addToManualFormCount,
   buildManualForm,
+  buildManualLeads,
   formNameTaken,
   parseManualForms,
   planManualFormDeletion,
@@ -42,6 +44,15 @@ export const useManualForms = (): ManualForm[] => {
 
 export const useManualFormNames = (): string[] => useManualForms().map((form) => form.name);
 
+// كل الفورمات اللي ممكن نضيف عليها أرقام: المفعّلة + اليدوية + أي فورم في السجلات
+export const knownFormNames = (activeForms: string[] = [], manual: string[] = []): string[] =>
+  [...new Set([
+    ...activeForms,
+    ...manual,
+    ...readList('crm_assigned_leads').map((lead) => formNameOf(lead)),
+    ...readList('crm_clients').map((client) => formNameOf(client)),
+  ].map((name) => String(name || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ar'));
+
 const fieldClass =
   'w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]';
 
@@ -49,6 +60,10 @@ const fieldClass =
 export function ManualFormsView({ currentUser, activeForms = [], onChanged }: any) {
   const forms = useManualForms();
   const canDelete = isDeveloperAccount(currentUser);
+  // فورم جديدة ولا نضيف الأرقام على فورم موجودة بالفعل
+  const [target, setTarget] = useState<'new' | 'existing'>('new');
+  const [existingForm, setExistingForm] = useState('');
+  const existingOptions = knownFormNames(activeForms, forms.map((form: ManualForm) => form.name));
   const [formName, setFormName] = useState('');
   const [fileName, setFileName] = useState('');
   const [table, setTable] = useState<string[][]>([]);
@@ -67,6 +82,7 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
 
   const reset = () => {
     setFormName('');
+    setExistingForm('');
     setFileName('');
     setTable([]);
     setPreview(null);
@@ -109,22 +125,17 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
     if (!preview || saving) return;
     setError('');
     setNotice('');
-    const name = formName.trim();
+    const toExisting = target === 'existing';
+    const name = (toExisting ? existingForm : formName).trim();
     if (!name) {
-      setError('اكتب اسم الفورم');
+      setError(toExisting ? 'اختار الفورم' : 'اكتب اسم الفورم');
       return;
     }
-    const usedNames = [
-      ...activeForms,
-      ...forms.map((form: ManualForm) => form.name),
-      ...readList('crm_assigned_leads').map((lead) => formNameOf(lead)).filter(Boolean),
-      ...readList('crm_clients').map((client) => formNameOf(client)).filter(Boolean),
-    ];
-    if (formNameTaken(name, usedNames)) {
-      setError('في فورم بالاسم ده بالفعل — اختار اسم تاني عشان الأرقام ما تتخلطش.');
+    if (!toExisting && formNameTaken(name, existingOptions)) {
+      setError('في فورم بالاسم ده بالفعل — اختار اسم تاني، أو اختار «فورم موجودة» عشان تضيف عليها.');
       return;
     }
-    const { form, leads } = buildManualForm({
+    const params = {
       name,
       fileName,
       rows: preview.rows,
@@ -132,7 +143,9 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
       adminName: String(currentUser?.name || ''),
       now: new Date().toISOString(),
       newId: () => crypto.randomUUID(),
-    });
+    };
+    const built = toExisting ? { form: null, leads: buildManualLeads(params) } : buildManualForm(params);
+    const leads = built.leads;
     if (!leads.length) {
       setError('مفيش أرقام جديدة في الملف — كلها مكررة أو غير صالحة.');
       return;
@@ -145,7 +158,11 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
       return;
     }
     localStorage.setItem('crm_assigned_leads', JSON.stringify([...leads, ...readList('crm_assigned_leads')]));
-    localStorage.setItem(MANUAL_FORMS_KEY, JSON.stringify([form, ...readList(MANUAL_FORMS_KEY)]));
+    const registry = parseManualForms(localStorage.getItem(MANUAL_FORMS_KEY));
+    localStorage.setItem(
+      MANUAL_FORMS_KEY,
+      JSON.stringify(built.form ? [built.form, ...registry] : addToManualFormCount(registry, name, leads.length))
+    );
     window.dispatchEvent(new Event(ACTIVE_FORMS_EVENT));
     const ok = await pushAdded();
     setSaving(false);
@@ -218,10 +235,28 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
       )}
 
       <div className="panel p-4 sm:p-5 space-y-4">
-        <label className="block">
-          <span className="block text-xs text-[var(--text-muted)] mb-1.5 font-bold">اسم الفورم</span>
-          <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="مثال: عملاء معرض أكتوبر" className={fieldClass} />
-        </label>
+        <div className="flex gap-2">
+          {([['new', 'فورم جديدة'], ['existing', 'فورم موجودة']] as const).map(([id, label]) => (
+            <button key={id} type="button" onClick={() => setTarget(id)}
+              className={`flex-1 py-2.5 rounded-[var(--r-md)] text-sm font-bold border ${target === id ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--text-strong)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {target === 'new' ? (
+          <label className="block">
+            <span className="block text-xs text-[var(--text-muted)] mb-1.5 font-bold">اسم الفورم</span>
+            <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="مثال: عملاء معرض أكتوبر" className={fieldClass} />
+          </label>
+        ) : (
+          <label className="block">
+            <span className="block text-xs text-[var(--text-muted)] mb-1.5 font-bold">الفورم اللي هتضيف عليها</span>
+            <select value={existingForm} onChange={(e) => setExistingForm(e.target.value)} className={fieldClass}>
+              <option value="" className="bg-gray-900">— اختار فورم —</option>
+              {existingOptions.map((name) => <option key={name} value={name} className="bg-gray-900">{name}</option>)}
+            </select>
+          </label>
+        )}
 
         <div>
           <span className="block text-xs text-[var(--text-muted)] mb-1.5 font-bold">الشيت</span>
@@ -254,7 +289,7 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
               ))}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <label>
                 <span className="block text-xs text-[var(--text-muted)] mb-1 font-bold">عمود الاسم</span>
                 <select value={preview.mapping.name || ''} onChange={(e) => remap({ ...preview.mapping, name: e.target.value || undefined })} className={fieldClass}>
@@ -269,15 +304,23 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
                   {columns.map((label) => <option key={label} value={label} className="bg-gray-900">{label}</option>)}
                 </select>
               </label>
+              <label>
+                <span className="block text-xs text-[var(--text-muted)] mb-1 font-bold">عمود الكومنت (اختياري)</span>
+                <select value={preview.mapping.note || ''} onChange={(e) => remap({ ...preview.mapping, note: e.target.value || undefined })} className={fieldClass}>
+                  <option value="" className="bg-gray-900">— من غير كومنت —</option>
+                  {columns.map((label) => <option key={label} value={label} className="bg-gray-900">{label}</option>)}
+                </select>
+              </label>
             </div>
 
-            <p className="text-xs text-[var(--text-muted)]">راجع أول الصفوف قبل الإضافة — لو عمود غلط غيّره من فوق.</p>
+            <p className="text-xs text-[var(--text-muted)]">راجع أول الصفوف قبل الإضافة — لو عمود غلط غيّره من فوق. الكومنت بينزل للسيلز لما الرقم يتوزّع عليه.</p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm min-w-[420px]">
                 <thead>
                   <tr className="text-[var(--text-muted)] text-xs">
                     <th className="text-right py-2 px-2">الاسم</th>
                     <th className="text-right py-2 px-2">الرقم</th>
+                    <th className="text-right py-2 px-2">الكومنت</th>
                     <th className="py-2 px-2">الحالة</th>
                   </tr>
                 </thead>
@@ -286,6 +329,7 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
                     <tr key={index} className="border-t border-[var(--border)]">
                       <td className="py-2 px-2 text-[var(--text-strong)]">{row.name || '—'}</td>
                       <td className="py-2 px-2 text-[var(--text)]" dir="ltr" style={{ textAlign: 'right' }}>{row.phone || '—'}</td>
+                      <td className="py-2 px-2 text-[var(--text-muted)] text-xs max-w-[220px] truncate" title={row.note || ''}>{row.note || '—'}</td>
                       <td className={`py-2 px-2 text-center text-xs font-bold ${row.invalid ? 'text-red-400' : row.duplicate ? 'text-amber-400' : 'text-emerald-400'}`}>
                         {row.invalid ? 'غير صالح' : row.duplicate ? 'مكرر' : 'جديد'}
                       </td>
@@ -295,9 +339,9 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
               </table>
             </div>
 
-            <button type="button" disabled={saving || !preview.fresh || !formName.trim()} onClick={() => void handleSave()}
+            <button type="button" disabled={saving || !preview.fresh || !(target === 'new' ? formName.trim() : existingForm)} onClick={() => void handleSave()}
               className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
-              {saving ? 'جاري الإضافة…' : `إضافة الفورم (${preview.fresh} رقم)`}
+              {saving ? 'جاري الإضافة…' : target === 'new' ? `إضافة الفورم (${preview.fresh} رقم)` : `إضافة ${preview.fresh} رقم على «${existingForm || '…'}»`}
             </button>
           </div>
         )}

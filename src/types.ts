@@ -109,6 +109,10 @@ export interface AssignedLead {
   phone: string;
   // رقم تاني للعميل (اختياري) — بينزل مع العميل لما الرقم يتحوّل لعميل
   phones?: string[];
+  // كومنت الإدارة على الرقم (من الشيت أو نافذة الإضافة) — بينزل للسيلز لما الرقم يتوزّع
+  comment?: string;
+  commentBy?: string;
+  commentAt?: string;
   description: string;
   status: 'new' | 'viewed' | 'contacted' | 'closed';
   viewedAt?: string;

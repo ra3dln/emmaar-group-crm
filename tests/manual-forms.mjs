@@ -103,6 +103,21 @@ check('اسم جديد مقبول', !formNameTaken('فورم جديد', ['Go Ads
 check('اللافتة جنب الفورم اليدوي بس', withManualTag('أ', ['أ']) === 'أ (فورم مضافة يدوي)' && withManualTag('ب', ['أ']) === 'ب');
 check('قائمة بايظة ما بتكسرش', parseManualForms('x').length === 0);
 
+// ===== ٣ب) كومنتات الشيت + الإضافة على فورم موجودة =====
+const { buildManualLeads, addToManualFormCount } = await import('../src/manualForms.ts');
+const withNotes = buildPreview([
+  ['الاسم', 'الموبايل', 'الكومنت'],
+  ['سما', '01001112223', 'عايزة تقسيط ٧ سنين'],
+  ['رامي', '01001112224', ''],
+], []);
+check('عمود «الكومنت» بيتعرف لوحده', withNotes.mapping.note === 'الكومنت' && withNotes.rows[0].note === 'عايزة تقسيط ٧ سنين', JSON.stringify(withNotes.mapping));
+let m = 0;
+const toExisting = buildManualLeads({ name: 'GO ADS', fileName: 'x.xlsx', rows: withNotes.rows, adminId: 'a1', adminName: 'الإدارة', now: '2026-11-12T10:00:00.000Z', newId: () => `n${++m}` });
+check('الأرقام بتتضاف على الفورم الموجودة باسمها', toExisting.length === 2 && toExisting.every((l) => l.formName === 'GO ADS'));
+check('كومنت الشيت متخزن على الرقم وبيروح للسيلز لما يتوزّع', toExisting[0].comment === 'عايزة تقسيط ٧ سنين' && toExisting[0].commentBy === 'الإدارة' && !toExisting[1].comment);
+check('عدّاد الفورم اليدوية الموجودة بيزيد', addToManualFormCount([{ id: 'f', name: 'GO ADS', count: 3 }], 'GO ADS', 2)[0].count === 5);
+check('شاشة الشيت: فورم جديدة أو موجودة + عمود الكومنت', /\['new', 'فورم جديدة'\], \['existing', 'فورم موجودة'\]/.test(view) && /عمود الكومنت \(اختياري\)/.test(view));
+
 // ===== ٤) الحذف =====
 const leads = [
   { id: 'l1', phone: '01001234567', formName: 'يدوي', salesId: 'u1' },

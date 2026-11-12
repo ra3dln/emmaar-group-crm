@@ -38,18 +38,9 @@ export const formNameTaken = (name: string, existing: string[]): boolean => {
   return existing.some((item) => String(item || '').trim().toLowerCase() === clean);
 };
 
-type SheetRow = { name: string; phone: string; duplicate: boolean; invalid: boolean };
+type SheetRow = { name: string; phone: string; note?: string; duplicate: boolean; invalid: boolean };
 
-// سجل الفورم + رقم غير موزّع لكل سطر سليم وجديد في الشيت
-export const buildManualForm = ({
-  name,
-  fileName,
-  rows,
-  adminId,
-  adminName,
-  now,
-  newId,
-}: {
+type LeadParams = {
   name: string;
   fileName: string;
   rows: SheetRow[];
@@ -57,25 +48,49 @@ export const buildManualForm = ({
   adminName: string;
   now: string;
   newId: () => string;
-}) => {
+};
+
+// رقم غير موزّع لكل سطر سليم وجديد في الشيت — ومعاه كومنت الشيت لو موجود
+// (الكومنت بينزل للسيلز لما الرقم يتوزّع: shared/leadClients.js → leadCommentActivity)
+export const buildManualLeads = ({ name, fileName, rows, adminId, adminName, now, newId }: LeadParams) => {
   const formName = String(name || '').trim();
-  const leads = rows
+  return rows
     .filter((row) => !row.invalid && !row.duplicate && row.phone)
-    .map((row) => ({
-      id: newId(),
-      adminId,
-      salesId: '',
-      name: String(row.name || '').trim() || 'بدون اسم',
-      phone: row.phone,
-      description: `${MANUAL_FORM_LABEL} — ${fileName}`,
-      status: 'new' as const,
-      createdAt: now,
-      campaignAt: now,
-      formName,
-    }));
-  const form: ManualForm = { id: newId(), name: formName, fileName, count: leads.length, createdAt: now, createdBy: adminName };
+    .map((row) => {
+      const comment = String(row.note || '').trim();
+      return {
+        id: newId(),
+        adminId,
+        salesId: '',
+        name: String(row.name || '').trim() || 'بدون اسم',
+        phone: row.phone,
+        description: `${MANUAL_FORM_LABEL} — ${fileName}`,
+        status: 'new' as const,
+        createdAt: now,
+        campaignAt: now,
+        formName,
+        ...(comment ? { comment, commentBy: adminName, commentAt: now } : {}),
+      };
+    });
+};
+
+// سجل الفورم الجديدة + أرقامها
+export const buildManualForm = (params: LeadParams) => {
+  const leads = buildManualLeads(params);
+  const form: ManualForm = {
+    id: params.newId(),
+    name: String(params.name || '').trim(),
+    fileName: params.fileName,
+    count: leads.length,
+    createdAt: params.now,
+    createdBy: params.adminName,
+  };
   return { form, leads };
 };
+
+// أرقام اتضافت لفورم يدوي موجود — عدّاده يزيد
+export const addToManualFormCount = (forms: ManualForm[], name: string, added: number): ManualForm[] =>
+  forms.map((form) => (form.name === String(name || '').trim() ? { ...form, count: (Number(form.count) || 0) + added } : form));
 
 // اللي هيتشال مع الفورم: أرقامه + العميل التلقائي لكل رقم (نفس قاعدة حذف رقم من التوزيع:
 // العميل اللي معرّفه مشتق من الرقم بس — عميل اتسجّل بنفسه ما بيتمسش)

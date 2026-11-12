@@ -81,9 +81,9 @@ import { isPartnerOf, isRecordOwner, ownsPhone, partnerPhonesOf, partnersOnPhone
 import { installBackGuard } from './backNav';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import { PartnerPanel } from './PartnerPanel';
-import { ManualFormsView, useManualFormNames } from './ManualFormsView';
+import { ManualFormsView, knownFormNames, useManualFormNames } from './ManualFormsView';
 import { SalesExportView } from './SalesExportView';
-import { withManualTag } from './manualForms';
+import { MANUAL_FORMS_KEY, addToManualFormCount, formNameTaken, parseManualForms, withManualTag } from './manualForms';
 import {
   ATTENDANCE_END_DEFAULT,
   ATTENDANCE_GRACE_DEFAULT,
@@ -14730,76 +14730,163 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
   // السيلز مابيوزعش لنفسه على حد: الرقم اللي بيكتبه بينزل باسمه هو مباشرة،
   // فقائمة اختيار السيلز تختفي تماماً من حسابه (وقرار التوزيع يظل للإدارة).
   const isSalesAgent = currentUser?.role === 'sales';
-  const [form, setForm] = useState({ name: '', phone: '', phone2: '', description: '', salesId: isSalesAgent ? currentUser.id : '' });
+  // ===== الإدارة: الرقم ممكن يتضاف لفورم موجودة أو فورم جديدة، ومعاه كومنت =====
+  // الكومنت بينزل للسيلز لما الرقم يتوزّع عليه (shared/leadClients.js → leadCommentActivity)
+  const activeForms = useActiveCampaignForms(!isSalesAgent);
+  const manualNames = useManualFormNames();
+  const formOptions = isSalesAgent ? [] : knownFormNames(activeForms, manualNames);
+  const [formMode, setFormMode] = useState<'none' | 'existing' | 'new'>('none');
+  const [form, setForm] = useState({
+    name: '', phone: '', phone2: '', description: '', comment: '', formName: '', newFormName: '',
+    salesId: isSalesAgent ? currentUser.id : '',
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (saving) return;
-    const salesId = isSalesAgent ? currentUser.id : form.salesId;
-    if (!salesId) {
+    // الإدارة تقدر تسيب الرقم من غير توزيع لو هو على فورم (يدخل «توزيع الأرقام»)
+    const salesId = isSalesAgent ? currentUser.id : form.salesId === 'none' ? '' : form.salesId;
+    const chosenForm = formMode === 'existing' ? form.formName.trim() : formMode === 'new' ? form.newFormName.trim() : '';
+    if (!isSalesAgent && !form.salesId) {
       setError('اختر السيلز المسؤول عن الرقم');
       return;
     }
+    if (formMode !== 'none' && !chosenForm) {
+      setError(formMode === 'existing' ? 'اختار الفورم' : 'اكتب اسم الفورم الجديدة');
+      return;
+    }
+    if (!salesId && !chosenForm) {
+      setError('الرقم من غير توزيع لازم يكون على فورم — عشان يظهر في «توزيع الأرقام»');
+      return;
+    }
+    if (formMode === 'new' && formNameTaken(chosenForm, formOptions)) {
+      setError('في فورم بالاسم ده بالفعل — اختارها من «فورم موجودة»');
+      return;
+    }
     // الرقم التاني (اختياري) — لو العميل عنده رقمين
-    const { phone2, ...fields } = form;
+    const { phone2, comment, formName: _picked, newFormName: _typed, ...fields } = form;
     const extraPhone = phone2.trim();
     if (extraPhone && phoneKeyOf(extraPhone) === phoneKeyOf(form.phone)) {
       setError('الرقم التاني هو نفس الرقم الأساسي');
       return;
     }
+    // رقم واحد = صاحب واحد: الرقم الموجود بالفعل ما يتضافش تاني
+    const key = phoneKeyOf(form.phone);
+    const leads = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
+    const clientsNow = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+    const taken =
+      leads.some((l: AssignedLead) => phoneKeyOf(l.phone) === key) ||
+      clientsNow.some((c: Client) => [c.phone, ...(c.phones || [])].some((p) => phoneKeyOf(p) === key));
+    if (key && taken) {
+      setError('الرقم ده موجود بالفعل في النظام');
+      return;
+    }
     setError('');
     setSaving(true);
-    const leads = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
+    // فورم جديدة: تتسجّل الأول (الأرقام باسم فورم غير مسجّل بتتخفي من القوائم)
+    if (chosenForm && !(await saveExtraFormName(chosenForm))) {
+      setSaving(false);
+      setError('تعذّر حفظ الفورم — ما اتضافش الرقم. اتأكد من الاتصال وجرّب تاني.');
+      return;
+    }
+    const now = new Date().toISOString();
+    const note = comment.trim();
     const newLead: AssignedLead = {
       ...fields,
       ...(extraPhone ? { phones: [extraPhone] } : {}),
+      ...(note ? { comment: note, commentBy: currentUser?.name || '', commentAt: now } : {}),
+      ...(chosenForm ? { formName: chosenForm, campaignAt: now } : {}),
       salesId,
       id: crypto.randomUUID(),
       adminId: currentUser.id,
       status: 'new',
-      // رقم أضافه السيلز بنفسه (مش رقم كامبين) — فتبقى في تبويب «العملاء»
-      manual: true,
-      createdAt: new Date().toISOString()
+      // رقم أضافه السيلز بنفسه (مش رقم كامبين) — فتبقى في تبويب «العملاء».
+      // رقم الإدارة على فورم رقم كامبين عادي.
+      ...(chosenForm ? {} : { manual: true }),
+      ...(salesId ? { assignedAt: now } : {}),
+      createdAt: now,
     };
     localStorage.setItem('crm_assigned_leads', JSON.stringify([newLead, ...leads]));
+    // سجل الفورمات اليدوية: فورم جديدة بعدد ١، أو عدّاد فورم يدوية موجودة يزيد
+    let registryChanged = false;
+    if (chosenForm) {
+      const registry = parseManualForms(localStorage.getItem(MANUAL_FORMS_KEY));
+      if (formMode === 'new') {
+        registry.unshift({ id: crypto.randomUUID(), name: chosenForm, fileName: 'إضافة رقم', count: 1, createdAt: now, createdBy: currentUser?.name || '' });
+        localStorage.setItem(MANUAL_FORMS_KEY, JSON.stringify(registry));
+        registryChanged = true;
+      } else if (registry.some((f) => f.name === chosenForm)) {
+        localStorage.setItem(MANUAL_FORMS_KEY, JSON.stringify(addToManualFormCount(registry, chosenForm, 1)));
+        registryChanged = true;
+      }
+    }
     // لا نغلق النافذة قبل التأكد أن الرقم وصل للسيرفر — وإلا بقي على الجهاز وحده
-    const ok = await pushKey('crm_assigned_leads');
+    const results = await Promise.all([
+      pushKey('crm_assigned_leads'),
+      registryChanged ? pushKey(MANUAL_FORMS_KEY) : Promise.resolve(true),
+    ]);
     setSaving(false);
     onSuccess();
-    if (!ok) {
+    if (!results.every(Boolean)) {
       setError('الرقم اتحفظ على الجهاز ولم يوصل للسيرفر — جرّب مرة أخرى.');
       return;
     }
     onClose();
   };
-  
+
   const salesUsers = users.filter((u: User) => ['sales', 'supervisor'].includes(effectiveRoleOf(u)));
-  
+  const fieldClass = 'w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]';
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 mb-6">
-          <div className="page-intro"><div><h2>{isSalesAgent ? 'إضافة رقم جديد' : 'توزيع رقم جديد'}</h2></div></div>
+          <div className="page-intro"><div><h2>{isSalesAgent ? 'إضافة رقم جديد' : 'إضافة رقم'}</h2></div></div>
           <button type="button" onClick={onClose} title="إغلاق"
             className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)] transition-colors shrink-0">
             <X className="w-4 h-4 text-[var(--text)]" />
           </button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input type="text" placeholder="اسم العميل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required />
-          <input type="tel" placeholder="رقم الهاتف *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" required />
-          <input type="tel" placeholder="رقم آخر (اختياري)" value={form.phone2} onChange={(e) => setForm({ ...form, phone2: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" dir="ltr" />
-          <textarea placeholder="وصف/ملاحظات" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] resize-none h-20" />
+          <input type="text" placeholder="اسم العميل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={fieldClass} required />
+          <input type="tel" placeholder="رقم الهاتف *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className={fieldClass} dir="ltr" required />
+          <input type="tel" placeholder="رقم آخر (اختياري)" value={form.phone2} onChange={(e) => setForm({ ...form, phone2: e.target.value })} className={fieldClass} dir="ltr" />
+          <textarea placeholder="وصف/ملاحظات" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className={`${fieldClass} resize-none h-20`} />
+          {!isSalesAgent && (
+            <div className="space-y-2">
+              <span className="block text-xs text-[var(--text-muted)] font-bold">الفورم</span>
+              <div className="flex gap-2">
+                {([['none', 'من غير فورم'], ['existing', 'فورم موجودة'], ['new', 'فورم جديدة']] as const).map(([id, label]) => (
+                  <button key={id} type="button" onClick={() => setFormMode(id)}
+                    className={`flex-1 py-2 rounded-[var(--r-md)] text-xs font-bold border ${formMode === id ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--text-strong)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {formMode === 'existing' && (
+                <select value={form.formName} onChange={(e) => setForm({ ...form, formName: e.target.value })} className={fieldClass}>
+                  <option value="" className="bg-gray-900">— اختار فورم —</option>
+                  {formOptions.map((name) => <option key={name} value={name} className="bg-gray-900">{withManualTag(name, manualNames)}</option>)}
+                </select>
+              )}
+              {formMode === 'new' && (
+                <input type="text" placeholder="اسم الفورم الجديدة" value={form.newFormName} onChange={(e) => setForm({ ...form, newFormName: e.target.value })} className={fieldClass} />
+              )}
+            </div>
+          )}
+          <textarea placeholder={isSalesAgent ? 'كومنت (اختياري)' : 'كومنت (اختياري) — بيوصل للسيلز لما الرقم يتوزّع عليه'}
+            value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} className={`${fieldClass} resize-none h-20`} />
           {isSalesAgent ? (
             <div className="flex items-center justify-between gap-2 rounded-[var(--r-md)] border border-[var(--brand-primary-soft)] bg-[var(--brand-primary-softer)] px-4 py-3">
               <span className="text-xs text-[var(--text-muted)]">الرقم هيضاف على اسمك</span>
               <b className="text-sm text-[var(--text-strong)]">{currentUser.name}</b>
             </div>
           ) : (
-            <select value={form.salesId} onChange={(e) => setForm({ ...form, salesId: e.target.value })} className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)]" required>
+            <select value={form.salesId} onChange={(e) => setForm({ ...form, salesId: e.target.value })} className={fieldClass} required>
               <option value="" className="bg-gray-900">اختر السيلز</option>
+              <option value="none" className="bg-gray-900">من غير توزيع دلوقتي (يدخل «توزيع الأرقام»)</option>
               {salesUsers.map((u: User) => (
                 <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
               ))}
@@ -14807,21 +14894,13 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
           )}
           {error && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-[var(--r-md)] px-3 py-2">{error}</p>}
           <button type="submit" disabled={saving || (!isSalesAgent && !form.salesId)} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold disabled:opacity-60">
-            {saving ? 'جارٍ الحفظ...' : isSalesAgent ? 'إضافة الرقم' : 'توزيع الرقم'}
+            {saving ? 'جارٍ الحفظ...' : isSalesAgent ? 'إضافة الرقم' : form.salesId === 'none' ? 'إضافة الرقم للتوزيع' : 'إضافة وتوزيع الرقم'}
           </button>
         </form>
       </motion.div>
     </motion.div>
   );
 }
-
-// User Feedback Modal - Show daily feedback for a user
-// مراحل العملاء — تُعرَّف مرة واحدة في أعلى الملف وتُستخدم في الفيدباك والمراحل وقائمة العملاء
-
-// ===== تجميع فيدباك أي سيلز: رقم ← كومنتاته (مصدر واحد يستخدمه كل مكان عند الإدارة) =====
-// يجمع من: خط العملاء الزمني + سجل المكالمات + الأرقام الواردة، ويشيل التكرار.
-const normPhone = (value: any) => normalizeDigits(String(value || '')).replace(/\D/g, '');
-
 function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = [], callLogs: any[] = [], userName = '') {
   type Item = { id: string; text: string; at: string; kind: string; status: string };
   const map = new Map<string, { key: string; name: string; phone: string; source: string; stage: string; incoming: boolean; items: Item[] }>();
@@ -14972,6 +15051,13 @@ function mergeDailyFeedbackCards(
 
 // ===== صفحة فيدباك السيلز عند الإدارة (٣ مستويات) =====
 // اسم السيلز ← صفحة كاملة بأرقامه ← اضغط الرقم ← فيدباكه منظّماً تحت بعضه
+
+// User Feedback Modal - Show daily feedback for a user
+// مراحل العملاء — تُعرَّف مرة واحدة في أعلى الملف وتُستخدم في الفيدباك والمراحل وقائمة العملاء
+
+// ===== تجميع فيدباك أي سيلز: رقم ← كومنتاته (مصدر واحد يستخدمه كل مكان عند الإدارة) =====
+// يجمع من: خط العملاء الزمني + سجل المكالمات + الأرقام الواردة، ويشيل التكرار.
+const normPhone = (value: any) => normalizeDigits(String(value || '')).replace(/\D/g, '');
 function UserFeedbackModal({ user, clients, leads = [], callLogs = [], dailyFeedbacks = [], onClose }: any) {
   const [openNumber, setOpenNumber] = useState<string | null>(null);
   const [q, setQ] = useState('');

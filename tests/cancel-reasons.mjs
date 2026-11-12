@@ -76,7 +76,10 @@ check('حالة الإلغاء تطلب السبب قبل الحفظ', (app.matc
 check('الفلتر مبني على أسباب الإلغاء', app.includes('setCancelFilter(reason.id)') && app.includes('CANCEL_REASONS.map'));
 check('أيقونة فلتر في قائمة العملاء', app.includes('aria-label="فلتر الإلغاء"'));
 check('السيلز لا يختار مندوباً لنفسه', app.includes("const isSalesAgent = currentUser?.role === 'sales'"));
-check('إضافة الرقم تنتظر وصولها للسيرفر', app.includes("await pushKey('crm_assigned_leads')"));
+check(
+  'إضافة الرقم تنتظر وصولها للسيرفر',
+  app.includes("await pushKey('crm_assigned_leads')") || /await Promise\.all\(\[\s*pushKey\('crm_assigned_leads'\)/.test(app)
+);
 check('زر إضافة رقم ظاهر للسيلز', app.includes('إضافة رقم') && app.includes('onAddNumber'));
 
 // ===== ٥) عدّادات الأرقام الموزّعة (الرقم لم يبقَ صفراً) =====

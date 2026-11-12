@@ -58,6 +58,19 @@ const table = await readXlsx(await blob.arrayBuffer());
 check('الأعمدة بالظبط: اسم السيلز / اسم العميل / الرقم / الفيدباك', table[1].join('|') === 'اسم السيلز|اسم العميل|الرقم|الفيدباك', table[1].join('|'));
 check('الفيدباك متعدد السطور بيتقرا زي ما هو من الملف', table.some((row) => row[3] === mona.feedback));
 
+// الفورم لكل صف (للفلتر) + كومنت الإدارة على رقم لسه ما اتحوّلش لعميل
+const withForm = buildSalesExportRows({
+  users,
+  leads: [{ id: 'lf', salesId: 'u2', name: 'نادر', phone: '01000000009', status: 'new', formName: 'GO ADS', comment: 'كلمه بعد العصر', commentBy: 'الإدارة', commentAt: '2026-11-12T09:00:00.000Z' }],
+});
+check('كل صف معاه اسم الفورم ومفتاح للاختيار', withForm[0].form === 'GO ADS' && withForm[0].key === 'l:lf');
+check('كومنت الإدارة على الرقم ظاهر في الفيدباك', /الإدارة: كلمه بعد العصر/.test(withForm[0].feedback), withForm[0].feedback);
+const view = fs.readFileSync(path.join(root, '..', 'src/SalesExportView.tsx'), 'utf8');
+check(
+  'فلتر الفورم والسيلز والبحث + اختيار عملاء بعينهم',
+  /الفورم \(عملاء كامبين\)/.test(view) && /تنزيل المختارين/.test(view) && /تنزيل المعروض/.test(view) && /type="checkbox"/.test(view)
+);
+
 check(
   'تبويب «تصدير الأرقام» للإدارة',
   /id: 'admin-export', icon: Download, label: 'تصدير الأرقام'/.test(app) && /activeTab === 'admin-export' && currentUser\.role === 'admin' && <SalesExportView/.test(app)

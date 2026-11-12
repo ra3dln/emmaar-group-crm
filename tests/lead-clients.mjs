@@ -292,4 +292,26 @@ check(
   /placeholder="رقم آخر \(اختياري\)" value=\{newPhone\}/.test(app) && /phones: extraPhones,/.test(app)
 );
 
+// ===== كومنت الإدارة على الرقم بينزل للسيلز لما يتوزّع =====
+const withComment = buildLeadClients({
+  leads: [lead('l11', { salesId: 'u-ahmed', phone: '01000000011', comment: 'العميل عايز شقة في التجمع', commentBy: 'الإدارة', commentAt: '2026-11-12T09:00:00.000Z' })],
+  at: AT,
+})[0];
+const commentAct = withComment.activities.find((a) => a.id.endsWith('-comment'));
+check(
+  'كومنت الإدارة على الرقم بيبقى كومنت في خط العميل وبيظهر في الفيدباك',
+  commentAct?.type === 'feedback' && commentAct?.text === 'العميل عايز شقة في التجمع' && commentAct?.by === 'الإدارة' && withComment.feedback === 'العميل عايز شقة في التجمع',
+  JSON.stringify(withComment.activities)
+);
+check('معرّف الكومنت ثابت (كل الأجهزة تعمل نفس الحدث)', commentAct?.id === buildLeadClients({ leads: [lead('l11', { salesId: 'u-ahmed', phone: '01000000011', comment: 'x' })], at: AT })[0].activities.find((a) => a.id.endsWith('-comment'))?.id);
+check('رقم من غير كومنت ما بيتعملش له حدث كومنت', !buildLeadClients({ leads: [lead('l12', { salesId: 'u-ahmed', phone: '01000000012' })], at: AT })[0].activities.some((a) => a.id.endsWith('-comment')));
+check(
+  'نافذة إضافة رقم للإدارة: فورم موجودة/جديدة + كومنت + من غير توزيع',
+  /\['existing', 'فورم موجودة'\], \['new', 'فورم جديدة'\]/.test(app) &&
+    /كومنت \(اختياري\) — بيوصل للسيلز لما الرقم يتوزّع عليه/.test(app) &&
+    /\.\.\.\(note \? \{ comment: note, commentBy:/.test(app) &&
+    /من غير توزيع دلوقتي/.test(app) &&
+    /setError\('الرقم ده موجود بالفعل في النظام'\)/.test(app)
+);
+
 console.log(`\n✅ نجحت ${passed} فحوصات لتحويل الرقم الموزَّع إلى عميل + الشاشة الآمنة`);

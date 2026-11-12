@@ -18,3 +18,6 @@ export declare function buildLeadClients(options?: {
   // آخر كلام على كل رقم (المفتاح = أرقام الرقم) — بينزل مع الرقم على المندوب
   comments?: Map<string, { text?: string; at?: string; by?: string; status?: string }> | Record<string, any> | null;
 }): any[];
+
+// كومنت الإدارة على الرقم → حدث فيدباك في خط العميل (أو null لو مفيش كومنت)
+export declare function leadCommentActivity(lead?: any): { id: string; type: string; text: string; at: string; by: string } | null;

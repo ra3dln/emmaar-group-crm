@@ -86,6 +86,23 @@ const noteOf = (comments, key) => {
   };
 };
 
+// ===== كومنت الإدارة على الرقم نفسه =====
+// الإدارة بتكتب كومنت وهي بتضيف الرقم (أو بييجي من عمود في الشيت المرفوع).
+// لما الرقم يتوزّع ويتحوّل عميل، الكومنت بينزل في خط العميل — بمعرّف ثابت مشتق من
+// الرقم، فكل الأجهزة تعمل نفس الحدث ومايتكررش.
+export const leadCommentActivity = (lead) => {
+  const text = String(lead?.comment || '').trim();
+  const key = phoneKeyOf(lead?.phone);
+  if (!text || !key) return null;
+  return {
+    id: `${LEAD_CLIENT_ID_PREFIX}${key}-comment`,
+    type: 'feedback',
+    text,
+    at: String(lead?.commentAt || lead?.createdAt || ''),
+    by: String(lead?.commentBy || 'الإدارة'),
+  };
+};
+
 // يبني عملاء جدد من الأرقام الموزَّعة التي ما عندها عميل لسه.
 //   leads       : الأرقام الموزَّعة (salesId = صاحب الرقم)
 //   clients     : العملاء الموجودون — أرقامهم محجوزة (رقم واحد = مالك واحد)
@@ -123,6 +140,7 @@ export function buildLeadClients({
       String(lead?.createdAt || at);
     // الكومنت اللي اتكتب على الرقم قبل ما ينزل — بينزل معاه
     const note = noteOf(comments, key);
+    const adminComment = leadCommentActivity(lead);
     created.push({
       id: leadClientIdFor(lead.phone),
       userId: owner,
@@ -139,7 +157,7 @@ export function buildLeadClients({
       deliveryPeriod: '',
       status: 'campaign',
       stage: 'new',
-      feedback: note?.text || '',
+      feedback: note?.text || adminComment?.text || '',
       priority: 'high',
       source: description ? `رقم موزّع — ${description}` : 'رقم موزّع',
       ...(lead?.formName ? { formName: String(lead.formName) } : {}),
@@ -169,6 +187,8 @@ export function buildLeadClients({
               },
             ]
           : []),
+        // كومنت الإدارة على الرقم (من الشيت أو من نافذة إضافة الرقم)
+        ...(adminComment ? [{ ...adminComment, at: adminComment.at || at }] : []),
       ],
     });
   }
