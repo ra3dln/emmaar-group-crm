@@ -7883,8 +7883,14 @@ function CallFlowModal({
 }: any) {
   const [result, setResult] = useState<'' | 'answered' | 'no-answer'>('');
   const [comment, setComment] = useState('');
-  // الحالة تبدأ بحالة آخر فيدباك على العميل: مش إلزامي يغيّرها مع كل إجراء
-  const [status, setStatus] = useState(() => latestFeedbackStatusOf(client) || '');
+  // الحالة تبدأ بحالة آخر فيدباك على العميل: مش إلزامي يغيّرها مع كل إجراء.
+  // «No Answer» ما بتتنقلش لإجراء جديد — كانت بتتحفظ مع كل مكالمة «تم الرد» بعدها
+  // فالرقم يفضل في Fresh رغم إن عليه أكشن.
+  const carriedStatus = (() => {
+    const acts: any[] = Array.isArray(client?.activities) ? client.activities : [];
+    return String(acts.find((a: any) => !!a?.status && a.status !== 'no-answer')?.status || '');
+  })();
+  const [status, setStatus] = useState(carriedStatus);
   // سبب الإلغاء — يُطلب فقط عند اختيار حالة «cancellation»
   const [cancelReason, setCancelReason] = useState('');
   const [nextCallAt, setNextCallAt] = useState('');
@@ -7918,7 +7924,7 @@ function CallFlowModal({
   // بتتحفظ زي آخر فيدباك على العميل (نفس قاعدة صندوق الفيدباك).
   const save = () => {
     if (!result) return;
-    const statusId = status || latestFeedbackStatusOf(client) || '';
+    const statusId = status || carriedStatus;
     // إلغاء بلا سبب لا يُحفظ
     if (statusId === 'cancellation' && !cancelReason) return;
     const text =

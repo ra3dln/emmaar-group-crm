@@ -66,12 +66,12 @@ check(
 
 const callModal = app.slice(app.indexOf('function CallFlowModal'), app.indexOf('function CallFlowModal') + 9000);
 check(
-  'نافذة الاتصال بتبدأ بحالة آخر فيدباك على العميل',
-  callModal.includes('useState(() => latestFeedbackStatusOf(client) ||')
+  'نافذة الاتصال بتبدأ بحالة آخر فيدباك على العميل (من غير No Answer — ما تتنقلش لإجراء جديد)',
+  callModal.includes('useState(carriedStatus)') && /a\.status !== 'no-answer'/.test(callModal)
 );
 check(
   'الحفظ في نافذة الاتصال مش بيتطلب اختيار حالة جديدة',
-  /const statusId = status \|\| latestFeedbackStatusOf\(client\) \|\| ''/.test(callModal) &&
+  /const statusId = status \|\| carriedStatus;/.test(callModal) &&
     !/disabled=\{!status \|\|/.test(callModal)
 );
 check(

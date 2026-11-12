@@ -368,4 +368,53 @@ check(
   !feedbackByPhone([], [{ clientPhone: '01006663333', comment: 'تم إنشاء تذكير للمتابعة', createdAt: AT }]).get('01006663333')?.note
 );
 
+// ===== «تم الرد» + «No Answer» في نفس الإجراء =====
+// الحالة كانت بتتنقل من أول «No Answer» لكل مكالمة اترد عليها بعدها — فالرقم
+// عليه أكشن وفضل في Fresh. في الإجراء الواحد «تم الرد» هي اللي تكسب.
+{
+  const T1 = '2026-11-01T12:07:54.626Z';
+  const T1card = '2026-11-01T12:07:54.788Z';
+  const T0 = '2026-10-31T13:04:08.863Z';
+  const leadSnap = feedbackByPhone(
+    [{ ...feedback('no-answer', T0), id: 'fa' }, { ...feedback('no-answer', T1card), id: 'fb' }],
+    [{ ...callLog('no-answer', T0), id: 'la' }, { ...callLog('answered', T1), id: 'lb' }]
+  );
+  check('رقم موزّع: «تم الرد» مع «No Answer» في نفس الإجراء → Follow Up', leadSnap.get(PHONE)?.status === 'follow-up', leadSnap.get(PHONE)?.status);
+
+  const client = buildWorkNumbers(
+    [{ id: 'c-ans', name: 'عميل', phone: PHONE, stage: 'contacted',
+      activities: [
+        { id: 'a2', type: 'feedback', text: 'عايز شقة استلام فوري', status: 'no-answer', at: T1card },
+        { id: 'a1', type: 'feedback', text: 'No answer', status: 'no-answer', at: T0 },
+      ] }],
+    [],
+    feedbackByPhone([], [{ ...callLog('no-answer', T0), id: 'la' }, { ...callLog('answered', T1), id: 'lb' }])
+  )[0];
+  check('عميل: «تم الرد» مع «No Answer» في نفس الإجراء → Follow Up مش Fresh', client?.bucket === 'follow-up', client?.bucket);
+
+  const onlyNa = buildWorkNumbers(
+    [{ id: 'c-na9', name: 'عميل', phone: PHONE, stage: 'contacted',
+      activities: [{ id: 'a1', type: 'feedback', text: 'No answer', status: 'no-answer', at: T0 }] }],
+    [],
+    feedbackByPhone([{ ...feedback('no-answer', T0), id: 'fa' }], [{ ...callLog('no-answer', T0), id: 'la' }])
+  )[0];
+  check('عميل كل مكالماته «لم يرد» لسه يفضل Fresh', onlyNa?.bucket === 'fresh-stage', onlyNa?.bucket);
+
+  // «تم الرد» اتضغطت غلط والكومنت بيقول إنه ما ردّش → «No Answer» هي الصح (يفضل Fresh)
+  for (const text of ['مش بيرد', 'مش ييرد', 'م بيرد', 'رنيت تاني مش بترد', 'تلفونه مقفول', 'الرقم خارج الخدمه']) {
+    const snap = feedbackByPhone(
+      [{ ...feedback('no-answer', T1card), id: 'fx', feedback: text }],
+      [{ ...callLog('answered', T1), id: 'lx', comment: text }]
+    );
+    check(`«تم الرد» + كومنت «${text}» → يفضل في خانته`, snap.get(PHONE)?.status === '', snap.get(PHONE)?.status);
+  }
+  for (const text of ['قالي اكلمه علي الساعة 8', 'في الشغل ساعة وارن عليه', 'عايز يبيع شقتو الاول']) {
+    const snap = feedbackByPhone(
+      [{ ...feedback('no-answer', T1card), id: 'fy', feedback: text }],
+      [{ ...callLog('answered', T1), id: 'ly', comment: text }]
+    );
+    check(`«تم الرد» + كومنت كلام مع العميل «${text}» → Follow Up`, snap.get(PHONE)?.status === 'follow-up', snap.get(PHONE)?.status);
+  }
+}
+
 console.log(`\n✅ نجحت ${passed} فحوصات (انتقال الحالة من الفيدباك)`);

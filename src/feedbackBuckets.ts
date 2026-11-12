@@ -97,6 +97,28 @@ export type PhoneSnapshot = {
   statusAt?: string;
   // الحالة جاية من نتيجة مكالمة بس (مفيش حالة اختارها المندوب في بطاقة)
   implicit?: boolean;
+  // أوقات مكالمات «تم الرد» على الرقم — عشان نعرف «No Answer» المتسجّلة معاها في نفس الإجراء
+  answeredAts?: string[];
+};
+
+// ===== «تم الرد» + «No Answer» في نفس الإجراء =====
+// شاشة «إضافة إجراء» كانت بتبدأ بآخر حالة على العميل — فلو أول مكالمة كانت
+// «No Answer»، كل مكالمة بعدها اترد عليها اتحفظت حالتها «No Answer» من غير ما
+// المندوب ياخد باله، والرقم فضل في Fresh رغم إن عليه أكشن. في الإجراء الواحد
+// زرار النتيجة («تم الرد») هو اللي المندوب ضغطه فعلاً، فهو اللي يكسب.
+export const SAME_ACTION_MS = 10 * 1000;
+// إلا لو الكومنت نفسه بيقول إنه ما ردّش («مش بيرد» / «مقفول» / «خارج الخدمة») —
+// ساعتها «تم الرد» هي اللي اتضغطت غلط، و«No Answer» هي الصح.
+const NO_ANSWER_TEXT_RE =
+  /no\s*answer|(^|\s)(مش|ما|م)\s*[بي]{0,2}[يت]?ر[دت]|مقفول|مغلق|خارج\s*(ال)?(خدم|تغطي)|غير\s*متاح|مش\s*متاح/i;
+export const looksLikeNoAnswerText = (text: any): boolean => NO_ANSWER_TEXT_RE.test(String(text || ''));
+export const isAnsweredSameAction = (at: any, answeredAts: string[] = []): boolean => {
+  const t = Date.parse(String(at || ''));
+  if (!Number.isFinite(t)) return false;
+  return answeredAts.some((x) => {
+    const c = Date.parse(x);
+    return Number.isFinite(c) && Math.abs(c - t) <= SAME_ACTION_MS;
+  });
 };
 
 export const feedbackByPhone = (
@@ -154,6 +176,22 @@ export const feedbackByPhone = (
   // المندوب في الفيدباك (follow up / meeting / done deal …)، لا نتيجة المكالمة
   // الضمنية. فلو المعالجة كانت بالعكس، المكالمة كانت هتنسخ الحالة وترجّع
   // الرقم لـ follow-up حتى لو المندوب حطّه meeting.
+  const answeredByPhone = new Map<string, string[]>();
+  for (const log of callLogs || []) {
+    const k = digitsOfPhone(log?.clientPhone);
+    if (k && log?.result !== 'no-answer' && !looksLikeNoAnswerText(log?.comment)) {
+      const list = answeredByPhone.get(k) || [];
+      list.push(String(log?.createdAt || ''));
+      answeredByPhone.set(k, list);
+    }
+  }
+  const fixedStatus = (feedback: any): string => {
+    const raw = String(feedback?.status || '');
+    if (raw !== NO_ANSWER) return raw;
+    const at = feedback?.createdAt || feedback?.date || '';
+    return isAnsweredSameAction(at, answeredByPhone.get(digitsOfPhone(feedback?.clientPhone))) ? 'follow-up' : raw;
+  };
+
   for (const log of callLogs || []) {
     put(log?.clientPhone, {
       status: log?.result === 'no-answer' ? NO_ANSWER : 'follow-up',
@@ -167,7 +205,7 @@ export const feedbackByPhone = (
   for (const feedback of feedbacks || []) {
     const at = String(feedback?.createdAt || feedback?.date || '');
     put(feedback?.clientPhone, {
-      status: String(feedback?.status || ''),
+      status: fixedStatus(feedback),
       cancelReason: String(feedback?.cancelReason || ''),
       note: '',
       at,
@@ -182,7 +220,7 @@ export const feedbackByPhone = (
   const chosen = new Map<string, { status: string; cancelReason: string; at: string }>();
   for (const feedback of feedbacks || []) {
     const key = digitsOfPhone(feedback?.clientPhone);
-    const raw = String(feedback?.status || '');
+    const raw = fixedStatus(feedback);
     if (!key || !raw) continue;
     const at = String(feedback?.createdAt || feedback?.date || '');
     const prev = chosen.get(key) || { status: '', cancelReason: '', at: '' };
@@ -200,6 +238,11 @@ export const feedbackByPhone = (
     entry.status = pick.status;
     entry.cancelReason = pick.status ? pick.cancelReason : '';
     entry.statusAt = pick.status ? pick.at : '';
+  }
+
+  for (const [key, entry] of map) {
+    const answered = answeredByPhone.get(key);
+    if (answered) entry.answeredAts = answered;
   }
 
   // الملاحظة = آخر كلام مندوب على الرقم (وليس آخر لوج)
@@ -354,8 +397,12 @@ export const buildWorkNumbers = (
     // حالة العميل: الصريحة في خطّه الزمني، وإلا آخر فيدباك/مكالمة على نفس الرقم
     // (مكالمة من جهاز تاني أو رقم اتحوّل لعميل بعد ما اتصلنا بيه).
     // («لم يرد» مش خانة — بيتعدّى عليها في الاتنين)
-    const actLatest = latestBucketActivityOf(client);
-    const actStatus = bucketStatus(actLatest?.status);
+    // «No Answer» في خط العميل اتسجّلت مع مكالمة «تم الرد» في نفس الإجراء = Follow Up
+    const answeredAts = snapshot?.answeredAts || [];
+    const statusOfAct = (a: any): string =>
+      a?.status === NO_ANSWER && isAnsweredSameAction(a?.at, answeredAts) ? 'follow-up' : String(a?.status || '');
+    const actLatest = activities.find((a: any) => !!bucketStatus(statusOfAct(a))) || null;
+    const actStatus = bucketStatus(statusOfAct(actLatest));
     const actAt = String(actLatest?.at || '');
     const snapStatus = String(snapshot?.status || '');
     const snapAt = String(snapshot?.statusAt || snapshot?.at || '');
