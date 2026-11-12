@@ -96,11 +96,21 @@ check('كل رقم أخذ مندوباً واحداً فقط', assigned.length =
 const countOf = (id) => result.leads.filter((l) => l.salesId === id).length;
 check('التوزيع متساوٍ (فرق رقم واحد كأقصى حد)', Math.abs(countOf(mohamed) - countOf(ahmed)) <= 1, `${countOf(mohamed)} / ${countOf(ahmed)}`);
 check(
-  'الحمل السابق على المندوب محسوب في الموازنة',
+  'التساوي في نفس الفورم الأول، والحمل الكلي بيفصل عند التعادل بس',
   (() => {
-    // محمد عنده ٥ أرقام قديمة، أحمد بلا شيء → الأرقام الجديدة تميل لأحمد
+    // محمد عنده ٥ أرقام في فورم تاني، أحمد بلا شيء: أرقام الفورم ده تتقسم بالتساوي
+    // بينهم، وأول رقم (التعادل) يروح لأحمد لأن حمله الكلي أقل.
+    // (قبل كده أحمد كان بياخد الكل، فواحد يبقى معاه ١٣ من الفورم وغيره صفر.)
     const loaded = [1, 2, 3, 4, 5].map((n) => lead(`9${n}`, { salesId: mohamed, formName: OTHER_FORM }));
     const res = distributeLeads({ leads: [...loaded, lead('31'), lead('32')], salesIds: [mohamed, ahmed], formName: FORM });
+    return res.assignments.length === 2 && res.assignments[0].salesId === ahmed && res.assignments[1].salesId === mohamed;
+  })()
+);
+check(
+  'سيلز معاه أرقام كتير من الفورم ما ياخدش منه تاني لحد ما الباقيين يحصّلوه',
+  (() => {
+    const has = [1, 2, 3, 4].map((n) => lead(`8${n}`, { salesId: mohamed }));
+    const res = distributeLeads({ leads: [...has, lead('41'), lead('42'), lead('43')], salesIds: [mohamed, ahmed], formName: FORM });
     return res.assignments.every((item) => item.salesId === ahmed);
   })()
 );
@@ -365,9 +375,10 @@ const afterRebalance = pile.map((l) => {
   const hit = rebalance.assignments.find((a) => a.id === l.id);
   return hit ? { ...l, salesId: hit.salesId } : l;
 });
-const rebalancedLoads = [ahmed, saif, abdo].map((id) => afterRebalance.filter((l) => l.salesId === id).length);
+// التساوي في أرقام الفورم نفسه (٢٠ / ٨ / ٤ → ١١ / ١١ / ١٠) — الفورمات التانية ما بتاخدش منه
+const rebalancedLoads = [ahmed, saif, abdo].map((id) => afterRebalance.filter((l) => l.salesId === id && l.formName === FORM).length);
 check(
-  'إعادة التوزيع بتسوّي التكدّس القديم (فرق رقم واحد كأقصى)',
+  'إعادة التوزيع بتسوّي التكدّس القديم في الفورم (فرق رقم واحد كأقصى)',
   Math.max(...rebalancedLoads) - Math.min(...rebalancedLoads) <= 1,
   JSON.stringify(rebalancedLoads)
 );

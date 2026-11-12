@@ -110,17 +110,25 @@ export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName
   // واحدة فقط: لما السيرفر يوزع رقمًا واحدًا في كل سحب وكان الحمل يُحسب من
   // الدفعة وحدها، كان الرقم يروح لنفس المندوب الأول دايمًا (٢٠ رقم مقابل ٤).
   const loadSource = asList(loadLeads === undefined ? leads : loadLeads);
-
   const nameOf = typeof formOf === 'function' ? formOf : formNameOfLead;
+
   const target = String(formName || '').trim();
   const excluded = new Set(asList(excludePhones).map((value) => phoneKeyOf(value)).filter(Boolean));
 
   const loads = new Map(eligible.map((id) => [id, 0]));
+  // ===== التساوي في نفس الفورم الأول =====
+  // كان الاختيار بالحمل الكلي بس: السيلز اللي أرقامه الكلية قليلة كان بياخد أغلب
+  // أرقام فورم جديد (واحد معاه ١٣ من الفورم وغيره صفر). دلوقتي: الأقل في **نفس
+  // الفورم** الأول، ولو متساويين الأقل في الحمل الكلي، وبعدها بالتناوب.
+  const formLoads = new Map(eligible.map((id) => [id, 0]));
   for (const lead of loadSource) {
     const owner = String(lead?.salesId || '');
     // الأرقام الملغاة/المغلقة مش حمل — اتشالت من العهدة فعليًا
     if (lead?.status === 'closed') continue;
     if (loads.has(owner)) loads.set(owner, loads.get(owner) + 1);
+    if (formLoads.has(owner) && (!target || String(nameOf(lead) || '').trim() === target)) {
+      formLoads.set(owner, formLoads.get(owner) + 1);
+    }
   }
 
   const pending = asList(leads)
@@ -142,20 +150,24 @@ export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName
   const assignments = [];
   let turn = 0;
   for (const lead of pending) {
-    let best = Infinity;
+    let bestForm = Infinity;
+    let bestTotal = Infinity;
     let pool = [];
     for (const id of eligible) {
+      const formLoad = formLoads.get(id) || 0;
       const load = loads.get(id) || 0;
-      if (load < best) {
-        best = load;
+      if (formLoad < bestForm || (formLoad === bestForm && load < bestTotal)) {
+        bestForm = formLoad;
+        bestTotal = load;
         pool = [id];
-      } else if (load === best) {
+      } else if (formLoad === bestForm && load === bestTotal) {
         pool.push(id);
       }
     }
     const owner = pool[turn % pool.length];
     turn += 1;
     loads.set(owner, (loads.get(owner) || 0) + 1);
+    formLoads.set(owner, (formLoads.get(owner) || 0) + 1);
     assignments.push({ id: String(lead.id), salesId: owner });
   }
 
