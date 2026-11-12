@@ -11586,6 +11586,28 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
         : `التوزيع التلقائي شغّال على «${activeForm}» ← ${names} ✓ — أول ما يوصل رقم جديد هيوصله واحد منهم بالتساوي.`
     );
   };
+  // ===== تشغيل/إيقاف التوزيع التلقائي من قائمة كل الفورمات (من غير ما تختار فورم الأول) =====
+  const ruleOfForm = (name: string) => (autoRules as AutoAssignRule[]).find((rule) => String(rule.formName || '') === name) || null;
+  const isRuleOn = (rule: AutoAssignRule | null) => !!(rule && rule.active !== false && (rule.allSales || (rule.salesIds || []).length));
+  const activeRulesCount = formOptions.filter((option) => isRuleOn(ruleOfForm(option.name))).length;
+  const toggleFormRule = (name: string) => {
+    const rule = ruleOfForm(name);
+    if (isRuleOn(rule)) {
+      if (!window.confirm(`إيقاف التوزيع التلقائي لفورم «${name}»؟ الأرقام الجديدة هتستنى التوزيع اليدوي.`)) return;
+      onSaveAutoRule?.(name, rule?.salesIds || [], false, !!rule?.allSales);
+      setFlash(`تم إيقاف التوزيع التلقائي لفورم «${name}»`);
+      return;
+    }
+    // التشغيل: على كل السيلز بالتساوي، والأرقام غير المخصصة دلوقتي هتتوزّع برضه
+    const waiting = (assignedLeads as AssignedLead[]).filter(
+      (l) => formKeyOf(l) === name && !l.salesId && l.assignedVia !== 'manual' && l.status !== 'closed'
+    ).length;
+    if (!window.confirm(`تشغيل التوزيع التلقائي لفورم «${name}» على كل السيلز بالتساوي؟
+هيتوزّع دلوقتي ${waiting} رقم غير مخصص، وأي رقم جديد يوصل بعد كده.`)) return;
+    const done = Number(onSaveAutoRule?.(name, salesUsers.map((u: User) => String(u.id)), true, true)) || 0;
+    setFlash(`تم تشغيل التوزيع التلقائي لفورم «${name}»${done ? ` — اتوزّع ${done} رقم دلوقتي` : ''} ✓`);
+  };
+
   const stopAuto = () => {
     if (activeForm === 'all') return;
     onSaveAutoRule?.(activeForm, effectiveAutoIds, false, autoAll);
@@ -11689,8 +11711,8 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                 من الفورم هيتوزع عليهم بالتساوي أوتوماتيك، واللي مش مختار مايصلهوش منها ولا رقم.
               </p>
             </div>
-            <span className={`st-chip ${ruleActive ? 'st-closed' : 'st-negotiation'} shrink-0`}>
-              {ruleActive ? 'مفعّل' : 'موقوف'}
+            <span className={`st-chip ${(activeForm === 'all' ? activeRulesCount > 0 : ruleActive) ? 'st-closed' : 'st-negotiation'} shrink-0`}>
+              {activeForm === 'all' ? `${activeRulesCount} فورم مفعّل` : ruleActive ? 'مفعّل' : 'موقوف'}
             </span>
           </div>
 
@@ -11717,6 +11739,22 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
               <p className="text-[11px] text-[var(--text-dim)] mt-2 leading-relaxed">
                 التوزيع التلقائي يتظبط لكل فورم لوحده — بعد اختيار الفورم هتظهر أسماء السيلز تختار منهم.
               </p>
+              {/* كل الفورمات وحالة التوزيع التلقائي لكل واحدة — تشغيل/إيقاف بضغطة */}
+              <div className="mt-3 divide-y divide-[var(--border)] rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--surface)]">
+                {formOptions.map((option) => {
+                  const on = isRuleOn(ruleOfForm(option.name));
+                  return (
+                    <div key={option.name} className="flex items-center gap-2 px-3 py-2">
+                      <span className="flex-1 min-w-0 text-xs font-bold text-[var(--text-strong)] truncate">{withManualTag(option.name, manualFormNames)} <span className="font-normal text-[var(--text-muted)]">({option.count} رقم)</span></span>
+                      <span className={`st-chip ${on ? 'st-closed' : 'st-negotiation'} shrink-0`}>{on ? 'مفعّل' : 'موقوف'}</span>
+                      <button type="button" onClick={() => toggleFormRule(option.name)}
+                        className={`shrink-0 text-xs font-bold px-3 py-1.5 rounded-[var(--r-sm)] border ${on ? 'text-amber-300 border-amber-400/40 bg-amber-500/10' : 'text-emerald-300 border-emerald-400/40 bg-emerald-500/10'}`}>
+                        {on ? 'إيقاف' : 'تشغيل'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           ) : (
             <>
