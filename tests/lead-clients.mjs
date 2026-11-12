@@ -326,4 +326,16 @@ check(
     /توزيع المحدد/.test(app) && /إزالة المحدد من السيلز/.test(app)
 );
 
+// ===== المراحل عند الإدارة: كارت لكل حالة بعدد كل السيلز مجموعين =====
+check(
+  'لوحة الحالات فوق قائمة السيلز في المراحل',
+  /function PipelineStatusBoard\(/.test(app) && /<PipelineStatusBoard users=\{users\} onSelectClient=\{onSelectClient\} \/>/.test(app)
+);
+check(
+  'العدد من أرقام كل السيلز (مش نطاق حساب واحد) وفي حدود نطاق الإدارة/الفريق',
+  /buildWorkNumbers\(clients, leads, snapshots, \{ includeUnassigned: false \}\)/.test(app) && /\.filter\(\(n: any\) => n\.ownerId && scope\.has\(n\.ownerId\)\)/.test(app)
+);
+check('اسم السيلز ظاهر على الكارت وجنب كل رقم', /top\.slice\(0, 4\)\.map\(\(\[name, count\]\) => `\$\{name\} \$\{count\}`\)/.test(app) && /مع \{n\.ownerName\}/.test(app));
+check('الضغط على الرقم يفتح كل الكومنتات', /كل الكومنتات \(\{commentList\.length\}\)/.test(app) && /commentsOfTarget\(\s*\{ id: commentsOf\.client\?\.id \|\| '', phone: commentsOf\.phone \}/.test(app));
+
 console.log(`\n✅ نجحت ${passed} فحوصات لتحويل الرقم الموزَّع إلى عميل + الشاشة الآمنة`);

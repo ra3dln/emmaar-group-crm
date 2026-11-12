@@ -47,7 +47,7 @@ import {
   type LeadAssignment,
 } from '../shared/autoAssign.js';
 import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount, worksAsSales } from '../shared/roles.js';
-import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor, LEAD_CLIENT_ID_PREFIX } from '../shared/leadClients.js';
+import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor, leadCommentActivity, LEAD_CLIENT_ID_PREFIX } from '../shared/leadClients.js';
 import {
   cleanCommentText,
   commentActivitiesOf,
@@ -6954,6 +6954,188 @@ function ClientsView({ currentUser, clients, users = [], leads = [], callLogs = 
 
 // Pipeline View
 // ===== تبويب المراحل للإدارة: اسم السيلز ← أرقامه وعدد كومنتات كل رقم ← ضغطة على الرقم تفتح الكومنتات =====
+// ===== لوحة الحالات للإدارة (أعلى تبويب «المراحل») =====
+// كارت لكل حالة (Follow Up / Meeting / …) بعدد أرقامها عند كل السيلز مجموعين،
+// وتحت العدد مين عنده كام. الضغط على الكارت يعرض الأرقام ومع أنهي سيلز،
+// والضغط على الرقم يفتح كل الكومنتات اللي عليه (من كل المصادر).
+const readStoreList = (key: string): any[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+function PipelineStatusBoard({ users = [], onSelectClient }: any) {
+  // المخزون الكامل اللي على جهاز الإدارة — ويتحدّث مع كل مزامنة
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const refresh = () => setVersion((v) => v + 1);
+    window.addEventListener(SYNC_EVENT, refresh);
+    return () => window.removeEventListener(SYNC_EVENT, refresh);
+  }, []);
+  const [openStatus, setOpenStatus] = useState<string | null>(null);
+  const [commentsOf, setCommentsOf] = useState<any | null>(null);
+  const [query, setQuery] = useState('');
+
+  const data = useMemo(() => {
+    const allUsers = readStoreList('crm_users');
+    const clients = readStoreList('crm_clients');
+    const leads = readStoreList('crm_assigned_leads');
+    const cards = readStoreList('crm_daily_feedback');
+    const logs = readStoreList('crm_call_logs');
+    const snapshots = feedbackByPhone(cards, logs, allUsers);
+    const leadById = new Map(leads.map((l: any) => [String(l.id), l]));
+    // نطاق الحساب: الإدارة كل السيلز، وقائد الفريق فريقه (users = نطاقه)
+    const scope = new Set((users || []).map((u: User) => String(u.id)));
+    const nameOf = (id: string) => String(allUsers.find((u: any) => String(u.id) === id)?.name || '');
+    const numbers = buildWorkNumbers(clients, leads, snapshots, { includeUnassigned: false })
+      .map((n: any) => {
+        const lead = n.leadId ? leadById.get(String(n.leadId)) : null;
+        const ownerId = String(n.client?.userId || n.client?.assignedTo || lead?.salesId || '');
+        return { ...n, lead, ownerId, ownerName: nameOf(ownerId) || 'غير معروف' };
+      })
+      .filter((n: any) => n.ownerId && scope.has(n.ownerId));
+    return { numbers, clients, cards, logs, allUsers };
+  }, [version, users]);
+
+  // الحالات الحقيقية بس (من غير Cold / Delay / Shared — دول خانات إضافية)،
+  // و«No Answer» مش خانة: الرقم بيفضل في خانته (Fresh / Follow Up …)
+  const statusIds = LEAD_STATUS_ORDER.filter(
+    (id) => id !== COLD_CALL_ID && id !== DELAY_ID && id !== SHARED_ID && id !== 'no-answer'
+  );
+  const byStatus = new Map<string, any[]>(statusIds.map((id) => [id, []]));
+  for (const n of data.numbers) byStatus.get(String(n.bucket || 'fresh-stage'))?.push(n);
+  const perSales = (list: any[]) => {
+    const counts = new Map<string, number>();
+    for (const n of list) counts.set(n.ownerName, (counts.get(n.ownerName) || 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  };
+
+  const q = normalizeArabicText(query).trim();
+  const openList = (openStatus ? byStatus.get(openStatus) || [] : []).filter(
+    (n: any) => !q || normalizeArabicText(`${n.name} ${n.phone} ${n.ownerName}`).includes(q)
+  );
+
+  // كل الكومنتات على الرقم: خط العميل + بطاقات الفيدباك + المكالمات + كومنت الإدارة على الرقم
+  const commentList = commentsOf
+    ? (() => {
+        const list = commentsOfTarget(
+          { id: commentsOf.client?.id || '', phone: commentsOf.phone },
+          data.clients,
+          data.cards,
+          data.logs,
+          data.allUsers
+        );
+        const adminComment = commentsOf.lead && !commentsOf.client ? leadCommentActivity(commentsOf.lead) : null;
+        return adminComment
+          ? [...list, { id: adminComment.id, by: adminComment.by, at: adminComment.at, text: adminComment.text }]
+              .sort((a, b) => String(b.at).localeCompare(String(a.at)))
+          : list;
+      })()
+    : [];
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="font-bold text-[var(--text-strong)]">الحالات — كل السيلز</h3>
+        <p className="text-xs text-[var(--text-muted)] mt-0.5">عدد الأرقام في كل حالة عند كل السيلز مجموعين. اضغط الكارت لعرض الأرقام، واضغط الرقم لكل كومنتاته.</p>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
+        {statusIds.map((id) => {
+          const list = byStatus.get(id) || [];
+          const meta = FEEDBACK_STATUS_BY_ID[id];
+          const top = perSales(list);
+          return (
+            <button key={id} type="button" onClick={() => setOpenStatus(openStatus === id ? null : id)}
+              className={`panel p-3 text-right ${meta?.cls || 'fs-fresh'} ${openStatus === id ? 'ring-2 ring-[var(--brand)]' : ''}`}
+              style={{ borderTop: '3px solid var(--fs, var(--brand))' }}>
+              <span className="flex items-center justify-between gap-2">
+                <b className="text-sm text-[var(--text-strong)]">{LEAD_STATUS_LABELS[id] || id}</b>
+                <b className="text-2xl font-extrabold text-[var(--text-strong)]">{list.length}</b>
+              </span>
+              {/* مين عنده كام — ظاهر على الكارت من غير ما تفتحه */}
+              <span className="block mt-1.5 text-[11px] text-[var(--text-muted)] leading-5">
+                {top.length ? top.slice(0, 4).map(([name, count]) => `${name} ${count}`).join(' • ') : 'مفيش أرقام'}
+                {top.length > 4 ? ` • +${top.length - 4}` : ''}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {openStatus && (
+        <div className="panel p-3 sm:p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="font-bold text-[var(--text-strong)]">{LEAD_STATUS_LABELS[openStatus]} — {(byStatus.get(openStatus) || []).length} رقم</h4>
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث باسم أو رقم أو سيلز"
+              className="w-full sm:w-60 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-sm text-[var(--text-strong)]" />
+          </div>
+          {openList.length === 0 ? (
+            <p className="text-sm text-[var(--text-muted)]">مفيش أرقام.</p>
+          ) : (
+            <div className="divide-y divide-[var(--border)]">
+              {openList.map((n: any) => (
+                <button key={n.key} type="button" onClick={() => setCommentsOf(n)}
+                  className="w-full flex items-center gap-3 py-2.5 text-right hover:bg-[var(--tint-1)] rounded-[var(--r-sm)] px-1.5">
+                  <i className="pipe-c-avatar">{String(n.name || '#').charAt(0)}</i>
+                  <span className="flex-1 min-w-0">
+                    <b className="block text-[var(--text-strong)] truncate">{n.name}</b>
+                    <small className="block text-[var(--text-muted)]" dir="ltr" style={{ textAlign: 'right' }}>{n.phone}</small>
+                    {n.salesNote && <small className="block text-[var(--text-dim)] truncate">{n.salesNoteBy ? `${n.salesNoteBy}: ` : ''}{n.salesNote}</small>}
+                  </span>
+                  {/* اسم السيلز برّه — باين من غير ما تفتح الرقم */}
+                  <span className="st-chip st-contacted shrink-0">مع {n.ownerName}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {commentsOf && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={() => setCommentsOf(null)}>
+          <div className="panel p-5 w-full max-w-lg max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h3 className="font-bold text-[var(--text-strong)]">{commentsOf.name}</h3>
+                <p className="text-xs text-[var(--text-muted)]"><span dir="ltr">{commentsOf.phone}</span> • مع {commentsOf.ownerName}</p>
+              </div>
+              <button type="button" onClick={() => setCommentsOf(null)} className="p-2 rounded-[var(--r-sm)] bg-[var(--tint-1)] hover:bg-[var(--tint-3)]">
+                <X className="w-4 h-4 text-[var(--text)]" />
+              </button>
+            </div>
+            <p className="text-xs font-bold text-[var(--text-muted)] mb-2">كل الكومنتات ({commentList.length})</p>
+            {commentList.length === 0 ? (
+              <p className="text-sm text-[var(--text-dim)] bg-[var(--tint-1)] rounded-[var(--r-md)] px-3 py-2.5">لسه مفيش كومنتات على الرقم ده.</p>
+            ) : (
+              <div className="space-y-2">
+                {commentList.map((c: any) => (
+                  <div key={`${c.id}-${c.at}`} className="bg-[var(--tint-1)] rounded-[var(--r-md)] px-3 py-2">
+                    <p className="text-sm text-[var(--text)] whitespace-pre-line">{c.text}</p>
+                    <p className="text-[10.5px] text-[var(--text-dim)] mt-1 flex items-center gap-2 flex-wrap">
+                      <FeedbackChip status={c.status} />
+                      <span className="font-bold text-[var(--text-muted)]">{c.by}</span>
+                      <span dir="ltr">{formatDateTime(c.at)}</span>
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {commentsOf.client && (
+              <button type="button" onClick={() => { setCommentsOf(null); onSelectClient?.(commentsOf.client); }}
+                className="w-full mt-4 bg-[var(--tint-2)] hover:bg-[var(--tint-3)] text-[var(--text-strong)] py-2.5 rounded-[var(--r-md)] font-bold text-sm">
+                فتح تفاصيل العميل
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelectClient, onAddFeedback }: any) {
   const quick = [
     { id: 'new', label: 'new', cls: 'qs-new' },
@@ -6979,6 +7161,9 @@ function AdminPipelineView({ clients, users, currentUser, onUpdateStage, onSelec
             className="w-full sm:w-56 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm" />
         </div>
       </div>
+
+      {/* الحالات عند كل السيلز مجموعين — فوق قائمة كل سيلز */}
+      <PipelineStatusBoard users={users} onSelectClient={onSelectClient} />
 
       {salesUsers.map((user: User) => {
         const all = clients.filter((c: Client) => c.userId === user.id || c.assignedTo === user.id);
