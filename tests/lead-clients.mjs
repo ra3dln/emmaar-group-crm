@@ -355,4 +355,19 @@ check('الضغط على الرقم يفتح كل الكومنتات', /كل ا�
   check('توزيع الإدارة من الشاشة متعلّم يدوي', /applyLeadOwners\(new Map\(unique\.map\(\(id\) => \[id, salesId\]\)\), 'manual'\)/.test(app) && /assignedVia: via/.test(app) && /ownerVia: via/.test(app));
 }
 
+// ===== داشبورد الإدارة + تأكيد قبل توزيع أرقام كتير مرة واحدة =====
+{
+  const dash = fs.readFileSync('src/AdminDashboardView.tsx', 'utf8');
+  check(
+    'تبويب «داشبورد» للإدارة بكروت الخانات والنسبة',
+    /id: 'admin-dashboard', icon: BarChart3, label: 'داشبورد'/.test(app) && /<AdminDashboardView currentUser=\{currentUser\} users=\{scopedUsers\} \/>/.test(app) &&
+      /'All Leads'/.test(dash) && /'Pending Leads'/.test(dash) && /'No Answer Fresh'/.test(dash) && /Sales Rep/.test(dash) && /Managers/.test(dash)
+  );
+  check(
+    'أي توزيع لأكتر من رقم بيسأل الأول بالعدد واسم السيلز',
+    /selectedIds\.length > 1 && !window\.confirm/.test(app) && /هيتوزّع كل المعروض \(\$\{visible\.length\} رقم\)/.test(app) &&
+      /تشغيل التوزيع التلقائي على «\$\{activeForm\}» هيوزّع \$\{autoNow\} رقم/.test(app) && /batch\.length > 1 && !window\.confirm/.test(app)
+  );
+}
+
 console.log(`\n✅ نجحت ${passed} فحوصات لتحويل الرقم الموزَّع إلى عميل + الشاشة الآمنة`);

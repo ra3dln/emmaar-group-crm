@@ -235,4 +235,4 @@ export interface ChatMessage {
   readBy?: string[]; // من قرأها — تُستخدم في غرفة المدراء الجماعية
 }
 
-export type TabType = 'admin-add-form' | 'admin-export' | 'dashboard' | 'clients' | 'admin-clients' | 'admin-forms' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'new-leads' | 'reports' | 'chat' | 'admin-users' | 'admin-feedback' | 'admin-leads' | 'admin-attendance' | 'admin-analytics' | 'admin-chat' | 'admin-settings' | 'calculator';
+export type TabType = 'admin-dashboard' | 'admin-add-form' | 'admin-export' | 'dashboard' | 'clients' | 'admin-clients' | 'admin-forms' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'new-leads' | 'reports' | 'chat' | 'admin-users' | 'admin-feedback' | 'admin-leads' | 'admin-attendance' | 'admin-analytics' | 'admin-chat' | 'admin-settings' | 'calculator';

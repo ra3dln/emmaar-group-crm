@@ -83,6 +83,7 @@ import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import { PartnerPanel } from './PartnerPanel';
 import { ManualFormsView, knownFormNames, useManualFormNames } from './ManualFormsView';
 import { SalesExportView } from './SalesExportView';
+import { AdminDashboardView } from './AdminDashboardView';
 import { MANUAL_FORMS_KEY, addToManualFormCount, formNameTaken, parseManualForms, withManualTag } from './manualForms';
 import {
   ATTENDANCE_END_DEFAULT,
@@ -3924,6 +3925,7 @@ function App() {
               ));
             }}
           />}
+          {activeTab === 'admin-dashboard' && (currentUser.role === 'admin' || currentUser.role === 'supervisor') && <AdminDashboardView currentUser={currentUser} users={scopedUsers} />}
           {activeTab === 'admin-export' && currentUser.role === 'admin' && <SalesExportView />}
           {activeTab === 'admin-add-form' && currentUser.role === 'admin' && <ManualFormsView currentUser={currentUser} activeForms={activeCampaignForms} onChanged={loadData} />}
           {activeTab === 'admin-leads' && currentUser.role !== 'sales' && <AdminLeadsView assignedLeads={fullLeads} users={scopedUsers} currentUser={currentUser} activeForms={activeCampaignForms} onAdd={() => setShowAddAssignedLead(true)} onImport={() => setShowImportLeads(true)} onDelete={(id: string) => {
@@ -4644,6 +4646,7 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
         { id: 'admin-forms', icon: FileText, label: 'شيت الفورمات' },
         { id: 'pipeline', icon: Workflow, label: 'المراحل' },
         { id: 'calculator', icon: Calculator, label: 'حساب المقدم والأقساط' },
+        { id: 'admin-dashboard', icon: BarChart3, label: 'داشبورد' },
         { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
         { id: 'admin-add-form', icon: Upload, label: 'إضافة فورم' },
         { id: 'admin-export', icon: Download, label: 'تصدير الأرقام' },
@@ -11503,6 +11506,10 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
     });
   const assignSelected = (salesId: string) => {
     if (!selectedIds.length) return;
+    // أكتر من رقم مرة واحدة: تأكيد بالعدد واسم السيلز (عشان ما يتوزّعش كتير بالغلط)
+    if (selectedIds.length > 1 && !window.confirm(salesId
+      ? `هيتوزّع ${selectedIds.length} رقم على ${nameOf(salesId)}. متأكد؟`
+      : `هيتسحب ${selectedIds.length} رقم من السيلز. متأكد؟`)) return;
     onAssign?.(selectedIds, salesId);
     setFlash(salesId
       ? `تم توزيع ${selectedIds.length} رقم على ${nameOf(salesId)} ✓`
@@ -11520,6 +11527,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
   }, [flash]);
   const assignAllVisible = (salesId: string) => {
     if (!salesId || !visible.length) return;
+    if (!window.confirm(`هيتوزّع كل المعروض (${visible.length} رقم) على ${nameOf(salesId)}. متأكد؟`)) return;
     const count = visible.length;
     onAssign?.(visible.map((l: AssignedLead) => l.id), salesId);
     setFlash(`تم توزيع ${count} ${count === 1 ? 'رقم' : 'أرقام'} على ${nameOf(salesId)} ✓`);
@@ -11566,6 +11574,8 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
 
   const startAuto = () => {
     if (activeForm === 'all' || !effectiveAutoIds.length) return;
+    // التشغيل بيوزّع كل الأرقام غير المخصصة في الفورم فوراً — تأكيد بالعدد الأول
+    if (!window.confirm(`تشغيل التوزيع التلقائي على «${activeForm}» هيوزّع ${autoNow} رقم غير مخصص دلوقتي على ${autoAll ? 'كل السيلز' : autoIds.map((id) => nameOf(id)).join(' و')}، وأي رقم جديد يوصل بعد كده. متأكد؟`)) return;
     const done = Number(onSaveAutoRule?.(activeForm, effectiveAutoIds, true, autoAll)) || 0;
     const names = autoAll ? 'كل السيلز' : autoIds.map((id) => nameOf(id)).join(' و');
     setFlash(
@@ -11901,6 +11911,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                 if (!batchSalesId || n < 1) return;
                 const batch = visible.filter((l: AssignedLead) => l.salesId !== batchSalesId).slice(0, n);
                 if (!batch.length) { setFlash('كل الأرقام المعروضة عنده بالفعل'); return; }
+                if (batch.length > 1 && !window.confirm(`هيتوزّع ${batch.length} رقم على ${nameOf(batchSalesId)}. متأكد؟`)) return;
                 onAssign?.(batch.map((l: AssignedLead) => l.id), batchSalesId);
                 setFlash(`تم توزيع ${batch.length} رقم على ${nameOf(batchSalesId)} ✓`);
                 setBatchCount('');

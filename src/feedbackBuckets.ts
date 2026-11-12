@@ -95,6 +95,8 @@ export type PhoneSnapshot = {
   at: string;
   // وقت الحالة نفسها (at ممكن يكون أحدث: حدث «لم يرد» بعدها ما غيّرش الحالة)
   statusAt?: string;
+  // الحالة جاية من نتيجة مكالمة بس (مفيش حالة اختارها المندوب في بطاقة)
+  implicit?: boolean;
 };
 
 export const feedbackByPhone = (
@@ -171,6 +173,33 @@ export const feedbackByPhone = (
       at,
     });
     putNote(feedback?.clientPhone, feedback?.feedback, at, nameOf(feedback?.userId));
+  }
+
+  // ===== الحالة اللي اختارها المندوب تكسب نتيجة المكالمة الضمنية =====
+  // مكالمة «تم الرد» بتعني Follow Up ضمنياً — بس لو الرقم عليه أي حالة اختارها
+  // المندوب (حتى No Answer)، الحالة المختارة هي اللي تبان، مش «تم الرد».
+  // (كانت مكالمة «تم الرد» أحدث بتغطّي على Meeting / No Answer اللي اختارها.)
+  const chosen = new Map<string, { status: string; cancelReason: string; at: string }>();
+  for (const feedback of feedbacks || []) {
+    const key = digitsOfPhone(feedback?.clientPhone);
+    const raw = String(feedback?.status || '');
+    if (!key || !raw) continue;
+    const at = String(feedback?.createdAt || feedback?.date || '');
+    const prev = chosen.get(key) || { status: '', cancelReason: '', at: '' };
+    const status = bucketStatus(raw);
+    // «No Answer» بيعلّم إن فيه اختيار، بس ما بيغيّرش الخانة
+    if (status && at >= String(prev.at)) chosen.set(key, { status, cancelReason: String(feedback?.cancelReason || ''), at });
+    else if (!chosen.has(key)) chosen.set(key, prev);
+  }
+  for (const [key, entry] of map) {
+    const pick = chosen.get(key);
+    if (!pick) {
+      entry.implicit = !!entry.status;
+      continue;
+    }
+    entry.status = pick.status;
+    entry.cancelReason = pick.status ? pick.cancelReason : '';
+    entry.statusAt = pick.status ? pick.at : '';
   }
 
   // الملاحظة = آخر كلام مندوب على الرقم (وليس آخر لوج)
@@ -330,12 +359,15 @@ export const buildWorkNumbers = (
     const actAt = String(actLatest?.at || '');
     const snapStatus = String(snapshot?.status || '');
     const snapAt = String(snapshot?.statusAt || snapshot?.at || '');
+    // «تم الرد» الضمنية ما تغطّيش على حالة اختارها المندوب في خط العميل (حتى No Answer)
+    const actChose = activities.some((a: any) => !!a?.status);
+    const snapUsable = !!snapStatus && !(snapshot?.implicit && actChose);
     // اتصلنا بيه وكل اللي عليه «لم يرد» → المرحلة contacted مش خانة حقيقية (لسه Fresh)
-    const onlyNoAnswerCalls = !!snapshot && !snapStatus && !actStatus;
+    const onlyNoAnswerCalls = !!snapshot && !snapUsable && !actStatus;
     const stageBucket =
       onlyNoAnswerCalls && String(client?.stage || '') === 'contacted' ? 'fresh-stage' : stageBucketOf(client);
     const bucket =
-      snapStatus && (!actAt || snapAt >= actAt)
+      snapUsable && (!actAt || snapAt >= actAt)
         ? snapStatus
         : actStatus || stageBucket;
     // «مفتوح» = المندوب فتح الرقم من التوزيع (viewed) أو كتب عليه كلام.

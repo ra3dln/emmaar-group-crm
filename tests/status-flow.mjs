@@ -89,7 +89,25 @@ const snapshotNewerCall = feedbackByPhone(
   [feedback('meeting', '2026-10-24T09:00:00.000Z')],
   [callLog('answered', '2026-10-24T12:00:00.000Z')]
 );
-check('مكالمة أحدث من الفيدباك → حالتها هي الأحدث', snapshotNewerCall.get('01001234567')?.status === 'follow-up');
+// الحالة اللي اختارها المندوب (Meeting) تفضل — مكالمة «تم الرد» بعدها ما تغيّرهاش
+check('مكالمة «تم الرد» أحدث ما بتغطّيش على الحالة المختارة', snapshotNewerCall.get('01001234567')?.status === 'meeting');
+check(
+  'رقم من غير أي حالة مختارة + مكالمة «تم الرد» → Follow Up',
+  feedbackByPhone([], [callLog('answered')]).get('01001234567')?.status === 'follow-up'
+);
+check(
+  'No Answer مختارة + مكالمة «تم الرد» قديمة → الرقم يفضل في خانته (مش Follow Up)',
+  feedbackByPhone([{ ...feedback('no-answer', '2026-11-12T09:20:00.000Z'), id: 'f-na3' }], [callLog('answered', '2026-11-10T09:00:00.000Z')]).get('01001234567')?.status === ''
+);
+{
+  const clientNa = buildWorkNumbers(
+    [{ id: 'c-na2', name: 'عميل', phone: PHONE, stage: 'contacted',
+      activities: [{ id: 'a1', type: 'feedback', text: 'No answer', status: 'no-answer', at: '2026-11-12T09:20:00.000Z' }] }],
+    [],
+    feedbackByPhone([], [callLog('answered', '2026-11-12T09:25:00.000Z')])
+  )[0];
+  check('عميل اختار له No Answer ما يتحسبش Follow Up بسبب مكالمة «تم الرد»', clientNa?.bucket === 'fresh-stage', clientNa?.bucket);
+}
 
 // ===== Follow Up منفصل عن Cold Calls =====
 // رقم حالته Follow Up وبعدها سجل مكالمة «لم يرد» من غير حالة مختارة —
