@@ -47,7 +47,7 @@ import {
   type LeadAssignment,
 } from '../shared/autoAssign.js';
 import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount, worksAsSales } from '../shared/roles.js';
-import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor, leadCommentActivity, LEAD_CLIENT_ID_PREFIX, newestFirst } from '../shared/leadClients.js';
+import { buildLeadClients, campaignAtFromText, campaignTimeMs, campaignTimeOf, leadClientIdFor, leadCommentActivity, LEAD_CLIENT_ID_PREFIX, newestFirst } from '../shared/leadClients.js';
 import {
   cleanCommentText,
   commentActivitiesOf,
@@ -10622,12 +10622,14 @@ function campaignFormsOf(clients: Client[] = [], leads: AssignedLead[] = []) {
     const time = Date.parse(String(value || ''));
     return Number.isFinite(time) ? time : 0;
   };
-  const grouped = new Map<string, { rows: FormSheetRow[]; latest: number }>();
-  const push = (name: string, row: FormSheetRow, at: number) => {
+  const grouped = new Map<string, { rows: FormSheetRow[]; latest: number; order: number[] }>();
+  // order: وقت تسجيل كل رقم في الكامبين — الأرقام جوه الفورم بتترتب بيه (الأحدث فوق)
+  const push = (name: string, row: FormSheetRow, at: number, registeredAt: number) => {
     const key = String(name || '').trim() || 'بدون اسم فورم';
-    if (!grouped.has(key)) grouped.set(key, { rows: [], latest: 0 });
+    if (!grouped.has(key)) grouped.set(key, { rows: [], latest: 0, order: [] });
     const group = grouped.get(key)!;
     group.rows.push(row);
+    group.order.push(registeredAt);
     group.latest = Math.max(group.latest, at);
   };
 
@@ -10638,17 +10640,25 @@ function campaignFormsOf(clients: Client[] = [], leads: AssignedLead[] = []) {
     push(
       formNameOf(c),
       { name: c.name, phone: c.phone, feedback: lastCommentOf(c)?.text || c.feedback || '—' },
-      Math.max(timeOf(c.createdAt), timeOf(c.updatedAt), lastActivity)
+      Math.max(timeOf(c.createdAt), timeOf(c.updatedAt), lastActivity),
+      campaignTimeMs(c)
     );
   }
   // أرقام لسه في «توزيع الأرقام» مالهاش فيدباك بعد، لكن بتظهر عشان الشيت يكون كامل
   for (const lead of leads) {
     if (lead.status === 'closed' || knownPhones.has(digitsOf(lead.phone))) continue;
-    push(formNameOf(lead), { name: lead.name || '—', phone: lead.phone, feedback: '—' }, timeOf(lead.createdAt));
+    push(formNameOf(lead), { name: lead.name || '—', phone: lead.phone, feedback: '—' }, timeOf(lead.createdAt), campaignTimeMs(lead));
   }
 
   return [...grouped.entries()]
-    .map(([name, group]) => ({ name, rows: group.rows, latest: group.latest }))
+    .map(([name, group]) => ({
+      name,
+      rows: group.rows
+        .map((row, index) => ({ row, at: group.order[index] || 0 }))
+        .sort((a, b) => b.at - a.at)
+        .map((item) => item.row),
+      latest: group.latest,
+    }))
     .sort((a, b) => b.latest - a.latest);
 }
 
@@ -15459,14 +15469,25 @@ function UserFeedbackModal({ user, clients, leads = [], callLogs = [], dailyFeed
   const withComments = numbers.filter((n) => n.items.length).length;
   const current = openNumber ? numbers.find((n) => n.key === openNumber) : null;
 
+  // الأرقام الأحدث فوق: بوقت تسجيل الرقم في الكامبين (وإلا وقت إضافته)
+  const recordByPhone = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const record of [...(leads || []), ...(clients || [])]) {
+      const key = norm(record?.phone);
+      if (key) map.set(key, record);
+    }
+    return map;
+  }, [clients, leads]);
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase();
-    if (!term) return numbers;
     const digits = norm(term);
-    return numbers.filter(
-      (n) => String(n.name).toLowerCase().includes(term) || (!!digits && norm(n.phone).includes(digits))
-    );
-  }, [numbers, q]);
+    const list = !term
+      ? numbers
+      : numbers.filter(
+          (n) => String(n.name).toLowerCase().includes(term) || (!!digits && norm(n.phone).includes(digits))
+        );
+    return newestFirst(list, (n: FeedbackNumber) => recordByPhone.get(norm(n.phone)) || { createdAt: n.items[0]?.at || '' });
+  }, [numbers, q, recordByPhone]);
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80" onClick={onClose}>

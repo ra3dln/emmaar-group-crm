@@ -34,5 +34,7 @@ check('لوحة الحالة عند السيلز الأحدث فوق', /const it
 check('المراحل عند الإدارة الأحدث فوق', /const openList = newestFirst\(/.test(app));
 check('عملاء كامبين الأحدث فوق', /const visible = newestFirst\(campaignClients\.filter/.test(app) && /const visibleLeads = newestFirst\(campaignLeads\.filter/.test(app));
 check('توزيع الأرقام الأحدث فوق', /const visible = newestFirst\(formLeads/.test(app));
+check('الفيدباك عند الإدارة (أرقام السيلز) الأحدث فوق', /return newestFirst\(list, \(n: FeedbackNumber\) => recordByPhone\.get/.test(app));
+check('شيت الفورمات: الأرقام جوه كل فورم الأحدث فوق', app.includes('.sort((a, b) => b.at - a.at)') && app.includes('campaignTimeMs(lead));'));
 
 console.log(`\n✅ نجحت ${passed} فحوصات (الترتيب من الأحدث للأقدم)`);
