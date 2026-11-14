@@ -119,7 +119,7 @@ check(
 check('الرقم الجديد يقع على «مرحلة جديدة»', numbers.find((n) => n.phone === '01000000088')?.bucket === 'fresh-stage');
 check('الرقم الملغي يظهر بإلغائه وسببه', numbers.find((n) => n.phone === '01000000077')?.bucket === 'cancellation' &&
   numbers.find((n) => n.phone === '01000000077')?.cancelReason === 'low-budget');
-check('المكالمة بلا رد بتنقل رقم Fresh لـ «Not Answer At All»', numbers.find((n) => n.phone === '01000000066')?.bucket === 'not-answered');
+check('المكالمة بلا رد بتنقل رقم Fresh لخانة No Answer', numbers.find((n) => n.phone === '01000000066')?.bucket === 'no-answer');
 check('العميل المسجّل يحمل مرحلة المراحل', numbers.find((n) => n.phone === '01000000009')?.stage === 'lost');
 check('كل رقم له مرحلة نهائية', numbers.every((n) => !!n.stage));
 check('حالة التوزيع الجديدة تنتهي لمرحلة جديدة', LEAD_STATUS_TO_FEEDBACK_STATUS.new === 'fresh-stage');

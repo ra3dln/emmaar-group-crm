@@ -71,16 +71,16 @@ const stageBucketOf = (record: any): string => {
 };
 
 // ===== «Not Answer At All» =====
-// «No Answer» على رقم في Fresh بتنقله لخانة «Not Answer At All» (اتصلنا وما ردّش).
+// «No Answer» على رقم في Fresh بتنقله لخانة «No Answer».
 // ولو الرقم في Follow Up أو أي خانة تانية، «No Answer» ما بتحرّكوش — بيفضل زي ما هو.
 // ولو المندوب رجّعه «جديد» بنفسه بعد الـ No Answer → يرجع Fresh.
-export const NOT_ANSWERED = 'not-answered';
+// («Not Answer At All» مرحلة منفصلة المندوب بيختارها بنفسه.)
 const isFreshChoice = (a: any): boolean =>
   a?.status === 'fresh-stage' || (a?.type === 'stage' && /←\s*جديد\s*$/.test(String(a?.text || '')));
 const latestAtOf = (activities: any[], pick: (a: any) => boolean): string =>
   activities.reduce((max: string, a: any) => (pick(a) && String(a?.at || '') > max ? String(a.at) : max), '');
 const withNoAnswer = (bucket: string, noAnswerAt: string, freshAt: string): string =>
-  bucket === 'fresh-stage' && !!noAnswerAt && noAnswerAt > freshAt ? NOT_ANSWERED : bucket;
+  bucket === 'fresh-stage' && !!noAnswerAt && noAnswerAt > freshAt ? NO_ANSWER : bucket;
 
 export const feedbackBucketOf = (record: any): string => {
   const status = bucketStatus(latestBucketActivityOf(record)?.status);
@@ -127,11 +127,6 @@ export type PhoneSnapshot = {
 // المندوب ياخد باله، والرقم فضل في Fresh رغم إن عليه أكشن. في الإجراء الواحد
 // زرار النتيجة («تم الرد») هو اللي المندوب ضغطه فعلاً، فهو اللي يكسب.
 export const SAME_ACTION_MS = 10 * 1000;
-// إلا لو الكومنت نفسه بيقول إنه ما ردّش («مش بيرد» / «مقفول» / «خارج الخدمة») —
-// ساعتها «تم الرد» هي اللي اتضغطت غلط، و«No Answer» هي الصح.
-const NO_ANSWER_TEXT_RE =
-  /no\s*answer|(^|\s)(مش|ما|م)\s*[بي]{0,2}[يت]?ر[دت]|مقفول|مغلق|خارج\s*(ال)?(خدم|تغطي)|غير\s*متاح|مش\s*متاح/i;
-export const looksLikeNoAnswerText = (text: any): boolean => NO_ANSWER_TEXT_RE.test(String(text || ''));
 export const isAnsweredSameAction = (at: any, answeredAts: string[] = []): boolean => {
   const t = Date.parse(String(at || ''));
   if (!Number.isFinite(t)) return false;
@@ -199,7 +194,7 @@ export const feedbackByPhone = (
   const answeredByPhone = new Map<string, string[]>();
   for (const log of callLogs || []) {
     const k = digitsOfPhone(log?.clientPhone);
-    if (k && log?.result !== 'no-answer' && !looksLikeNoAnswerText(log?.comment)) {
+    if (k && log?.result !== 'no-answer') {
       const list = answeredByPhone.get(k) || [];
       list.push(String(log?.createdAt || ''));
       answeredByPhone.set(k, list);
@@ -222,8 +217,7 @@ export const feedbackByPhone = (
   };
 
   for (const log of callLogs || []) {
-    // «تم الرد» والكومنت بيقول إنه ما ردّش = «لم يرد»
-    const missed = log?.result === 'no-answer' || looksLikeNoAnswerText(log?.comment);
+    const missed = log?.result === 'no-answer';
     if (missed) markNoAnswer(log?.clientPhone, String(log?.createdAt || ''));
     put(log?.clientPhone, {
       status: missed ? NO_ANSWER : 'follow-up',

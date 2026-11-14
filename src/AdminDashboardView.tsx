@@ -67,8 +67,8 @@ export function AdminDashboardView({ currentUser, users = [] }: any) {
     { id: 'meeting', label: 'Meeting', match: (n) => assigned(n) && n.bucket === 'meeting' },
     { id: 'after', label: 'Following After Meeting', match: (n) => assigned(n) && n.bucket === 'after-meeting' },
     { id: 'cancel', label: 'Cancellation', match: (n) => assigned(n) && n.bucket === 'cancellation' },
-    // رقم كان Fresh واتعمل عليه «No Answer» (خانة «Not Answer At All»)
-    { id: 'na-fresh', label: 'Not Answer At All', match: (n) => assigned(n) && n.bucket === 'not-answered' },
+    // رقم كان Fresh واتعمل عليه «No Answer» (خانة No Answer)
+    { id: 'na-fresh', label: 'No Answer Fresh', match: (n) => assigned(n) && n.bucket === 'no-answer' },
     { id: 'resched', label: 'Reschedule Meeting', match: (n) => assigned(n) && n.bucket === 'reschedule' },
     { id: 'done', label: 'Done Deal', match: (n) => assigned(n) && n.bucket === 'done-deal' },
     { id: 'reserve', label: 'Reservation', match: (n) => assigned(n) && n.bucket === 'reservation' },

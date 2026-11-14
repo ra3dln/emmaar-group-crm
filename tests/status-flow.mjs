@@ -106,7 +106,7 @@ check(
     [],
     feedbackByPhone([], [callLog('answered', '2026-11-12T09:25:00.000Z')])
   )[0];
-  check('عميل اختار له No Answer ما يتحسبش Follow Up بسبب مكالمة «تم الرد» (Not Answer At All)', clientNa?.bucket === 'not-answered', clientNa?.bucket);
+  check('عميل اختار له No Answer ما يتحسبش Follow Up بسبب مكالمة «تم الرد» (خانة No Answer)', clientNa?.bucket === 'no-answer', clientNa?.bucket);
 }
 
 // ===== Follow Up منفصل عن Cold Calls =====
@@ -147,8 +147,8 @@ const freshCalledNoAnswer = buildWorkNumbers(
   feedbackByPhone([{ ...feedback('no-answer'), id: 'f-na2' }], [callLog('no-answer')])
 )[0];
 check(
-  'رقم Fresh اتصلنا بيه وما ردّش → Not Answer At All (مش Cold Calls ولا Follow Up)',
-  freshCalledNoAnswer?.bucket === 'not-answered' &&
+  'رقم Fresh اتصلنا بيه وما ردّش → خانة No Answer (مش Cold Calls ولا Follow Up)',
+  freshCalledNoAnswer?.bucket === 'no-answer' &&
     !isFreshNumber(freshCalledNoAnswer, new Set([PHONE])) &&
     !isColdNumber(freshCalledNoAnswer, coldPhonesOf([callLog('no-answer')])),
   freshCalledNoAnswer?.bucket
@@ -162,8 +162,8 @@ const freshClientNoAnswer = buildWorkNumbers(
   feedbackByPhone([], [callLog('no-answer')])
 )[0];
 check(
-  'عميل جديد كل اللي عليه No Answer → Not Answer At All',
-  freshClientNoAnswer?.bucket === 'not-answered',
+  'عميل جديد كل اللي عليه No Answer → خانة No Answer',
+  freshClientNoAnswer?.bucket === 'no-answer',
   freshClientNoAnswer?.bucket
 );
 
@@ -258,8 +258,8 @@ check(
   cold.every((n) => !fresh.some((f) => f.key === n.key))
 );
 check(
-  'الرقم اللي اتصلنا بيه وما ردّش راح «Not Answer At All»',
-  !fresh.some((n) => n.phone === '01000000005') && split.find((n) => n.phone === '01000000005')?.bucket === 'not-answered'
+  'الرقم اللي اتصلنا بيه وما ردّش راح خانة No Answer',
+  !fresh.some((n) => n.phone === '01000000005') && split.find((n) => n.phone === '01000000005')?.bucket === 'no-answer'
 );
 check(
   'الرقم اللي اتفتح من التوزيع (-opening) بيفضل Fresh لحد ما يتصل بيه',
@@ -398,7 +398,7 @@ check(
     [],
     feedbackByPhone([{ ...feedback('no-answer', T0), id: 'fa' }], [{ ...callLog('no-answer', T0), id: 'la' }])
   )[0];
-  check('عميل كل مكالماته «لم يرد» → Not Answer At All', onlyNa?.bucket === 'not-answered', onlyNa?.bucket);
+  check('عميل كل مكالماته «لم يرد» → خانة No Answer', onlyNa?.bucket === 'no-answer', onlyNa?.bucket);
 
   // المندوب رجّعه «جديد» بنفسه بعد الـ No Answer → يرجع Fresh
   const backToNew = buildWorkNumbers(
@@ -427,21 +427,23 @@ check(
   const untouched = buildWorkNumbers([], [{ id: 'l-u', name: 'رقم', phone: '01009998887', status: 'new', salesId: 'u1' }], new Map())[0];
   check('رقم ما اتصلناش بيه خالص → Fresh', untouched?.bucket === 'fresh-stage', untouched?.bucket);
 
-  // «تم الرد» اتضغطت غلط والكومنت بيقول إنه ما ردّش → «No Answer» هي الصح (يفضل Fresh)
-  for (const text of ['مش بيرد', 'مش ييرد', 'م بيرد', 'رنيت تاني مش بترد', 'تلفونه مقفول', 'الرقم خارج الخدمه']) {
-    const snap = feedbackByPhone(
-      [{ ...feedback('no-answer', T1card), id: 'fx', feedback: text }],
-      [{ ...callLog('answered', T1), id: 'lx', comment: text }]
-    );
-    check(`«تم الرد» + كومنت «${text}» → يفضل في خانته`, snap.get(PHONE)?.status === '', snap.get(PHONE)?.status);
-  }
   for (const text of ['قالي اكلمه علي الساعة 8', 'في الشغل ساعة وارن عليه', 'عايز يبيع شقتو الاول']) {
     const snap = feedbackByPhone(
       [{ ...feedback('no-answer', T1card), id: 'fy', feedback: text }],
       [{ ...callLog('answered', T1), id: 'ly', comment: text }]
     );
-    check(`«تم الرد» + كومنت كلام مع العميل «${text}» → Follow Up`, snap.get(PHONE)?.status === 'follow-up', snap.get(PHONE)?.status);
+    check(`«تم الرد» + كومنت «${text}» + No Answer في نفس الإجراء → Follow Up`, snap.get(PHONE)?.status === 'follow-up', snap.get(PHONE)?.status);
   }
+}
+
+// «Not Answer At All» مرحلة يختارها المندوب بنفسه
+{
+  const picked = buildWorkNumbers(
+    [],
+    [{ id: 'l-naa', name: 'رقم', phone: PHONE, status: 'contacted', salesId: 'u1' }],
+    feedbackByPhone([{ ...feedback('not-answered', '2026-11-13T10:00:00.000Z'), id: 'f-naa' }], [])
+  )[0];
+  check('اختيار «Not Answer At All» → الرقم في خانتها', picked?.bucket === 'not-answered', picked?.bucket);
 }
 
 console.log(`\n✅ نجحت ${passed} فحوصات (انتقال الحالة من الفيدباك)`);

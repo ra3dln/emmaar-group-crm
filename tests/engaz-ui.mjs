@@ -75,7 +75,7 @@ check(
 check(
   'ألوان الحالات هي ألوان المراحل نفسها (fs-*)',
   /FEEDBACK_STATUS_BY_ID\[bucket\]\?\.cls/.test(leadsView) &&
-    /statusCls: cold \? 'fs-cold' : \(FEEDBACK_STATUS_BY_ID\[bucket\]\?\.cls \|\| \(bucket === 'not-answered' \? 'fs-noanswer' : 'fs-fresh'\)\)/.test(leadsView)
+    /statusCls: cold \? 'fs-cold' : \(FEEDBACK_STATUS_BY_ID\[bucket\]\?\.cls \|\| 'fs-fresh'\)/.test(leadsView)
 );
 check(
   '«Cold Calls» فلتر خاص (رقم اتفتح وما اتصلناش فيه) والعدّاد زي اللوحة',

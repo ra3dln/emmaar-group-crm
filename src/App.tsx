@@ -5644,6 +5644,7 @@ const commentCountOf = (c: any): number => commentActivitiesOf(c).length;
 const FEEDBACK_STATUSES: Array<{ id: string; label: string; ar: string; cls: string; stage: Client['stage'] }> = [
   { id: 'fresh-stage', label: 'fresh stage', ar: 'مرحلة جديدة (لم يُتواصل معه بعد)', cls: 'fs-fresh', stage: 'new' },
   { id: 'follow-up', label: 'follow up', ar: 'متابعة (تم التواصل / معاينة / تفاوض)', cls: 'fs-follow', stage: 'contacted' },
+  { id: 'not-answered', label: 'not answer at all', ar: 'Not Answer At All', cls: 'fs-noanswer', stage: 'contacted' },
   { id: 'meeting', label: 'meeting', ar: 'موعد معاينة أو اجتماع', cls: 'fs-meeting', stage: 'meeting' },
   { id: 'after-meeting', label: 'following after meeting', ar: 'متابعة بعد الاجتماع', cls: 'fs-after', stage: 'meeting' },
   { id: 'reschedule', label: 'reschedule meeting', ar: 'إعادة جدولة الاجتماع', cls: 'fs-reschedule', stage: 'meeting' },
@@ -7006,10 +7007,10 @@ function PipelineStatusBoard({ users = [], onSelectClient }: any) {
     return { numbers, clients, cards, logs, allUsers };
   }, [version, users]);
 
-  // الحالات الحقيقية بس (من غير Cold / Delay / Shared — دول خانات إضافية)،
-  // و«No Answer» مش خانة: الرقم بيفضل في خانته (Fresh / Follow Up …)
+  // الحالات الحقيقية بس (من غير Cold / Delay / Shared — دول خانات إضافية).
+  // «No Answer» خانة: رقم Fresh اتعمل عليه No Answer بيروح لها.
   const statusIds = LEAD_STATUS_ORDER.filter(
-    (id) => id !== COLD_CALL_ID && id !== DELAY_ID && id !== SHARED_ID && id !== 'no-answer'
+    (id) => id !== COLD_CALL_ID && id !== DELAY_ID && id !== SHARED_ID
   );
   const byStatus = new Map<string, any[]>(statusIds.map((id) => [id, []]));
   for (const n of data.numbers) byStatus.get(String(n.bucket || 'fresh-stage'))?.push(n);
@@ -7370,7 +7371,7 @@ const DASH_CARDS: Array<{ id: string; label: string; cls: string }> = [
   { id: COLD_CALL_ID, label: 'Cold Calls', cls: 'fs-cold' },
   { id: DELAY_ID, label: 'Delay', cls: 'fs-delay' },
   { id: SHARED_ID, label: 'Shared Leads', cls: 'fs-shared' },
-  // «No Answer» على رقم في Fresh بتنقله هنا (src/feedbackBuckets.ts)
+  // مرحلة يختارها المندوب بنفسه
   { id: 'not-answered', label: 'Not Answer At All', cls: 'fs-noanswer' },
   { id: 'follow-up', label: 'Follow Up', cls: 'fs-follow' },
   { id: 'meeting', label: 'Meeting', cls: 'fs-meeting' },
@@ -7575,7 +7576,7 @@ function LeadsView({
         phone: String(n?.phone || record?.phone || ''),
         status: cold ? COLD_CALL_ID : bucket,
         statusLabel: cold ? LEAD_STATUS_LABELS[COLD_CALL_ID] : (LEAD_STATUS_LABELS[bucket] || LEAD_STATUS_LABELS['fresh-stage']),
-        statusCls: cold ? 'fs-cold' : (FEEDBACK_STATUS_BY_ID[bucket]?.cls || (bucket === 'not-answered' ? 'fs-noanswer' : 'fs-fresh')),
+        statusCls: cold ? 'fs-cold' : (FEEDBACK_STATUS_BY_ID[bucket]?.cls || 'fs-fresh'),
         dateLabel: campaignStamp(time.at),
         formName: formNameOf(record),
         note: String(n?.salesNote || '') || leadNoteOf(lead || client || {}),
