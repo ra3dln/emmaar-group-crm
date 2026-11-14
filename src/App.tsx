@@ -12646,7 +12646,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
   const pageOptions = (pages.length ? pages : channelViewOf(config, channel).pages || []).map((p: any) => ({ id: p.id, name: p.name }));
 
   // يقبل أكثر من معرّف في نفس المرة: كل واحد في سطر، أو مفصولاً بفاصلة/مسافة
-  const addManualForm = () => {
+  const addManualForm = async () => {
     const ids = [...new Set(
       manual.formId
         .split(/[\s,،;]+/)
@@ -12658,16 +12658,42 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
     if (!ids.length) return setNotice('اكتب معرّف النموذج أولاً');
     const fresh = ids.filter((id) => !forms.some((f) => f.id === id));
     if (!fresh.length) return setNotice('كل هذه النماذج مضافة بالفعل');
-    setForms([...forms, ...fresh.map((id) => ({ id, pageId, name: `نموذج ${id}` }))]);
-    setSelected((prev) => ({ ...prev, ...Object.fromEntries(fresh.map((id) => [id, true])) }));
-    setManual({ pageId, formId: '' });
-    const count = fresh.length > 1 ? `${fresh.length} نماذج` : 'النموذج';
-    const hasSavedToken = !!channelViewOf(config, channel)?.hasToken;
-    if (!form.token.trim() && !hasSavedToken) {
-      setNotice(`أُضيف ${count} ✓ — لكن الصق توكن فيسبوك أولاً ثم اضغط «حفظ الإعدادات»`);
-    } else {
-      setNotice(`أُضيف ${count} ✓ — اضغط «حفظ الإعدادات» ليعمل السحب من كل النماذج المحددة`);
+    // بندوّر على الفورم بالآيدي ونجيب اسمه بس — من غير ما نفعّله (التفعيل بالعلامة
+    // جنب اسمه + «حفظ الإعدادات»، زي النماذج اللي بتيجي من «استكشف صفحاتي»)
+    setBusy('form-info');
+    setNotice('');
+    const found: any[] = [];
+    const failed: string[] = [];
+    for (const id of fresh) {
+      try {
+        const res = await fetch('/api/lead-source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            remote === false
+              ? { action: 'form-info', channel, formId: id, token: form.token.trim(), config: readLocalSource() }
+              : { action: 'form-info', channel, formId: id, token: form.token.trim() }
+          ),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.ok || !json.form) throw new Error(json.error || 'تعذّر');
+        found.push({ id: String(json.form.id || id), pageId: String(json.form.pageId || pageId), name: String(json.form.name || id) });
+      } catch (error: any) {
+        failed.push(`${id}: ${error?.message || 'ملقيتش النموذج'}`);
+      }
     }
+    setBusy('');
+    if (found.length) {
+      setForms((prev) => [...prev, ...found.filter((f) => !prev.some((m: any) => m.id === f.id))]);
+      setManual({ pageId, formId: failed.length ? manual.formId : '' });
+    }
+    const names = found.map((f) => `«${f.name}»`).join('، ');
+    setNotice(
+      [
+        found.length ? `لقيت ${names} — اتضاف للقائمة من غير تفعيل. علّم عليه واضغط «حفظ الإعدادات» لو عايز تسحب منه` : '',
+        failed.length ? `ما لقيتش: ${failed.join(' — ')}` : '',
+      ].filter(Boolean).join('\n')
+    );
   };
 
   // لو المستخدم لصق توكن (أو اختار نماذج) وهو على تبويب «ملف منشور» بلا رابط،

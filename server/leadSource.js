@@ -670,6 +670,25 @@ export async function fetchFormsForPage(pageId, pageToken) {
     }));
 }
 
+// ===== البحث عن فورم بالآيدي: يجيب اسمه وصفحته بس (من غير ما يفعّله) =====
+// بنجرّب توكنات الصفحات المحفوظة الأول، وبعدين توكن القناة.
+export async function fetchFormInfo(formId, tokens = []) {
+  const id = String(formId || '').trim();
+  if (!/^\d+$/.test(id)) throw new Error(`معرّف النموذج غير صالح: ${id}`);
+  const list = [...new Set((tokens || []).map((t) => String(t || '').trim()).filter(Boolean))];
+  if (!list.length) throw new Error('الصق توكن فيسبوك أولاً');
+  let lastError = null;
+  for (const token of list) {
+    try {
+      const json = await graphGet(`/${id}`, { fields: 'id,name,page', access_token: token });
+      return { id: String(json.id || id), name: String(json.name || ''), pageId: String(json.page?.id || '') };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error(`ملقيتش النموذج ${id}`);
+}
+
 // --- الإعدادات ---
 // كل إعداد يُقرأ من أي مكان (ملف على سيرفر الشركة ، قاعدة بيانات على الاستضافة)
 // يمرّ من هنا: القيم الناقصة تُكمَّل من الافتراضي بدل أن تتحول إلى undefined.

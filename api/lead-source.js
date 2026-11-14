@@ -22,6 +22,7 @@ import {
   collectLeads,
   debugToken,
   discoverPages,
+  fetchFormInfo,
   fetchFormsForPage,
   normalizeConfig,
   publicConfig,
@@ -183,6 +184,15 @@ export default async function handler(req, res) {
       return reply(res, 200, { ok: true, forms });
     }
 
+    // البحث عن فورم بالآيدي: يرجّع اسمه بس — الإضافة والتفعيل قرار الإدارة
+    if (action === 'form-info') {
+      const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
+      const channelCfg = channelConfigOf(config, channel) || {};
+      const tokens = [String(body.token || ''), ...(channelCfg.pages || []).map((p) => p.token), channelCfg.token];
+      const info = await fetchFormInfo(body.formId, tokens);
+      return reply(res, 200, { ok: true, form: info });
+    }
+
     // إعادة سحب كل الأرقام من البداية (تصفير المؤشرات): تُستخدم لاسترجاع أرقام كامبين
     // مفقودة — السحب يمنع التكرار بالهاتف، والدورة التالية تعيد قراءة كل التاريخ.
     if (action === 'reset') {
@@ -234,6 +244,14 @@ async function statelessHandler(req, res, url) {
       const token = String(body.token || channelCfg.token || '').trim();
       const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(token);
       return reply(res, 200, { ok: true, pages, warning, tokenExpiresAt, sources, tokenType });
+    }
+
+    if (action === 'form-info') {
+      const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
+      const channelCfg = channelConfigOf(body.config || {}, channel) || {};
+      const tokens = [String(body.token || ''), ...(channelCfg.pages || []).map((p) => p.token), channelCfg.token];
+      const info = await fetchFormInfo(body.formId, tokens);
+      return reply(res, 200, { ok: true, form: info });
     }
 
     if (action === 'forms') {
