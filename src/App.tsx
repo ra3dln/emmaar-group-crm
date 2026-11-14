@@ -2689,8 +2689,9 @@ function App() {
   }, [assignedLeads.length, users.length, currentUser?.id]);
 
   // ===== صاحب الرقم في «توزيع الأرقام» = صاحب العميل (أجهزة الإدارة) =====
-  // كانوا بيختلفوا: الرقم في التوزيع مع Salma وهو في حساب Hassan. التوزيع هو الأساس،
-  // ولو الرقم مش موزّع والعميل عند حد، الرقم ياخد صاحب العميل (shared/ownerSync.js).
+  // كانوا بيختلفوا: الرقم في حساب Hassan والتوزيع مكتوب فيه Salma. الحساب اللي فيه
+  // العميل هو الأساس والتوزيع يكتب نفس الاسم؛ ولو العميل مش عند حد ياخد صاحب الرقم
+  // (shared/ownerSync.js — وأي تغيير في آخر دقيقتين ما بيتلمسش).
   useEffect(() => {
     if (!currentUser || effectiveRoleOf(currentUser) === 'sales') return;
     let all: Client[] = [];
