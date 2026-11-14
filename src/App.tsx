@@ -9481,7 +9481,7 @@ function AdminAnalyticsView({ clients, users, feedbacks, properties, reminders }
               {topSources.map(([name, n]) => (
                 <div key={name}>
                   <div className="flex items-center justify-between text-xs mb-1 gap-2">
-                    <span className="text-[var(--text)] truncate">{name}</span>
+                    <span className="text-[var(--text)] break-words min-w-0">{name}</span>
                     <span className="text-[var(--text-muted)] shrink-0">{n}</span>
                   </div>
                   <div className="h-2 bg-[var(--tint-1)] rounded-full overflow-hidden">
@@ -10669,7 +10669,7 @@ function AdminFormsSheetView({ clients = [], leads = [] }: { clients?: Client[];
       ) : (
         forms.map((form) => (
           <div key={form.name} className="panel p-4 flex items-center justify-between gap-3">
-            <h3 className="font-extrabold text-[var(--text-strong)] truncate">{form.name}</h3>
+            <h3 className="font-extrabold text-[var(--text-strong)] break-words">{form.name}</h3>
             <button
               type="button"
               onClick={() => exportSheet(form)}
@@ -11360,7 +11360,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
             <div className="min-w-0 flex items-start gap-2">
               <Megaphone className="w-4 h-4 text-[var(--brand)] mt-0.5 shrink-0" />
               <div className="min-w-0">
-                <h3 className="font-extrabold text-[var(--text-strong)] truncate">{withManualTag(group.name, manualFormNames)}</h3>
+                <h3 className="font-extrabold text-[var(--text-strong)] break-words">{withManualTag(group.name, manualFormNames)}</h3>
                 <p className="text-[11px] text-[var(--text-muted)]">
                   <b className="text-[var(--text)]" dir="ltr">{group.clients.length + group.leads.length}</b> رقم •{' '}
                   {group.clients.length} عميل مسجّل • {group.leads.length} لسه في «توزيع الأرقام»
@@ -11400,7 +11400,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
                     <p>المسؤول: <span className="text-[var(--text)] font-bold">{ownerName(client)}</span></p>
                     <p className="truncate">المصدر: {client.source || '—'}</p>
                     {formNameOf(client) && (
-                      <p className="truncate text-[var(--brand)] font-bold">الفورم: {formNameOf(client)}</p>
+                      <p className="break-words text-[var(--brand)] font-bold">الفورم: {formNameOf(client)}</p>
                     )}
                     <LeadRepeatBadge text={repeatTextOf(repeatMap, client.phone, client.phones || [])} />
                     <p>
@@ -11436,7 +11436,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
                   <p>المسؤول: <span className="text-[var(--text)] font-bold">{userName(lead.salesId)}</span></p>
                   <p className="truncate">المصدر: {formatLeadDescription(lead.description) || 'رقم كامبين'}</p>
                   {formNameOf(lead) && (
-                    <p className="truncate text-[var(--brand)] font-bold">الفورم: {withManualTag(formNameOf(lead), manualFormNames)}</p>
+                    <p className="break-words text-[var(--brand)] font-bold">الفورم: {withManualTag(formNameOf(lead), manualFormNames)}</p>
                   )}
                   <LeadRepeatBadge text={repeatTextOf(repeatMap, lead.phone)} />
                   <p>
@@ -11816,7 +11816,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                   const on = isRuleOn(ruleOfForm(option.name));
                   return (
                     <div key={option.name} className="flex items-center gap-2 px-3 py-2">
-                      <span className="flex-1 min-w-0 text-xs font-bold text-[var(--text-strong)] truncate">{withManualTag(option.name, manualFormNames)} <span className="font-normal text-[var(--text-muted)]">({option.count} رقم)</span></span>
+                      <span className="flex-1 min-w-0 text-xs font-bold text-[var(--text-strong)] break-words">{withManualTag(option.name, manualFormNames)} <span className="font-normal text-[var(--text-muted)]">({option.count} رقم)</span></span>
                       <span className={`st-chip ${on ? 'st-closed' : 'st-negotiation'} shrink-0`}>{on ? 'مفعّل' : 'موقوف'}</span>
                       <button type="button" onClick={() => toggleFormRule(option.name)}
                         className={`shrink-0 text-xs font-bold px-3 py-1.5 rounded-[var(--r-sm)] border ${on ? 'text-amber-300 border-amber-400/40 bg-amber-500/10' : 'text-emerald-300 border-emerald-400/40 bg-emerald-500/10'}`}>

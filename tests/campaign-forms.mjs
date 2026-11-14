@@ -133,4 +133,13 @@ check(
   (patched.forms || []).length === 1 && (patched.forms || [])[0]?.id === '1'
 );
 
+// ===== اسم الفورم الطويل يظهر كامل (ينزل سطر جديد بدل ما يتقطع بـ«…») =====
+{
+  const css = fs.readFileSync('src/index.css', 'utf8');
+  const appSrc = fs.readFileSync('src/App.tsx', 'utf8');
+  const wrapRule = css.slice(css.indexOf('اسم الفورم الطويل يظهر كامل'));
+  check('شارة اسم الفورم بتلف لسطر جديد', wrapRule.includes('white-space: normal;') && wrapRule.includes('overflow-wrap: anywhere;') && /text-overflow: clip;/.test(wrapRule));
+  check('عناوين الفورم ما بتتقطعش', !appSrc.includes('truncate">{withManualTag(group.name') && !appSrc.includes('truncate">{form.name}'));
+}
+
 console.log(`\n✅ نجحت ${passed} فحوصات لأسماء الفورمات وقوائمها`);

@@ -4259,3 +4259,23 @@ html[data-mode="light"] .theme-pop { box-shadow: 0 18px 40px rgba(15, 23, 42, 0.
 @media (max-width: 900px) {
   .app-content { padding-bottom: calc(84px + var(--safe-bottom)); }
 }
+
+/* ===== اسم الفورم الطويل يظهر كامل =====
+   «Anabiya Developments - MALEK» كان بيتقطع بـ«…» — دلوقتي بينزل سطر جديد. */
+.eg-form,
+.cc-form {
+  white-space: normal;
+  align-items: flex-start;
+  border-radius: 10px;
+  height: auto;
+}
+.eg-form span,
+.cc-form > span {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+.eg-form svg,
+.cc-form svg { margin-top: 2px; }
