@@ -220,5 +220,20 @@ for (const at of writes) {
 passed += 1;
 console.log('✓ كل كتابة للفيدباك اليومي يتبعها رفع للسيرفر (مفيش حفظ محلي فقط)');
 
+// ===== رفع نفس البيانات من غير تغيير = ولا حفظ ولا نسخة جديدة =====
+// كان أي رفع بيزوّد رقم النسخة، فكل الأجهزة تحمّل البيانات كلها من الأول — وجهاز
+// بيرفع نفس الحاجة كل ثانية ونص كان بيبطّأ الموقع عند الكل.
+{
+  const sameValue = (await pull(adminCookie)).crm_daily_feedback || [];
+  const v0 = db.version;
+  // save() بيستبدل db بكائن جديد — فلو db هو هو، يبقى ما اتحفظش
+  const stored = db;
+  const same = await push('crm_daily_feedback', sameValue, adminCookie);
+  check('رفع نفس البيانات ما بيزوّدش رقم النسخة', same.status === 200 && db.version === v0 && same.json?.version === v0, `${v0} -> ${db.version}`);
+  check('ورفع نفس البيانات ما بيحفظش في قاعدة البيانات', db === stored);
+  const changed = await push('crm_daily_feedback', [...sameValue, { id: 'fb-noop-check', userId: 'u-sales', clientPhone: '01009990001', feedback: 'جديد', createdAt: new Date().toISOString() }], adminCookie);
+  check('رفع فيه تغيير حقيقي بيتحفظ ويزوّد النسخة عادي', changed.status === 200 && db.version === v0 + 1 && db !== stored, `${v0} -> ${db.version}`);
+}
+
 console.log(`\n✅ كل اختبارات وصول الفيدباك اليومي نجحت (${passed}).`);
 server.close();

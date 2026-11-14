@@ -317,6 +317,8 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
         const db = await load();
         if (isStaleSession(db)) return endStaleSession();
         const data = db.data || {};
+        // نسخة البيانات قبل الدمج — عشان لو الرفع ما غيّرش حاجة ما نزوّدش رقم النسخة
+        const before = JSON.stringify(data);
 
         // شواهد الحذف تُطبَّق أولاً (وبالدمج لا الاستبدال) حتى تُحترم في نفس الطلب
         // وحتى لا يمحوها جهاز قديم فتعود السجلات المحذوفة للحياة
@@ -354,6 +356,14 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
           data[body.key] = accept(body.key, body.value);
         } else {
           return send(res, 400, { error: 'bad request' });
+        }
+
+        // ===== رفع من غير تغيير = ولا حفظ ولا نسخة جديدة =====
+        // كان أي رفع (حتى لو نفس البيانات بالظبط) بيزوّد رقم النسخة، فكل الأجهزة تفتكر
+        // إن فيه جديد وتحمّل البيانات كلها من الأول (١.٣ ميجا) — وجهاز بيرفع نفس الحاجة
+        // كل ثانية ونص كان بيعمل كده ٨ مرات في الدقيقة، فالموقع بقى بطيء وهو بيفتح.
+        if (JSON.stringify(data) === before) {
+          return send(res, 200, { version: Number(db.version) || 0, unchanged: true });
         }
 
         const next = { version: (Number(db.version) || 0) + 1, data };
