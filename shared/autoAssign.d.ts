@@ -9,7 +9,8 @@ export type AutoAssignRule = {
   updatedAt: string;
 };
 
-export type LeadAssignment = { id: string; salesId: string };
+// turnKey: مكان الرقم في الدور (التوزيع التلقائي بالدور بس)
+export type LeadAssignment = { id: string; salesId: string; turnKey?: string };
 
 export type DistributionResult = { assignments: LeadAssignment[]; loads: Record<string, number> };
 
@@ -36,7 +37,12 @@ export declare function distributeLeads(params: {
   formOf?: (lead: any) => string;
   onlyUnassigned?: boolean;
   excludePhones?: string[];
+  // 'turns' = بالدور (التوزيع التلقائي) · 'balance' = بالتساوي (إعادة التوزيع)
+  mode?: 'turns' | 'balance';
+  at?: string;
 }): DistributionResult;
+export declare function turnKeyOf(lead: any): string;
+export declare function lastTurnOwner(params: { loadLeads?: any[]; salesIds?: string[]; formName?: string; formOf?: (lead: any) => string }): string;
 export declare function applyAutoRules(params: {
   leads?: any[];
   loadLeads?: any[];
@@ -44,4 +50,5 @@ export declare function applyAutoRules(params: {
   activeSalesIds?: string[];
   formOf?: (lead: any) => string;
   excludePhones?: string[];
+  at?: string;
 }): AutoRulesResult;

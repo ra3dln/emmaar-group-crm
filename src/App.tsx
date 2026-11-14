@@ -2406,7 +2406,7 @@ function App() {
   //   • توزيع دفعة على مندوب واحد (كل القيم نفس المعرّف)
   //   • التوزيع التلقائي بالتساوي على عدة مندوبين (كل رقم يأخذ مندوبه)
   // via: «manual» = الإدارة اختارت بنفسها — بيكسب أي توزيع تلقائي (shared/ownerGuard.js)
-  const applyLeadOwners = (ownerOf: Map<string, string>, via: 'manual' | 'auto' = 'auto') => {
+  const applyLeadOwners = (ownerOf: Map<string, string>, via: 'manual' | 'auto' = 'auto', turnOf?: Map<string, string>) => {
     if (!currentUser || !ownerOf.size) return null;
     const movedAt = new Date().toISOString();
     // `assignedAt` = وقت آخر تغيير في التوزيع (توزيع أو سحب رقم من السيلز):
@@ -2418,7 +2418,9 @@ function App() {
         if (!ownerOf.has(l.id)) return l;
         const owner = ownerOf.get(l.id) || '';
         if (owner === String(l.salesId || '') && (via !== 'manual' || l.assignedVia === 'manual')) return l;
-        return { ...l, salesId: owner, assignedAt: movedAt, assignedVia: via };
+        // autoTurnKey: مكان الرقم في الدور — التوزيع الجاي بيكمّل من بعده (shared/autoAssign.js)
+        const turnKey = turnOf?.get(l.id);
+        return { ...l, salesId: owner, assignedAt: movedAt, assignedVia: via, ...(turnKey ? { autoTurnKey: turnKey } : {}) };
       })
     );
 
@@ -2592,9 +2594,11 @@ function App() {
     if (!name) return 0;
     // كل من يستقبل أرقاماً فعلاً (سيلز/مشرف/حساب مطوّر/إداري مختار أنه يسيلز)
     const assignableIds = new Set(users.filter(isAssignableSales).map((u: User) => String(u.id)));
+    // الترتيب = ترتيب الحسابات (نفس ترتيب السيرفر) — الدور واحد في كل مكان
+    const chosenIds = new Set((salesIds || []).map((id) => String(id)));
     const targets = allSales
       ? [...assignableIds]
-      : (salesIds || []).map((id) => String(id)).filter((id) => assignableIds.has(id));
+      : [...assignableIds].filter((id) => chosenIds.has(id));
     const next = upsertRule(autoAssignRules, { formName: name, salesIds: targets, allSales, active });
     setAutoAssignRules(next);
     localStorage.setItem(AUTO_ASSIGN_KEY, JSON.stringify(next));
@@ -2611,9 +2615,15 @@ function App() {
       onlyUnassigned: true,
       // رقم عند حدّ سلفاً (عميل مسجّل) ما يتوزّعش على حدّ تاني
       excludePhones: phonesOfClients(fullClients),
+      // بالدور: كل واحد رقم، من بعد آخر واحد خد رقم من الفورم دي
+      mode: 'turns',
     });
     if (!assignments.length) return 0;
-    applyLeadOwners(new Map(assignments.map((item) => [item.id, item.salesId])));
+    applyLeadOwners(
+      new Map(assignments.map((item) => [item.id, item.salesId])),
+      'auto',
+      new Map(assignments.map((item) => [item.id, String(item.turnKey || '')]))
+    );
     return assignments.length;
   };
 
@@ -2668,7 +2678,11 @@ function App() {
       excludePhones: phonesOfClients(fullClients),
     });
     if (!assignments.length) return;
-    applyLeadOwners(new Map(assignments.map((item: LeadAssignment) => [item.id, item.salesId])));
+    applyLeadOwners(
+      new Map(assignments.map((item: LeadAssignment) => [item.id, item.salesId])),
+      'auto',
+      new Map(assignments.map((item: LeadAssignment) => [item.id, String(item.turnKey || '')]))
+    );
   }, [fullLeads, fullClients, autoAssignRules, users.length, currentUser?.id]);
 
   // ===== الرقم الموزَّع يصير عميل مندوبه تلقائياً (على كل الأجهزة) =====

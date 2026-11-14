@@ -945,6 +945,8 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
           activeSalesIds,
           // الأرقام الجديدة تحمل formName صريحاً، وهو مفتاح القاعدة نفسه
           formOf: (lead) => String(lead?.formName || ''),
+          // وقت الدور = وقت السحب (autoTurnKey على كل رقم بيحدد مين عليه الدور بعده)
+          at,
         })
       : { leads: built.added, assignments: [], byRule: {} };
 

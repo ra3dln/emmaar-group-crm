@@ -247,7 +247,7 @@ check(
 );
 check(
   'الحساب غير المؤهّل ما يبقىش في قائمة مختاري التوزيع',
-  app.includes('users.filter(isAssignableSales)') && app.includes('assignableIds.has(id)')
+  app.includes('users.filter(isAssignableSales)') && app.includes('[...assignableIds].filter((id) => chosenIds.has(id))')
 );
 check(
   'الرقم المحوَّل لعميل يخرج من الشغل المعلّق',
@@ -390,5 +390,55 @@ check(
   'الواجهة فيها زرار «إعادة توزيع بالتساوي» بينادي على المعالج',
   app.includes('إعادة توزيع بالتساوي') && app.includes('onRebalanceForm')
 );
+
+// ===== التوزيع التلقائي بالدور =====
+// الطلب: «يبدأ بحسابات السيلز ويوزّع كل واحد رقم لحد ما الأرقام تخلص، ولو ضفنا
+// سيلز جديد مش لازم ياخد نفس العدد — بس يتحط معاهم في الدور».
+{
+  const FORM = 'فورم الدور';
+  const ids = ['mohamed', 'farida', 'abdallah', 'hassan'];
+  const newLead = (n) => ({ id: `t${n}`, phone: `0100000${String(1000 + n)}`, formName: FORM, salesId: '', createdAt: `2026-11-14T10:${String(n).padStart(2, '0')}:00.000Z` });
+  const rule = [{ id: FORM, formName: FORM, salesIds: ['mohamed', 'abdallah', 'hassan'], active: true }];
+
+  // ١) محمد وعبدالله وحسن: ١٥ رقم → كل واحد ٥ بالدور (محمد، عبدالله، حسن، محمد …)
+  let all = Array.from({ length: 15 }, (_, i) => newLead(i));
+  const r1 = applyAutoRules({ leads: all, rules: rule, activeSalesIds: ids, at: '2026-11-14T10:00:00.000Z' });
+  all = r1.leads;
+  const order1 = r1.assignments.slice(0, 6).map((a) => a.salesId).join(',');
+  check('بالدور بترتيب الحسابات: محمد، عبدالله، حسن، محمد…', order1 === 'mohamed,abdallah,hassan,mohamed,abdallah,hassan', order1);
+  const count = (list, id) => list.filter((l) => l.salesId === id).length;
+  check('كل واحد خد ٥', ['mohamed', 'abdallah', 'hassan'].every((id) => count(all, id) === 5));
+
+  // ٢) فريدة دخلت التوزيع → الدور بقى محمد، فريدة، عبدالله، حسن — من غير ما تلحق بالخمسة
+  const rule2 = [{ ...rule[0], salesIds: ['mohamed', 'farida', 'abdallah', 'hassan'] }];
+  const more = Array.from({ length: 4 }, (_, i) => newLead(20 + i));
+  const r2 = applyAutoRules({ leads: [...all, ...more], rules: rule2, activeSalesIds: ids, at: '2026-11-14T11:00:00.000Z' });
+  const order2 = r2.assignments.map((a) => a.salesId).join(',');
+  check('فريدة دخلت الدور: محمد، فريدة، عبدالله، حسن (رقم لكل واحد)', order2 === 'mohamed,farida,abdallah,hassan', order2);
+  check('فريدة ما خدتش أرقام زيادة تلحق بيها الباقيين', count(r2.leads, 'farida') === 1);
+
+  // ٣) الدور بيكمّل من مكانه بين السحبات (رقم واحد في كل سحب)
+  let leads3 = r2.leads;
+  const seq = [];
+  for (let n = 0; n < 5; n += 1) {
+    const r = applyAutoRules({ leads: [...leads3, newLead(40 + n)], rules: rule2, activeSalesIds: ids, at: `2026-11-14T12:0${n}:00.000Z` });
+    leads3 = r.leads;
+    seq.push(r.assignments[0]?.salesId);
+  }
+  check('رقم في كل سحب بيكمّل الدور (مش بيرجع لأول واحد)', seq.join(',') === 'mohamed,farida,abdallah,hassan,mohamed', seq.join(','));
+
+  // ٤) التوزيع اليدوي ما بيحرّكش الدور
+  // آخر واحد بالدور كان محمد؛ الإدارة ادّت رقم لحسن بإيدها بعده → الدور يفضل على فريدة
+  const manualLead = { ...newLead(49), salesId: 'hassan', assignedVia: 'manual', assignedAt: '2026-11-14T13:00:00.000Z' };
+  const r4 = applyAutoRules({ leads: [...leads3, manualLead, newLead(50)], rules: rule2, activeSalesIds: ids, at: '2026-11-14T14:00:00.000Z' });
+  check('رقم وزّعته الإدارة بإيدها ما بيغيّرش مكان الدور', r4.assignments[0]?.salesId === 'farida', String(r4.assignments[0]?.salesId));
+}
+
+// ===== الواجهة والسيرفر بيحفظوا مكان الدور =====
+{
+  const srv = fs.readFileSync('server/leadSource.js', 'utf8');
+  check('السيرفر بيوزّع بالدور بوقت السحب', /formOf: \(lead\) => String\(lead\?\.formName \|\| ''\),\s*\/\/[^\n]*\n\s*at,/.test(srv));
+  check('أجهزة الإدارة بتحفظ مكان الدور على الرقم', app.includes('autoTurnKey: turnKey') && app.includes("mode: 'turns'"));
+}
 
 console.log(`\n✅ نجحت ${passed} فحوصات للتوزيع التلقائي`);

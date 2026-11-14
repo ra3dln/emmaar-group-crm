@@ -103,7 +103,39 @@ export function upsertRule(rules, patch, at = new Date().toISOString()) {
 //   onlyUnassigned = false => كل أرقام الفورم تُعاد وتُقسم من جديد
 //   excludePhones          => أرقام عند أحد بالفعل (مسجّلة كعميل): ما تتوزّع تاني،
 //                            عشان الرقم الواحد ما يبقاش عند أكتر من شخص.
-export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName = '', formOf, onlyUnassigned = true, excludePhones = [] }) {
+// ===== التوزيع بالدور =====
+// التوزيع التلقائي بيمشي بالدور على السيلز بترتيبهم: كل واحد رقم لحد ما الأرقام تخلص،
+// والرقم الجاي بيكمّل من بعد آخر واحد خد رقم من الفورم دي. مش لازم الكل يبقى متساوي:
+// سيلز جديد بيدخل الدور معاهم من غير ما ياخد أرقام زيادة يلحق بيها الباقيين.
+// مكان الدور مش محفوظ لوحده — بيتحسب من البيانات نفسها: آخر رقم اتوزّع تلقائي في
+// الفورم (autoTurnKey) ومع مين، فالسيرفر وكل الأجهزة بيكمّلوا من نفس المكان.
+export const turnKeyOf = (lead) =>
+  String(lead?.autoTurnKey || `${String(lead?.assignedAt || lead?.createdAt || '')}#`);
+const turnKeyAt = (at, index) => `${at}#${String(index).padStart(5, '0')}`;
+
+export function lastTurnOwner({ loadLeads = [], salesIds = [], formName = '', formOf } = {}) {
+  const order = cleanIds(salesIds);
+  const nameOf = typeof formOf === 'function' ? formOf : formNameOfLead;
+  const target = String(formName || '').trim();
+  let last = '';
+  let lastKey = '';
+  for (const lead of asList(loadLeads)) {
+    if (!lead || lead.assignedVia === 'manual' || lead.status === 'closed') continue;
+    const owner = String(lead.salesId || '');
+    if (!owner || !order.includes(owner)) continue;
+    if (target && String(nameOf(lead) || '').trim() !== target) continue;
+    const key = turnKeyOf(lead);
+    if (key > lastKey) {
+      lastKey = key;
+      last = owner;
+    }
+  }
+  return last;
+}
+
+//   mode = 'turns'   => بالدور (التوزيع التلقائي)
+//   mode = 'balance' => بالتساوي (زرار «إعادة توزيع بالتساوي»)
+export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName = '', formOf, onlyUnassigned = true, excludePhones = [], mode = 'balance', at = new Date().toISOString() }) {
   const eligible = cleanIds(salesIds);
   if (!eligible.length) return { assignments: [], loads: {} };
   // حمل كل مندوب يُحسب على **كل** أرقامه في النظام (loadLeads)، لا على دفعة
@@ -148,6 +180,17 @@ export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName
     .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
 
   const assignments = [];
+  if (mode === 'turns') {
+    const last = lastTurnOwner({ loadLeads: loadSource, salesIds: eligible, formName: target, formOf: nameOf });
+    let index = last ? (eligible.indexOf(last) + 1) % eligible.length : 0;
+    pending.forEach((lead, i) => {
+      const owner = eligible[index];
+      index = (index + 1) % eligible.length;
+      loads.set(owner, (loads.get(owner) || 0) + 1);
+      assignments.push({ id: String(lead.id), salesId: owner, turnKey: turnKeyAt(at, i) });
+    });
+    return { assignments, loads: Object.fromEntries(loads) };
+  }
   let turn = 0;
   for (const lead of pending) {
     let bestForm = Infinity;
@@ -177,7 +220,7 @@ export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName
 // تطبيق كل القواعد المفعّلة على قائمة الأرقام كاملة (ترجع نسخة جديدة)
 //   activeSalesIds: الحسابات النشطة فعلاً — قاعدة تشير لحساب محذوف/موقوف لا تعمل
 //   excludePhones: أرقام عند أحد بالفعل (عملاء مسجّلون) — ما تتوزّع تاني
-export function applyAutoRules({ leads = [], loadLeads, rules = [], activeSalesIds = [], formOf, excludePhones = [] } = {}) {
+export function applyAutoRules({ leads = [], loadLeads, rules = [], activeSalesIds = [], formOf, excludePhones = [], at = new Date().toISOString() } = {}) {
   const active = new Set(cleanIds(activeSalesIds));
   const list = asList(leads).map((lead) => ({ ...lead }));
   const loadSource = asList(loadLeads === undefined ? leads : loadLeads);
@@ -188,18 +231,20 @@ export function applyAutoRules({ leads = [], loadLeads, rules = [], activeSalesI
     if (!rule || rule.active === false) continue;
     // «كل السيلز» = كل من يستقبل أرقامًا الآن (وتلقائيًا أي حساب جديد بعد كده)،
     // وإلا فالمختارون في القاعدة فقط.
-    const salesIds = rule.allSales
-      ? [...active]
-      : cleanIds(rule.salesIds).filter((id) => active.has(id));
+    // الترتيب = ترتيب الحسابات (نفسه في السيرفر وكل الأجهزة)، فالدور واحد في كل مكان
+    const chosen = new Set(cleanIds(rule.salesIds));
+    const salesIds = rule.allSales ? [...active] : [...active].filter((id) => chosen.has(id));
     if (!salesIds.length) continue;
     const formName = String(rule.formName || rule.id || '').trim();
     if (!formName) continue;
-    const result = distributeLeads({ leads: list, loadLeads: loadSource, salesIds, formName, formOf, onlyUnassigned: true, excludePhones });
+    const result = distributeLeads({ leads: list, loadLeads: loadSource, salesIds, formName, formOf, onlyUnassigned: true, excludePhones, mode: 'turns', at });
     if (!result.assignments.length) continue;
-    const ownerOf = new Map(result.assignments.map((item) => [item.id, item.salesId]));
+    const byId = new Map(result.assignments.map((item) => [item.id, item]));
     for (const lead of list) {
-      const owner = ownerOf.get(String(lead.id));
-      if (owner) lead.salesId = owner;
+      const item = byId.get(String(lead.id));
+      if (!item) continue;
+      lead.salesId = item.salesId;
+      lead.autoTurnKey = item.turnKey;
     }
     assignments.push(...result.assignments);
     byRule[formName] = (byRule[formName] || 0) + result.assignments.length;
