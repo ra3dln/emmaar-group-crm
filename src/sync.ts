@@ -30,7 +30,10 @@ export const AUTH_EVENT = 'crm-auth-required';
 
 export const API = '/api/store';
 export const AUTH_API = '/api/auth';
-const POLL_MS = 1500;
+// كل جهاز بيسأل السيرفر «فيه جديد؟» كل ٥ ثواني (كانت ١.٥ ثانية): كل سؤال طلب على
+// Vercel، ومع كذا جهاز طول اليوم ده كان بيستهلك حصة الاستضافة المجانية.
+// (لما الصفحة ترجع للشاشة بتتزامن فوراً من غير ما تستنى — attachWakeListeners)
+const POLL_MS = 5000;
 
 // ===== حالة التفويض =====
 // لا يوجد أي مفتاح في كود المتصفح: التفويض كله بكوكي جلسة HttpOnly موقع من السيرفر.

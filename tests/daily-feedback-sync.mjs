@@ -235,5 +235,24 @@ console.log('✓ كل كتابة للفيدباك اليومي يتبعها رف
   check('رفع فيه تغيير حقيقي بيتحفظ ويزوّد النسخة عادي', changed.status === 200 && db.version === v0 + 1 && db !== stored, `${v0} -> ${db.version}`);
 }
 
+// ===== تقليل استهلاك الاستضافة =====
+{
+  // بيانات أكبر من ١ كيلو (الصغيرة بتتبعت من غير ضغط)
+  const current = (await pull(adminCookie)).crm_daily_feedback || [];
+  const bulk = Array.from({ length: 30 }, (_, i) => ({
+    id: `fb-bulk-${i}`, userId: 'u-sales', clientPhone: `0100999${String(1000 + i)}`, feedback: 'كومنت تجربة للضغط', createdAt: new Date().toISOString(),
+  }));
+  await push('crm_daily_feedback', [...current, ...bulk], adminCookie);
+  const raw = await fetch(`${base}/api/store`, { headers: { cookie: adminCookie, 'accept-encoding': 'gzip' } });
+  const json = await raw.json();
+  check(
+    'البيانات الكاملة بتتبعت مضغوطة (gzip) وبتتقري عادي',
+    raw.headers.get("content-encoding") === "gzip" && Array.isArray(json?.data?.crm_daily_feedback),
+    JSON.stringify({ enc: raw.headers.get("content-encoding"), status: raw.status, keys: Object.keys(json || {}) })
+  );
+  const syncSrc = fs.readFileSync('src/sync.ts', 'utf8');
+  check('الأجهزة بتسأل السيرفر كل ٥ ثواني مش كل ثانية ونص', /const POLL_MS = 5000;/.test(syncSrc));
+}
+
 console.log(`\n✅ كل اختبارات وصول الفيدباك اليومي نجحت (${passed}).`);
 server.close();

@@ -10,6 +10,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import {
   authConfigured,
   isSecureRequest,
@@ -77,11 +78,23 @@ export const isValidKey = (key) => typeof key === 'string' && KEY_PATTERN.test(k
 const isValidRecords = (value) =>
   Array.isArray(value) && value.length <= MAX_RECORDS && value.every((r) => r && typeof r === 'object');
 
-const send = (res, status, payload) => {
+// ===== الرد مضغوط (gzip) لو كبير =====
+// البيانات كلها ~١.٤ ميجا ومضغوطة ~٢٣٠ كيلو. Vercel بيحسب «Fast Origin Transfer» على
+// الحجم اللي الوظيفة بتبعته — فالضغط هنا بيقلّل الاستهلاك ٦ مرات تقريباً.
+const GZIP_MIN_BYTES = 1024;
+const send = (res, status, payload, req = null) => {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
-  res.end(JSON.stringify(payload));
+  const body = JSON.stringify(payload);
+  const accepts = String(req?.headers?.['accept-encoding'] || '');
+  if (req && body.length >= GZIP_MIN_BYTES && /gzip/i.test(accepts)) {
+    res.setHeader('Content-Encoding', 'gzip');
+    res.setHeader('Vary', 'Accept-Encoding');
+    res.end(zlib.gzipSync(body));
+    return;
+  }
+  res.end(body);
 };
 
 const readBody = (req) =>
@@ -307,7 +320,7 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
           // إصدار الجلسات لا يغادر السيرفر أبداً، وكلمات المرور لا تُرى إلا للإدارة
           // (رتبة admin — صلاحية عرض كلمات مرور السيلز المطلوبة صراحةً)
           data: stripUserSecrets(db.data || {}, { keepPasswords: session?.r === 'admin' }),
-        });
+        }, req);
       }
 
       if (req.method === 'POST') {
