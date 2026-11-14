@@ -83,6 +83,7 @@ import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import { PartnerPanel } from './PartnerPanel';
 import { ManualFormsView, knownFormNames, useManualFormNames } from './ManualFormsView';
 import { LeadRepeatBadge, repeatTextOf, useLeadRepeats } from './LeadRepeatBadge';
+import { repeatPhoneKey } from '../shared/leadRepeats.js';
 import { SalesExportView } from './SalesExportView';
 import { AdminDashboardView } from './AdminDashboardView';
 import { MANUAL_FORMS_KEY, addToManualFormCount, formNameTaken, parseManualForms, withManualTag } from './manualForms';
@@ -11199,6 +11200,37 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
       ? formGroups
       : [formGroups.find((g) => g.name === activeForm) || { name: activeForm, clients: [], leads: [] }];
 
+  // ===== الأرقام المتكررة جوه الفورم =====
+  // رقم اتسجّل في الفورم دي بس كان موجود أصلاً من فورم تانية — ما اتضافش تاني،
+  // بس بيظهر هنا (عشان عدد الفورم يطابق فيسبوك) ومكتوب عليه مكرر وأصله فين ومع مين.
+  // الرقم الأصلي وسيلزه زي ما هما.
+  const repeatRowsOf = (formName: string) => {
+    const out: { id: string; name: string; phone: string; at: string; client: Client | null; originForm: string; owner: string }[] = [];
+    for (const entries of repeatMap.values()) {
+      for (const entry of entries) {
+        if (String(entry.formName || '').trim() !== formName) continue;
+        const key = repeatPhoneKey(entry.phone);
+        const client = (clients || []).find((c: Client) => [c.phone, ...(c.phones || [])].some((ph) => repeatPhoneKey(ph) === key)) || null;
+        const lead = client ? null : (leads || []).find((l: AssignedLead) => repeatPhoneKey(l.phone) === key) || null;
+        const original: any = client || lead;
+        // الأصل في نفس الفورم = الرقم ظاهر أصلاً (ولافتة «متكرر» عليه)
+        if (original && formNameOf(original) === formName) continue;
+        const name = String(entry.name || original?.name || 'بدون اسم');
+        if (q && !normalizeArabicText(`${name} ${entry.phone}`).includes(q)) continue;
+        out.push({
+          id: entry.id,
+          name,
+          phone: String(entry.phone || ''),
+          at: String(entry.campaignAt || entry.createdAt || ''),
+          client,
+          originForm: original ? formNameOf(original) : '',
+          owner: client ? ownerName(client) : lead ? userName(lead.salesId) : '',
+        });
+      }
+    }
+    return out;
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
@@ -11304,6 +11336,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
             {formOptions.map((option) => (
               <option key={option.name} value={option.name} className="bg-gray-900">
                 {withManualTag(option.name, manualFormNames)} — {option.clients} عميل مسجّل • {option.leads} في التوزيع
+                {repeatRowsOf(option.name).length ? ` • ${repeatRowsOf(option.name).length} متكرر` : ''}
               </option>
             ))}
           </select>
@@ -11315,7 +11348,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
             في إعدادات السحب تظهر هنا تلقائياً.
           </p>
         ) : (
-          <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
             <div className="rounded-[var(--r-md)] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] px-3 py-2.5">
               <p className="text-[10.5px] text-[var(--text-muted)]">عملاء مسجّلون</p>
               <p className="text-2xl font-extrabold text-[var(--brand)] leading-tight" dir="ltr">{selectedCounts?.clients || 0}</p>
@@ -11324,9 +11357,13 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
               <p className="text-[10.5px] text-[var(--text-muted)]">في توزيع الأرقام</p>
               <p className="text-2xl font-extrabold text-[var(--text-strong)] leading-tight" dir="ltr">{selectedCounts?.leads || 0}</p>
             </div>
+            <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--warn)] px-3 py-2.5">
+              <p className="text-[10.5px] text-[var(--text-muted)]">متكرر (موجود في فورم تانية)</p>
+              <p className="text-2xl font-extrabold text-[var(--warn)] leading-tight" dir="ltr">{repeatRowsOf(activeForm).length}</p>
+            </div>
             <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] px-3 py-2.5">
               <p className="text-[10.5px] text-[var(--text-muted)]">إجمالي الفورم</p>
-              <p className="text-2xl font-extrabold text-[var(--text-strong)] leading-tight" dir="ltr">{(selectedCounts?.clients || 0) + (selectedCounts?.leads || 0)}</p>
+              <p className="text-2xl font-extrabold text-[var(--text-strong)] leading-tight" dir="ltr">{(selectedCounts?.clients || 0) + (selectedCounts?.leads || 0) + repeatRowsOf(activeForm).length}</p>
             </div>
           </div>
         )}
@@ -11343,12 +11380,13 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
                 <p className="text-[11px] text-[var(--text-muted)]">
                   <b className="text-[var(--text)]" dir="ltr">{group.clients.length + group.leads.length}</b> رقم •{' '}
                   {group.clients.length} عميل مسجّل • {group.leads.length} لسه في «توزيع الأرقام»
+                  {repeatRowsOf(group.name).length ? ` • ${repeatRowsOf(group.name).length} متكرر` : ''}
                 </p>
               </div>
             </div>
           </div>
 
-          {group.clients.length + group.leads.length === 0 && (
+          {group.clients.length + group.leads.length + repeatRowsOf(group.name).length === 0 && (
             <div className="rounded-[var(--r-md)] border border-dashed border-[var(--border)] px-4 py-6 text-center">
               <p className="text-sm text-[var(--text-muted)]">لا توجد أرقام في هذا الفورم بعد</p>
               <p className="text-[11px] text-[var(--text-dim)] mt-1">
@@ -11430,6 +11468,32 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
                 >
                   <PhoneCall className="w-4 h-4" />
                 </a>
+              </motion.div>
+            ))}
+
+            {/* أرقام اتسجّلت في الفورم دي وهي موجودة أصلاً في فورم تانية */}
+            {repeatRowsOf(group.name).map((row) => (
+              <motion.div
+                key={`repeat-${row.id}`}
+                onClick={() => row.client && onSelect(row.client)}
+                className={`panel p-4 border border-dashed border-[var(--warn)] ${row.client ? 'cursor-pointer' : ''}`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h4 className="font-bold text-[var(--text-strong)] truncate">{row.name}</h4>
+                    <p className="text-[var(--brand)] text-sm mt-0.5" dir="ltr">{row.phone}</p>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-1 rounded-full border border-[var(--warn)] text-[var(--warn)] whitespace-nowrap">
+                    مكرر
+                  </span>
+                </div>
+                <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1 text-[11.5px] text-[var(--text-muted)]">
+                  <p className="font-bold text-[var(--warn)]">
+                    مكرر في فورم {row.originForm || 'تانية'}
+                  </p>
+                  {row.owner && <p>مع: <span className="text-[var(--text)] font-bold">{row.owner}</span> (ما اتغيّرش)</p>}
+                  {row.at && <p>سُجّل في الفورم دي: {formatDateTime(row.at)}</p>}
+                </div>
               </motion.div>
             ))}
           </div>

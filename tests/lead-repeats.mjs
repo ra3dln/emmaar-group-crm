@@ -128,6 +128,15 @@ const { runAutoImportCore, normalizeConfig } = await import('../server/leadSourc
   check('اللافتة على كارت الرقم عند السيلز', /repeat=\{repeatTextOf\(repeatMap, row\.phone/.test(app));
   check('اللافتة في توزيع الأرقام', /<LeadRepeatBadge text=\{repeatTextOf\(repeatMap, lead\.phone\)\} \/>/.test(app));
   check('اللافتة في عملاء كامبين', /<LeadRepeatBadge text=\{repeatTextOf\(repeatMap, client\.phone, client\.phones \|\| \[\]\)\} \/>/.test(app));
+  // الرقم المتكرر بيظهر جوه الفورم اللي اتكرر فيها (عشان العدد يطابق فيسبوك)
+  check(
+    'عملاء كامبين: الرقم المتكرر بيظهر جوه فورمه ومكتوب «مكرر في فورم …» ومع مين',
+    app.includes('const repeatRowsOf = (formName: string)') &&
+      app.includes('key={`repeat-${row.id}`}') &&
+      app.includes("مكرر في فورم {row.originForm || 'تانية'}") &&
+      app.includes('(ما اتغيّرش)')
+  );
+  check('الرقم المتكرر بيتعدّ في الفورم', /repeatRowsOf\(option\.name\)\.length/.test(app));
 }
 
 console.log(`\n✅ نجحت ${passed} فحوصات (الأرقام المتكررة من الكامبين)`);
