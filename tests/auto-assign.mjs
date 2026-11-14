@@ -1,7 +1,7 @@
 // ===== اختبار التوزيع التلقائي (فورم ← مندوبون بعينهم) =====
 // يتحقق من:
 //  ١) القاعدة: الأرقام تتوزع على المختارين وحدهم، وغيرهم لا يصله ولا رقم.
-//  ٢) التساوي: الفرق بين أي مندوبين لا يزيد عن رقم واحد، والموجود لا يُسحب من أحد.
+//  ٢) الدور: كل واحد رقم بالترتيب، والموجود لا يُسحب من أحد.
 //  ٣) عزل الفورمات: قاعدة فورم لا تلمس أرقام فورم آخر.
 //  ٤) التكامل مع السيرفر: أرقام السحب الجديدة تخرج من buildAssignments موزّعة بالقاعدة.
 //  ٥) الربط: المفتاح مزامَن، والواجهة والسيرفر يستخدمون نفس المنطق.
@@ -94,24 +94,18 @@ check('فورم آخر لم يُمسّ', ownerOf.get('6') === '');
 check('كل رقم أخذ مندوباً واحداً فقط', assigned.length === new Set(assigned.map((a) => a.id)).size);
 
 const countOf = (id) => result.leads.filter((l) => l.salesId === id).length;
-check('التوزيع متساوٍ (فرق رقم واحد كأقصى حد)', Math.abs(countOf(mohamed) - countOf(ahmed)) <= 1, `${countOf(mohamed)} / ${countOf(ahmed)}`);
 check(
-  'التساوي في نفس الفورم الأول، والحمل الكلي بيفصل عند التعادل بس',
-  (() => {
-    // محمد عنده ٥ أرقام في فورم تاني، أحمد بلا شيء: أرقام الفورم ده تتقسم بالتساوي
-    // بينهم، وأول رقم (التعادل) يروح لأحمد لأن حمله الكلي أقل.
-    // (قبل كده أحمد كان بياخد الكل، فواحد يبقى معاه ١٣ من الفورم وغيره صفر.)
-    const loaded = [1, 2, 3, 4, 5].map((n) => lead(`9${n}`, { salesId: mohamed, formName: OTHER_FORM }));
-    const res = distributeLeads({ leads: [...loaded, lead('31'), lead('32')], salesIds: [mohamed, ahmed], formName: FORM });
-    return res.assignments.length === 2 && res.assignments[0].salesId === ahmed && res.assignments[1].salesId === mohamed;
-  })()
+  'بالدور: محمد، أحمد، محمد، أحمد، محمد',
+  assigned.map((a) => a.salesId).join(',') === [mohamed, ahmed, mohamed, ahmed, mohamed].join(','),
+  assigned.map((a) => a.salesId).join(',')
 );
 check(
-  'سيلز معاه أرقام كتير من الفورم ما ياخدش منه تاني لحد ما الباقيين يحصّلوه',
+  'السيلز اللي معاه أرقام كتير ما بيتخطّاش في الدور (مش بالعدد)',
   (() => {
-    const has = [1, 2, 3, 4].map((n) => lead(`8${n}`, { salesId: mohamed }));
+    // محمد معاه ٤ أرقام من الفورم وأحمد صفر: الدور بيكمّل عادي — مش كله لأحمد
+    const has = [1, 2, 3, 4].map((n) => lead(`8${n}`, { salesId: mohamed, autoTurnKey: `2026-10-20T10:00:00.000Z#0000${n}` }));
     const res = distributeLeads({ leads: [...has, lead('41'), lead('42'), lead('43')], salesIds: [mohamed, ahmed], formName: FORM });
-    return res.assignments.every((item) => item.salesId === ahmed);
+    return res.assignments.map((a) => a.salesId).join(',') === [ahmed, mohamed, ahmed].join(',');
   })()
 );
 check('من ليس عنده أرقام غير مخصصة لا شيء يتغير', applyAutoRules({ leads: [lead('1', { salesId: ahmed })], rules, activeSalesIds: allSales }).assignments.length === 0);
@@ -295,12 +289,12 @@ const fairOne = distributeLeads({
   formName: FORM,
 });
 check(
-  'الرقم الجديد يروح لأقل مندوب حملًا (مش للمندوب الأول في القائمة)',
-  fairOne.assignments[0]?.salesId === abdo,
+  'الرقم الجديد بيروح للي عليه الدور (مش لأقل واحد في العدد)',
+  fairOne.assignments.length === 1 && [ahmed, saif, abdo].includes(fairOne.assignments[0]?.salesId),
   JSON.stringify(fairOne.assignments)
 );
 
-// سحب متتابع: كل رقم في دفعة لوحده — لازم يتوزع بالتساوي مش كله على واحد
+// سحب متتابع: كل رقم في دفعة لوحده — لازم يمشي بالدور مش كله على واحد
 let pool = [...imbalance];
 const added = [];
 for (let i = 0; i < 30; i += 1) {
@@ -310,16 +304,17 @@ for (let i = 0; i < 30; i += 1) {
     loadLeads: [...pool, ...single],
     salesIds: [ahmed, saif, abdo],
     formName: FORM,
+    at: `2026-11-14T10:${String(i).padStart(2, '0')}:00.000Z`,
   });
   const owner = res.assignments[0]?.salesId;
   added.push(owner);
-  pool = [...pool, { ...single[0], salesId: owner }];
+  pool = [...pool, { ...single[0], salesId: owner, autoTurnKey: res.assignments[0]?.turnKey }];
 }
-const finalLoads = [ahmed, saif, abdo].map((id) => pool.filter((l) => l.salesId === id).length);
+const newPer = [ahmed, saif, abdo].map((id) => added.filter((owner) => owner === id).length);
 check(
-  '٣٠ عملية سحب متتالية تنتهي بحمل متساوٍ (فرق رقم واحد كأقصى) بدل تكدّس على واحد',
-  Math.max(...finalLoads) - Math.min(...finalLoads) <= 1,
-  JSON.stringify(finalLoads)
+  '٣٠ عملية سحب متتالية بالدور: كل واحد ١٠ أرقام جديدة (مش بيلحّق اللي معاه أقل)',
+  newPer.every((n) => n === 10) && added.slice(0, 3).join(',') !== added.slice(1, 4).join(','),
+  JSON.stringify(newPer)
 );
 check('مفيش رقم اتوزّع على مندوب خارج القائمة', added.every((id) => [ahmed, saif, abdo].includes(id)));
 
@@ -350,46 +345,16 @@ check(
   app.includes('loadLeads: fullLeads') && app.includes('loadLeads: assignedLeads')
 );
 check(
-  'اللوحة فيها خيار «كل السيلز (بالتساوي)»',
-  app.includes('كل السيلز (بالتساوي)') && app.includes('setAutoAll')
+  'اللوحة فيها خيار «كل السيلز (بالدور)» ومفيش «بالتساوي» خالص',
+  app.includes('كل السيلز (بالدور)') && app.includes('setAutoAll') && !app.includes('بالتساوي')
 );
 
-// ===== ١٢) إعادة توزيع التكدّس القديم (٢٠ / ٨ / ٤) بالتساوي =====
-const pile = [
-  ...Array.from({ length: 20 }, (_, i) => ({ id: `pa${i}`, phone: `0108000${i}`, formName: FORM, salesId: ahmed })),
-  ...Array.from({ length: 8 }, (_, i) => ({ id: `pb${i}`, phone: `0118000${i}`, formName: FORM, salesId: saif })),
-  ...Array.from({ length: 4 }, (_, i) => ({ id: `pc${i}`, phone: `0128000${i}`, formName: FORM, salesId: abdo })),
-  ...Array.from({ length: 6 }, (_, i) => ({ id: `pd${i}`, phone: `0138000${i}`, formName: OTHER_FORM, salesId: ahmed })),
-];
-const pilePending = pile.filter((l) => l.formName === FORM);
-const pileIds = new Set(pilePending.map((l) => l.id));
-const otherLoads = pile.filter((l) => !pileIds.has(l.id));
-const rebalance = distributeLeads({
-  leads: pilePending,
-  loadLeads: otherLoads,
-  salesIds: [ahmed, saif, abdo],
-  formName: FORM,
-  onlyUnassigned: false,
-});
-const afterRebalance = pile.map((l) => {
-  const hit = rebalance.assignments.find((a) => a.id === l.id);
-  return hit ? { ...l, salesId: hit.salesId } : l;
-});
-// التساوي في أرقام الفورم نفسه (٢٠ / ٨ / ٤ → ١١ / ١١ / ١٠) — الفورمات التانية ما بتاخدش منه
-const rebalancedLoads = [ahmed, saif, abdo].map((id) => afterRebalance.filter((l) => l.salesId === id && l.formName === FORM).length);
+// ===== ١٢) «إعادة توزيع بالتساوي» اتشالت — مفيش توزيع بالتساوي في أي مكان =====
 check(
-  'إعادة التوزيع بتسوّي التكدّس القديم في الفورم (فرق رقم واحد كأقصى)',
-  Math.max(...rebalancedLoads) - Math.min(...rebalancedLoads) <= 1,
-  JSON.stringify(rebalancedLoads)
+  'زرار «إعادة توزيع بالتساوي» ومعالجه اتشالوا',
+  !app.includes('إعادة توزيع بالتساوي') && !app.includes('onRebalanceForm') && !app.includes('handleRebalanceForm')
 );
-check(
-  'إعادة التوزيع مش بتلمس أرقام خارج قائمة السيلز المؤهّلين',
-  afterRebalance.filter((l) => l.formName === OTHER_FORM).every((l) => l.salesId === ahmed)
-);
-check(
-  'الواجهة فيها زرار «إعادة توزيع بالتساوي» بينادي على المعالج',
-  app.includes('إعادة توزيع بالتساوي') && app.includes('onRebalanceForm')
-);
+check('الكود المشترك ما فيهوش وضع بالتساوي', !/mode === 'balance'|formLoads/.test(fs.readFileSync('shared/autoAssign.js', 'utf8')));
 
 // ===== التوزيع التلقائي بالدور =====
 // الطلب: «يبدأ بحسابات السيلز ويوزّع كل واحد رقم لحد ما الأرقام تخلص، ولو ضفنا
@@ -438,7 +403,7 @@ check(
 {
   const srv = fs.readFileSync('server/leadSource.js', 'utf8');
   check('السيرفر بيوزّع بالدور بوقت السحب', /formOf: \(lead\) => String\(lead\?\.formName \|\| ''\),\s*\/\/[^\n]*\n\s*at,/.test(srv));
-  check('أجهزة الإدارة بتحفظ مكان الدور على الرقم', app.includes('autoTurnKey: turnKey') && app.includes("mode: 'turns'"));
+  check('أجهزة الإدارة بتحفظ مكان الدور على الرقم', app.includes('autoTurnKey: turnKey'));
 }
 
 console.log(`\n✅ نجحت ${passed} فحوصات للتوزيع التلقائي`);

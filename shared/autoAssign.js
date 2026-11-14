@@ -1,6 +1,6 @@
 // ===== التوزيع التلقائي للأرقام على مندوبين مختارين =====
 // الإدارة تختار فورماً بعينه + قائمة مندوبين، فأرقام هذا الفورم — الموجودة والجديدة —
-// تتوزّع عليهم هم وحدهم بالتساوي، وأي مندوب خارج القائمة لا يصله منها شيء.
+// تتوزّع عليهم هم وحدهم بالدور، وأي مندوب خارج القائمة لا يصله منها شيء.
 //
 // الملف نقي (بلا شبكة ولا واجهة) ويعمل في مكانين بنفس الكود:
 //   • المتصفح (src/App.tsx) — يطبّق القاعدة على الأرقام بعد المزامنة.
@@ -52,7 +52,7 @@ export function normalizeRule(raw) {
     id: String(raw.id || formName),
     formName,
     salesIds: cleanIds(raw.salesIds),
-    // «كل السيلز»: الأرقام تتوزع على كل من يستقبل أرقاماً بالتساوي (حتى الحسابات
+    // «كل السيلز»: الأرقام تتوزع على كل من يستقبل أرقاماً بالدور (حتى الحسابات
     // الجديدة)، بدل قائمة أسماء ثابتة لازم تتعدل مع كل حساب جديد.
     allSales: raw.allSales === true,
     // غياب الحقل يعني «مفعّلة» حتى لا يتوقف توزيع قديم صامتاً
@@ -96,11 +96,8 @@ export function upsertRule(rules, patch, at = new Date().toISOString()) {
   return [next, ...asList(rules).filter((rule) => rule && String(rule.formName || rule.id) !== formName)];
 }
 
-// ===== التوزيع بالتساوي =====
-// الموازنة على الحمل الحقيقي لكل مندوب (كل أرقامه في النظام، لا هذا الفورم فقط)،
-// ثم الأقدم وصولاً أولاً. المندوبون المتساوون في الحمل يُخدَمون بالتناوب.
+// خيارات التوزيع:
 //   onlyUnassigned = true  => لا نلمس رقماً في عهدة أحد (توزيع آمن)
-//   onlyUnassigned = false => كل أرقام الفورم تُعاد وتُقسم من جديد
 //   excludePhones          => أرقام عند أحد بالفعل (مسجّلة كعميل): ما تتوزّع تاني،
 //                            عشان الرقم الواحد ما يبقاش عند أكتر من شخص.
 // ===== التوزيع بالدور =====
@@ -133,9 +130,8 @@ export function lastTurnOwner({ loadLeads = [], salesIds = [], formName = '', fo
   return last;
 }
 
-//   mode = 'turns'   => بالدور (التوزيع التلقائي)
-//   mode = 'balance' => بالتساوي (زرار «إعادة توزيع بالتساوي»)
-export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName = '', formOf, onlyUnassigned = true, excludePhones = [], mode = 'balance', at = new Date().toISOString() }) {
+// كل التوزيع بالدور — مفيش وضع «بالتساوي» خلاص.
+export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName = '', formOf, onlyUnassigned = true, excludePhones = [], at = new Date().toISOString() }) {
   const eligible = cleanIds(salesIds);
   if (!eligible.length) return { assignments: [], loads: {} };
   // حمل كل مندوب يُحسب على **كل** أرقامه في النظام (loadLeads)، لا على دفعة
@@ -147,20 +143,12 @@ export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName
   const target = String(formName || '').trim();
   const excluded = new Set(asList(excludePhones).map((value) => phoneKeyOf(value)).filter(Boolean));
 
+  // عدد أرقام كل مندوب (للتقرير بس — التوزيع نفسه بالدور مش بالعدد)
   const loads = new Map(eligible.map((id) => [id, 0]));
-  // ===== التساوي في نفس الفورم الأول =====
-  // كان الاختيار بالحمل الكلي بس: السيلز اللي أرقامه الكلية قليلة كان بياخد أغلب
-  // أرقام فورم جديد (واحد معاه ١٣ من الفورم وغيره صفر). دلوقتي: الأقل في **نفس
-  // الفورم** الأول، ولو متساويين الأقل في الحمل الكلي، وبعدها بالتناوب.
-  const formLoads = new Map(eligible.map((id) => [id, 0]));
   for (const lead of loadSource) {
     const owner = String(lead?.salesId || '');
-    // الأرقام الملغاة/المغلقة مش حمل — اتشالت من العهدة فعليًا
     if (lead?.status === 'closed') continue;
     if (loads.has(owner)) loads.set(owner, loads.get(owner) + 1);
-    if (formLoads.has(owner) && (!target || String(nameOf(lead) || '').trim() === target)) {
-      formLoads.set(owner, formLoads.get(owner) + 1);
-    }
   }
 
   const pending = asList(leads)
@@ -180,40 +168,15 @@ export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName
     .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
 
   const assignments = [];
-  if (mode === 'turns') {
-    const last = lastTurnOwner({ loadLeads: loadSource, salesIds: eligible, formName: target, formOf: nameOf });
-    let index = last ? (eligible.indexOf(last) + 1) % eligible.length : 0;
-    pending.forEach((lead, i) => {
-      const owner = eligible[index];
-      index = (index + 1) % eligible.length;
-      loads.set(owner, (loads.get(owner) || 0) + 1);
-      assignments.push({ id: String(lead.id), salesId: owner, turnKey: turnKeyAt(at, i) });
-    });
-    return { assignments, loads: Object.fromEntries(loads) };
-  }
-  let turn = 0;
-  for (const lead of pending) {
-    let bestForm = Infinity;
-    let bestTotal = Infinity;
-    let pool = [];
-    for (const id of eligible) {
-      const formLoad = formLoads.get(id) || 0;
-      const load = loads.get(id) || 0;
-      if (formLoad < bestForm || (formLoad === bestForm && load < bestTotal)) {
-        bestForm = formLoad;
-        bestTotal = load;
-        pool = [id];
-      } else if (formLoad === bestForm && load === bestTotal) {
-        pool.push(id);
-      }
-    }
-    const owner = pool[turn % pool.length];
-    turn += 1;
+  // بالدور دايماً (مفيش توزيع بالتساوي): من بعد آخر واحد خد رقم تلقائي من الفورم
+  const last = lastTurnOwner({ loadLeads: loadSource, salesIds: eligible, formName: target, formOf: nameOf });
+  let index = last ? (eligible.indexOf(last) + 1) % eligible.length : 0;
+  pending.forEach((lead, i) => {
+    const owner = eligible[index];
+    index = (index + 1) % eligible.length;
     loads.set(owner, (loads.get(owner) || 0) + 1);
-    formLoads.set(owner, (formLoads.get(owner) || 0) + 1);
-    assignments.push({ id: String(lead.id), salesId: owner });
-  }
-
+    assignments.push({ id: String(lead.id), salesId: owner, turnKey: turnKeyAt(at, i) });
+  });
   return { assignments, loads: Object.fromEntries(loads) };
 }
 
@@ -237,7 +200,7 @@ export function applyAutoRules({ leads = [], loadLeads, rules = [], activeSalesI
     if (!salesIds.length) continue;
     const formName = String(rule.formName || rule.id || '').trim();
     if (!formName) continue;
-    const result = distributeLeads({ leads: list, loadLeads: loadSource, salesIds, formName, formOf, onlyUnassigned: true, excludePhones, mode: 'turns', at });
+    const result = distributeLeads({ leads: list, loadLeads: loadSource, salesIds, formName, formOf, onlyUnassigned: true, excludePhones, at });
     if (!result.assignments.length) continue;
     const byId = new Map(result.assignments.map((item) => [item.id, item]));
     for (const lead of list) {

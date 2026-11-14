@@ -37,8 +37,6 @@ export declare function distributeLeads(params: {
   formOf?: (lead: any) => string;
   onlyUnassigned?: boolean;
   excludePhones?: string[];
-  // 'turns' = بالدور (التوزيع التلقائي) · 'balance' = بالتساوي (إعادة التوزيع)
-  mode?: 'turns' | 'balance';
   at?: string;
 }): DistributionResult;
 export declare function turnKeyOf(lead: any): string;

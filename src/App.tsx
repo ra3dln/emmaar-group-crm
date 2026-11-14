@@ -14,7 +14,7 @@ import {
   Rows, LayoutList, List, ShieldAlert, MapPinOff, Navigation,
   ChevronRight, ChevronLeft, Filter, KeyRound,
   Workflow, BellRing, ClipboardList, MessagesSquare, Share2, LineChart,
-  Megaphone, Globe, Link2, Facebook, ChevronDown, Palette, Scale, Calculator,
+  Megaphone, Globe, Link2, Facebook, ChevronDown, Palette, Calculator,
   CalendarClock
 } from 'lucide-react';
 import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, CallTarget, TabType } from './types';
@@ -2404,7 +2404,7 @@ function App() {
   //
   // ownerOf = «رقم ← مندوب» لكل رقم على حدة، فتصلح لحالة واحدة:
   //   • توزيع دفعة على مندوب واحد (كل القيم نفس المعرّف)
-  //   • التوزيع التلقائي بالتساوي على عدة مندوبين (كل رقم يأخذ مندوبه)
+  //   • التوزيع التلقائي بالدور على عدة مندوبين (كل رقم يأخذ مندوبه)
   // via: «manual» = الإدارة اختارت بنفسها — بيكسب أي توزيع تلقائي (shared/ownerGuard.js)
   const applyLeadOwners = (ownerOf: Map<string, string>, via: 'manual' | 'auto' = 'auto', turnOf?: Map<string, string>) => {
     if (!currentUser || !ownerOf.size) return null;
@@ -2616,7 +2616,6 @@ function App() {
       // رقم عند حدّ سلفاً (عميل مسجّل) ما يتوزّعش على حدّ تاني
       excludePhones: phonesOfClients(fullClients),
       // بالدور: كل واحد رقم، من بعد آخر واحد خد رقم من الفورم دي
-      mode: 'turns',
     });
     if (!assignments.length) return 0;
     applyLeadOwners(
@@ -2627,39 +2626,9 @@ function App() {
     return assignments.length;
   };
 
-  // ===== إعادة توزيع أرقام فورم بالتساوي على كل السيلز =====
-  // يحلّ تكدّس قديم (٢٠ رقم عند واحد و٤ عند غيره): كل أرقام الفورم المفتوحة
-  // تُعاد على كل من يستقبل أرقاماً — بما فيهم حساب محمد وفريدة — بالحمل الحقيقي
-  // (أرقام الفورمات التانية محسوبة)، والعميل يروح مع صاحب رقمه الجديد.
-  const handleRebalanceForm = (formName: string) => {
-    const name = String(formName || '').trim();
-    if (!name) return 0;
-    const targets = users.filter(isAssignableSales).map((u: User) => String(u.id));
-    if (!targets.length) return 0;
-    const pending = fullLeads.filter(
-      (l: AssignedLead) => formKeyOf(l) === name && l.status !== 'closed'
-    );
-    if (!pending.length) return 0;
-    const pendingIds = new Set(pending.map((l: AssignedLead) => String(l.id)));
-    // الحمل اللي يبدأ منه التوزيع = أرقام الفورمات الأخرى فقط (أرقام هذا الفورم
-    // هي اللي بتتوزع، فما ينفعش تتحسب مرتين).
-    const otherLoads = fullLeads.filter((l: AssignedLead) => !pendingIds.has(String(l.id)));
-    const { assignments } = distributeLeads({
-      leads: pending,
-      loadLeads: otherLoads,
-      salesIds: targets,
-      formName: name,
-      formOf: formKeyOf,
-      onlyUnassigned: false,
-    });
-    if (!assignments.length) return 0;
-    applyLeadOwners(new Map(assignments.map((item: LeadAssignment) => [item.id, item.salesId])));
-    return assignments.length;
-  };
-
   // ===== تطبيق القواعد على أي رقم جديد يصل =====
   // أول ما يوصل رقم من فورم له قاعدة (سحب تلقائي أو استيراد)، يتوزّع على مختاريه وحدهم
-  // بالتساوي بلا أي ضغطة — ومن ليس في قائمة الفورم لا يصله منه شيء.
+  // بالدور بلا أي ضغطة — ومن ليس في قائمة الفورم لا يصله منه شيء.
   useEffect(() => {
     if (!currentUser || effectiveRoleOf(currentUser) === 'sales') return;
     // قاعدة مفعّلة إما بقائمة أسماء أو بـ«كل السيلز»
@@ -3955,7 +3924,7 @@ function App() {
             const target = new Set(ids);
             writeAssignedLeads((all) => all.filter((l: AssignedLead) => !target.has(l.id)));
             ids.forEach((id: string) => removeLeadClient(id));
-          }} onAssign={handleAssignLeads} onSave={() => writeAssignedLeads((all) => all)} autoRules={autoAssignRules} onSaveAutoRule={handleSaveAutoRule} onRebalanceForm={handleRebalanceForm} />}
+          }} onAssign={handleAssignLeads} onSave={() => writeAssignedLeads((all) => all)} autoRules={autoAssignRules} onSaveAutoRule={handleSaveAutoRule} />}
           {/* المحاسب: يسجّل حضوره هو + يشوف حضور كل الحسابات (مش نطاقه بس) */}
           {activeTab === 'admin-attendance' && currentUser.role === 'accountant' && <OwnAttendanceCard currentUser={currentUser} />}
           {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={currentUser.role === 'accountant' ? users : scopedUsers} />}
@@ -11529,7 +11498,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
   );
 }
 
-function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onDeleteMany, onImport, onAssign, onSave, activeForms = [], autoRules = [], onSaveAutoRule, onRebalanceForm }: any) {
+function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onDeleteMany, onImport, onAssign, onSave, activeForms = [], autoRules = [], onSaveAutoRule }: any) {
   const manualFormNames = useManualFormNames();
   const repeatMap = useLeadRepeats();
   // نفس قاعدة السيرفر حرفياً (isAssignableSales): سيلز/قائد فريق + حساب «مطوّر»
@@ -11643,7 +11612,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
     (rule) => String(rule.formName || '') === activeForm
   ) || null;
   // ===== «كل السيلز» (الوضع الافتراضي) =====
-  // التوزيع على كل من يستقبل أرقاماً بالتساوي — بما فيهم أي حساب جديد بعد كده —
+  // التوزيع على كل من يستقبل أرقاماً بالدور — بما فيهم أي حساب جديد بعد كده —
   // بدل قائمة أسماء تُنسى فتخلي الأرقام تتكدس عند واحد.
   const [autoAll, setAutoAll] = useState(true);
   const ruleActive = !!(ruleOf && ruleOf.active !== false && (ruleOf.allSales || (ruleOf.salesIds || []).length));
@@ -11683,8 +11652,8 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
     const names = autoAll ? 'كل السيلز' : autoIds.map((id) => nameOf(id)).join(' و');
     setFlash(
       done > 0
-        ? `تم توزيع ${done} رقم بالتساوي على ${names} ✓ — وأي رقم جديد من «${activeForm}» هيتوزع عليهم أوتوماتيك بالتساوي.`
-        : `التوزيع التلقائي شغّال على «${activeForm}» ← ${names} ✓ — أول ما يوصل رقم جديد هيوصله واحد منهم بالتساوي.`
+        ? `تم توزيع ${done} رقم بالدور على ${names} ✓ — وأي رقم جديد من «${activeForm}» هيتوزع عليهم أوتوماتيك بالدور.`
+        : `التوزيع التلقائي شغّال على «${activeForm}» ← ${names} ✓ — أول ما يوصل رقم جديد هيوصل للي عليه الدور.`
     );
   };
   // ===== تشغيل/إيقاف التوزيع التلقائي من قائمة كل الفورمات (من غير ما تختار فورم الأول) =====
@@ -11699,11 +11668,11 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
       setFlash(`تم إيقاف التوزيع التلقائي لفورم «${name}»`);
       return;
     }
-    // التشغيل: على كل السيلز بالتساوي، والأرقام غير المخصصة دلوقتي هتتوزّع برضه
+    // التشغيل: على كل السيلز بالدور، والأرقام غير المخصصة دلوقتي هتتوزّع برضه
     const waiting = (assignedLeads as AssignedLead[]).filter(
       (l) => formKeyOf(l) === name && !l.salesId && l.assignedVia !== 'manual' && l.status !== 'closed'
     ).length;
-    if (!window.confirm(`تشغيل التوزيع التلقائي لفورم «${name}» على كل السيلز بالتساوي؟
+    if (!window.confirm(`تشغيل التوزيع التلقائي لفورم «${name}» على كل السيلز بالدور؟
 هيتوزّع دلوقتي ${waiting} رقم غير مخصص، وأي رقم جديد يوصل بعد كده.`)) return;
     const done = Number(onSaveAutoRule?.(name, salesUsers.map((u: User) => String(u.id)), true, true)) || 0;
     setFlash(`تم تشغيل التوزيع التلقائي لفورم «${name}»${done ? ` — اتوزّع ${done} رقم دلوقتي` : ''} ✓`);
@@ -11809,7 +11778,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
               </p>
               <p className="text-[11px] text-[var(--text-dim)] mt-1 leading-relaxed">
                 اختار السيلز اللي أرقام الفورم دي تتوزع عليهم بس، واضغط «تشغيل التوزيع التلقائي» — كل رقم جديد
-                من الفورم هيتوزع عليهم بالتساوي أوتوماتيك، واللي مش مختار مايصلهوش منها ولا رقم.
+                من الفورم هيتوزع عليهم بالدور أوتوماتيك (كل واحد رقم)، واللي مش مختار مايصلهوش منها ولا رقم.
               </p>
             </div>
             <span className={`st-chip ${(activeForm === 'all' ? activeRulesCount > 0 : ruleActive) ? 'st-closed' : 'st-negotiation'} shrink-0`}>
@@ -11859,7 +11828,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
             </div>
           ) : (
             <>
-              {/* ===== كل السيلز (الافتراضي): توزيع بالتساوي على الجميع ===== */}
+              {/* ===== كل السيلز (الافتراضي): توزيع بالدور على الجميع ===== */}
               <label className="mt-3 flex items-start gap-2.5 rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3 cursor-pointer">
                 <input
                   type="checkbox"
@@ -11868,10 +11837,10 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                   className="w-4 h-4 mt-0.5 accent-[var(--brand)]"
                 />
                 <span className="min-w-0">
-                  <b className="block text-xs text-[var(--text-strong)]">كل السيلز (بالتساوي)</b>
+                  <b className="block text-xs text-[var(--text-strong)]">كل السيلز (بالدور)</b>
                   <span className="block text-[11px] text-[var(--text-dim)] mt-0.5 leading-relaxed">
                     التوزيع على كل من يستقبل أرقاماً — {salesUsers.length} حساب، ومنهم أي حساب جديد —
-                    بالتساوي حسب عدد الأرقام اللي مع كل واحد، مش على أسماء مختارة بس.
+                    بالدور: كل واحد رقم بالترتيب، وأي حساب جديد بيدخل الدور على طول من غير ما يستنى يتساوى بالباقيين.
                   </span>
                 </span>
               </label>
@@ -11949,20 +11918,6 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                 >
                   مسح الاختيار
                 </button>
-                {/* إصلاح تكدّس قديم: توزيع كل أرقام الفورم الحالية بالتساوي من جديد */}
-                {onRebalanceForm && activeForm !== 'all' && formLeads.length > 0 && (
-                  <button
-                    onClick={() => {
-                      if (!window.confirm(`إعادة توزيع ${formLeads.length} رقم من «${activeForm}» بالتساوي على كل السيلز؟ سيتم نقل الأرقام من المندوبين المحمّلين زيادة.`)) return;
-                      const moved = Number(onRebalanceForm(activeForm)) || 0;
-                      setFlash(moved > 0 ? `تم إعادة توزيع ${moved} رقم بالتساوي على كل السيلز ✓` : 'كل الأرقام متساوية بالفعل — مفيش حاجة تتحرك');
-                    }}
-                    className="bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-md)] font-bold text-xs hover:border-[var(--brand-primary-soft)] transition-colors"
-                    title="إعادة توزيع أرقام الفورم كلها بالتساوي على كل من يستقبل أرقاماً"
-                  >
-                    <Scale className="w-3.5 h-3.5 inline-block ml-1" /> إعادة توزيع بالتساوي
-                  </button>
-                )}
                 {ruleActive && (
                   <button
                     onClick={stopAuto}
@@ -11977,16 +11932,16 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                 {!effectiveAutoIds.length
                   ? 'مفيش سيلز مختار — اختار اسم واحد على الأقل من فوق.'
                   : autoAll
-                  ? `كل السيلز (${effectiveAutoIds.length}) — الأرقام الجديدة بتتوزع عليهم بالتساوي حسب الحمل الحالي لكل واحد.`
+                  ? `كل السيلز (${effectiveAutoIds.length}) — الأرقام الجديدة بتتوزع عليهم بالدور، كل واحد رقم.`
                   : `المختارون: ${autoIds.map((id) => nameOf(id)).join(' • ')} — عندهم ${autoIds.reduce((sum, id) => sum + formLeads.filter((l: AssignedLead) => l.salesId === id).length, 0)} رقم من هذا الفورم.`}
                 {autoNow > 0 && (
                   <span className="block text-emerald-300 mt-1">
-                    {autoNow} رقم غير مخصص هيتوزع عليهم بالتساوي دلوقتي ({autoPending} غير مخصص في الفورم).
+                    {autoNow} رقم غير مخصص هيتوزع عليهم بالدور دلوقتي ({autoPending} غير مخصص في الفورم).
                   </span>
                 )}
                 {ruleActive && (
                   <span className="block text-[var(--brand)] mt-1">
-                    شغّال بالفعل على: {ruleOf!.allSales ? 'كل السيلز' : (ruleOf!.salesIds || []).map((id: string) => nameOf(id)).join(' • ')} — أي رقم جديد من «{activeForm}» يتوزع عليهم بالتساوي.
+                    شغّال بالفعل على: {ruleOf!.allSales ? 'كل السيلز' : (ruleOf!.salesIds || []).map((id: string) => nameOf(id)).join(' • ')} — أي رقم جديد من «{activeForm}» يتوزع عليهم بالدور.
                   </span>
                 )}
               </p>
@@ -14799,7 +14754,7 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
     const counts = new Map<string, number>();
     const fresh = preview.rows.filter((row) => !row.duplicate && !row.invalid);
 
-    // توزيع الأرقام: إما بالتساوي بالمناوبة، أو بعدد يحدده المدير لكل مندوب (الحصص)
+    // توزيع الأرقام: إما بالدور (كل واحد رقم بالترتيب)، أو بعدد يحدده المدير لكل مندوب (الحصص)
     const assignment: Array<{ row: (typeof fresh)[number]; owner: User }> = [];
     if (useQuota) {
       let cursor = 0;
@@ -14811,7 +14766,7 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
         }
       }
       if (assignment.length === 0) {
-        setError('حدّد عدد الأرقام لكل سيلز (أو أغلق خيار التحديد للتوزيع بالتساوي)');
+        setError('حدّد عدد الأرقام لكل سيلز (أو أغلق خيار التحديد للتوزيع بالدور)');
         return;
       }
     } else {
@@ -15041,7 +14996,7 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
                   <label className="flex items-center gap-2 text-xs font-bold text-[var(--text)] cursor-pointer">
                     <input type="checkbox" checked={useQuota} onChange={(e) => setUseQuota(e.target.checked)}
                       className="accent-blue-500 w-4 h-4" />
-                    تحديد عدد الأرقام لكل سيلز بنفسي (بدل التوزيع بالتساوي)
+                    تحديد عدد الأرقام لكل سيلز بنفسي (بدل التوزيع بالدور)
                   </label>
 
                   {useQuota && (
@@ -15051,18 +15006,6 @@ function ImportLeadsModal({ users, clients, assignedLeads, currentUser, onClose,
                         <div className="flex gap-1.5">
                           <button type="button" onClick={() => setQuotas({})}
                             className="text-[11px] px-2.5 py-1 rounded-[var(--r-sm)] bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] hover:bg-[var(--tint-2)]">تصفير</button>
-                          <button type="button"
-                            onClick={() => {
-                              // توزيع بالتساوي على المختارين فقط، على حسب الأرقام المتاحة
-                              const ids = selectedIds.filter((id) => salesUsers.some((u: User) => u.id === id));
-                              const each = ids.length ? Math.floor(preview.fresh / ids.length) : 0;
-                              const next: Record<string, number> = {};
-                              ids.forEach((id) => { next[id] = each; });
-                              setQuotas(next);
-                            }}
-                            className="text-[11px] px-2.5 py-1 rounded-[var(--r-sm)] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--brand)] hover:bg-[var(--brand-primary-soft)]">
-                            توزيع متساوٍ ({preview.fresh} رقم)
-                          </button>
                         </div>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
