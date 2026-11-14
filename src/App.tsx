@@ -82,6 +82,7 @@ import { installBackGuard } from './backNav';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import { PartnerPanel } from './PartnerPanel';
 import { ManualFormsView, knownFormNames, useManualFormNames } from './ManualFormsView';
+import { LeadRepeatBadge, repeatTextOf, useLeadRepeats } from './LeadRepeatBadge';
 import { SalesExportView } from './SalesExportView';
 import { AdminDashboardView } from './AdminDashboardView';
 import { MANUAL_FORMS_KEY, addToManualFormCount, formNameTaken, parseManualForms, withManualTag } from './manualForms';
@@ -7458,7 +7459,7 @@ type LeadRow = {
 // ===== كارت الرقم (موديل ENGAZ) =====
 // الحالة بنقطة ملوّنة + وقت التسجيل + الاسم + الرقم + اسم الفورم (زي ما هو)
 // + الملاحظة + زرار الاتصال والواتساب. الضغط على الكارت يفتح نافذة الإجراء.
-function EngazLeadCard({ row, onOpen, onCall }: { row: LeadRow; onOpen: () => void; onCall: () => void }) {
+function EngazLeadCard({ row, onOpen, onCall, repeat = '' }: { row: LeadRow; onOpen: () => void; onCall: () => void; repeat?: string }) {
   const alert = !!row.alertDue;
   return (
     <article className={`eg-card ${alert ? 'cc-alert' : ''}`} onClick={onOpen}>
@@ -7481,6 +7482,8 @@ function EngazLeadCard({ row, onOpen, onCall }: { row: LeadRow; onOpen: () => vo
       <div className="eg-card-main">
         <div className="eg-name">{row.name}</div>
         <div className="eg-phone" dir="ltr">{row.phone}</div>
+        {/* الرقم اتسحب تاني من فورم (نفسها أو غيرها) — الرقم وصاحبه زي ما هما */}
+        {repeat && <div className="mt-1"><LeadRepeatBadge text={repeat} /></div>}
         {/* ===== «الإجراء القادم»: التذكير + وقته (يوم + ساعة) ===== */}
         {row.nextActionAt && (
           <div className={`eg-next ${row.nextActionOverdue ? 'is-late' : ''}`}>
@@ -7529,6 +7532,7 @@ function LeadsView({
 }: any) {
   const [query, setQuery] = useState('');
   const [field, setField] = useState<'all' | 'name' | 'phone' | 'form'>('all');
+  const repeatMap = useLeadRepeats();
 
   // كل الأرقام مرة واحدة: العميل بحالته، والرقم الموزَّع بحالة آخر فيدباك عليه
   const rows: LeadRow[] = useMemo(() => {
@@ -7672,6 +7676,7 @@ function LeadsView({
             <EngazLeadCard
               key={row.key}
               row={row}
+              repeat={repeatTextOf(repeatMap, row.phone, row.client?.phones || [])}
               onOpen={() => onOpen(row.client || row.lead, row)}
               onCall={() => onOpen(row.client || row.lead, row)}
             />
@@ -11079,6 +11084,7 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
 // نافذة التفاصيل نفسها المستخدمة في «المراحل» (البيانات + الخط الزمني + الاتصال).
 function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd, onImport, activeForms = [] }: any) {
   const manualFormNames = useManualFormNames();
+  const repeatMap = useLeadRepeats();
   const [query, setQuery] = useState('');
   const [stage, setStage] = useState<'all' | Client['stage']>('all');
   // افتراضياً عملاء الكامبين فقط — وزر واحد يعرض كل العملاء (بما فيهم المضافون يدوياً)
@@ -11374,6 +11380,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
                     {formNameOf(client) && (
                       <p className="truncate text-[var(--brand)] font-bold">الفورم: {formNameOf(client)}</p>
                     )}
+                    <LeadRepeatBadge text={repeatTextOf(repeatMap, client.phone, client.phones || [])} />
                     <p>
                       {campaignTimeOf(client).kind === 'campaign' ? 'سُجّل في الكامبين: ' : 'أُضيف في النظام: '}
                       {formatDateTime(campaignTimeOf(client).at)}
@@ -11409,6 +11416,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
                   {formNameOf(lead) && (
                     <p className="truncate text-[var(--brand)] font-bold">الفورم: {withManualTag(formNameOf(lead), manualFormNames)}</p>
                   )}
+                  <LeadRepeatBadge text={repeatTextOf(repeatMap, lead.phone)} />
                   <p>
                     {campaignTimeOf(lead).kind === 'campaign' ? 'سُجّل في الكامبين: ' : 'أُضيف في النظام: '}
                     {formatDateTime(campaignTimeOf(lead).at)}
@@ -11445,6 +11453,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
 
 function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, onDeleteMany, onImport, onAssign, onSave, activeForms = [], autoRules = [], onSaveAutoRule, onRebalanceForm }: any) {
   const manualFormNames = useManualFormNames();
+  const repeatMap = useLeadRepeats();
   // نفس قاعدة السيرفر حرفياً (isAssignableSales): سيلز/قائد فريق + حساب «مطوّر»
   // إداري يعمل سيلزاً أيضاً. والاشتراط بـ u.isActive كان يُخفي أي حساب قديم
   // لم يُكتب له الحقل أصلاً، فلا يظهر في توزيع الأرقام ولا يقبل رقمأ.
@@ -12030,6 +12039,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                     <p className="text-[var(--brand)]" dir="ltr">{lead.phone}</p>
                     <FormNameChip record={lead} />
                     <CampaignTimeChip at={campaignTimeOf(lead).at} kind={campaignTimeOf(lead).kind} />
+                    <LeadRepeatBadge text={repeatTextOf(repeatMap, lead.phone)} />
                   </div>
                   {lead.description && <p className="text-[11.5px] text-[var(--text-muted)] mt-1.5">{formatLeadDescription(lead.description)}</p>}
                 </div>

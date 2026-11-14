@@ -15,6 +15,7 @@ import { authConfigured, isManagerRole, sessionFromRequest } from './auth.js';
 import { applyAutoRules, AUTO_ASSIGN_KEY, isAssignableSales, parseRules } from '../shared/autoAssign.js';
 // تحويل الرقم الموزَّع إلى عميل صاحبه — نفس دالة الواجهة (معرّف مشتق من الرقم)
 import { buildLeadClients } from '../shared/leadClients.js';
+import { buildRepeats, LEAD_REPEATS_KEY } from '../shared/leadRepeats.js';
 
 const GRAPH_VERSION = 'v25.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -744,6 +745,9 @@ export const publicConfig = (config = {}) => ({
 export function buildAssignments({ fetched, knownPhones = [], at = new Date().toISOString() }) {
   const seen = new Set((knownPhones || []).map((p) => normalizeEgyptPhone(p)).filter(Boolean));
   const added = [];
+  // الأرقام المتكررة بكل بياناتها (الفورم + وقت التسجيل) — عشان يبان في السيستم
+  // إن الرقم اتكرر في فورم كذا (shared/leadRepeats.js)
+  const duplicateRows = [];
   let duplicates = 0;
   let invalid = 0;
   // تفصيل كل رقم لم يُضف ولماذا — هذا ما يجيب عن سؤال «فيسبوك عنده ٣٨ وعندنا ٣٦، فين الاتنين؟»
@@ -773,6 +777,7 @@ export function buildAssignments({ fetched, knownPhones = [], at = new Date().to
     if (seen.has(row.phone)) {
       duplicates += 1;
       reject(row, 'duplicate');
+      if (duplicateRows.length < 1000) duplicateRows.push(row);
       continue;
     }
     seen.add(row.phone);
@@ -803,6 +808,7 @@ export function buildAssignments({ fetched, knownPhones = [], at = new Date().to
   return {
     added,
     duplicates,
+    duplicateRows,
     invalid,
     rejected,
     assignCursor: 0,
@@ -912,6 +918,14 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
 
     const built = buildAssignments({ fetched, knownPhones, at });
 
+    // ===== الأرقام المتكررة: تتسجّل بالفورم، والرقم الأصلي وسيلزه زي ما هما =====
+    const newRepeats = buildRepeats({
+      rows: built.duplicateRows,
+      records: [...assigned, ...clients, ...built.added],
+      existing: Array.isArray(data[LEAD_REPEATS_KEY]) ? data[LEAD_REPEATS_KEY] : [],
+      at,
+    });
+
     // ===== التوزيع التلقائي: فورم اختارت له الإدارة مندوبين بعينهم =====
     // القاعدة تُطبَّق هنا لحظة الوصول، فالأرقام تُسحب وتُوزَّع ٢٤/٧ بلا متصفح مفتوح،
     // ومن ليس في قائمة الفورم لا يصله منه رقم (كل رقم يُوزَّع على مختاريه وحدهم).
@@ -934,7 +948,7 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
         })
       : { leads: built.added, assignments: [], byRule: {} };
 
-    if (auto.leads.length) {
+    if (auto.leads.length || newRepeats.length) {
       // ===== وقت الإسناد معلَّم على الرقم =====
       // إشعار المندوب يُحسب من لحظة الإسناد لا من لحظة وصول الرقم: رقم وارد من ساعات
       // واتوزّع الآن لازم يوصل صاحبه إشعار، والعكس.
@@ -968,6 +982,16 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       });
       if (newClients.length) freshData.crm_clients = [...newClients, ...freshClients];
 
+      // التكرارات: قائمة لوحدها، تندمج بالمعرّف (المعرّف ثابت فما بيتكررش)
+      if (newRepeats.length) {
+        const freshRepeats = Array.isArray(freshData[LEAD_REPEATS_KEY]) ? freshData[LEAD_REPEATS_KEY] : [];
+        const repeatIds = new Set(freshRepeats.map((item) => String(item?.id || '')));
+        freshData[LEAD_REPEATS_KEY] = [
+          ...newRepeats.filter((item) => !repeatIds.has(item.id)),
+          ...freshRepeats,
+        ];
+      }
+
       await storage.save({ version: (Number(freshDb.version) || 0) + 1, data: freshData });
     }
 
@@ -979,6 +1003,8 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       fetched: fetched.length,
       added: built.added.length,
       duplicates: built.duplicates,
+      // كام رقم متكرر اتسجّل تكراره في فورم جديدة
+      repeated: newRepeats.length,
       invalid: built.invalid,
       // قائمة الأرقام المستبعدة بالسبب — تظهر للإدارة في نتيجة السحب
       rejected: built.rejected || [],
