@@ -84,6 +84,7 @@ import { PartnerPanel } from './PartnerPanel';
 import { ManualFormsView, knownFormNames, useManualFormNames } from './ManualFormsView';
 import { LeadRepeatBadge, repeatTextOf, useLeadRepeats } from './LeadRepeatBadge';
 import { LeadFormAnswers } from './LeadFormAnswers';
+import { reconcileOwners } from '../shared/ownerSync.js';
 import { repeatPhoneKey } from '../shared/leadRepeats.js';
 import { SalesExportView } from './SalesExportView';
 import { AdminDashboardView } from './AdminDashboardView';
@@ -2686,6 +2687,57 @@ function App() {
     void pushKey('crm_clients');
     loadData();
   }, [assignedLeads.length, users.length, currentUser?.id]);
+
+  // ===== صاحب الرقم في «توزيع الأرقام» = صاحب العميل (أجهزة الإدارة) =====
+  // كانوا بيختلفوا: الرقم في التوزيع مع Salma وهو في حساب Hassan. التوزيع هو الأساس،
+  // ولو الرقم مش موزّع والعميل عند حد، الرقم ياخد صاحب العميل (shared/ownerSync.js).
+  useEffect(() => {
+    if (!currentUser || effectiveRoleOf(currentUser) === 'sales') return;
+    let all: Client[] = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+      all = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      all = [];
+    }
+    const { clientFixes, leadFixes } = reconcileOwners({
+      leads: fullLeads,
+      clients: all,
+      userIds: users.map((u: User) => String(u.id)),
+    });
+    if (!clientFixes.length && !leadFixes.length) return;
+    const at = new Date().toISOString();
+    if (clientFixes.length) {
+      const fixOf = new Map(clientFixes.map((fix) => [fix.id, fix]));
+      const next = all.map((c: Client) => {
+        const fix = fixOf.get(String(c.id));
+        if (!fix) return c;
+        const ownerName = users.find((u: User) => String(u.id) === fix.owner)?.name || '';
+        return {
+          ...c,
+          userId: fix.owner,
+          assignedTo: fix.owner,
+          ownerVia: fix.via,
+          updatedAt: at,
+          activities: [
+            { id: crypto.randomUUID(), type: 'assign', text: `تم تخصيص العميل إلى ${ownerName} (نفس صاحب الرقم في التوزيع)`, at, by: currentUser.name },
+            ...((c.activities || []) as any[]),
+          ],
+        } as Client;
+      });
+      localStorage.setItem('crm_clients', JSON.stringify(next));
+      void pushKey('crm_clients');
+    }
+    if (leadFixes.length) {
+      const ownerOf = new Map(leadFixes.map((fix) => [fix.id, fix.owner]));
+      void writeAssignedLeads((list) =>
+        list.map((l: AssignedLead) =>
+          ownerOf.has(l.id) ? { ...l, salesId: ownerOf.get(l.id) || '', assignedVia: 'manual', assignedAt: at } : l
+        )
+      );
+    }
+    loadData();
+  }, [fullLeads, fullClients, users.length, currentUser?.id]);
 
   // ===== تغيير مرحلة عميل: تسجيلها في الخط الزمني + إنشاء تذكير متابعة تلقائي =====
   const handleUpdateClientStage = (id: string, stage: Client['stage']) => {
