@@ -16,6 +16,7 @@ import { applyAutoRules, AUTO_ASSIGN_KEY, isAssignableSales, parseRules } from '
 // تحويل الرقم الموزَّع إلى عميل صاحبه — نفس دالة الواجهة (معرّف مشتق من الرقم)
 import { buildLeadClients } from '../shared/leadClients.js';
 import { buildRepeats, LEAD_REPEATS_KEY } from '../shared/leadRepeats.js';
+import { answersFromFields, buildAnswerEntries, LEAD_ANSWERS_KEY } from '../shared/leadAnswers.js';
 
 const GRAPH_VERSION = 'v25.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -393,6 +394,8 @@ async function fetchFromMeta(config, channel = 'facebook') {
           // وقت التسجيل في الكامبين (وقت الـlead في الفورم) — بيتبان للعميل في كل القوائم
           dateIso: created ? new Date(created * 1000).toISOString() : '',
           test,
+          // كلام العميل في الفورم (إجابات الأسئلة) — بيظهر للسيلز من زرار العين
+          answers: answersFromFields(lead.field_data, normalizeEgyptPhone(rawPhone)),
         });
       }
       cursors[form.id] = formMax;
@@ -919,6 +922,13 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
     const built = buildAssignments({ fetched, knownPhones, at });
 
     // ===== الأرقام المتكررة: تتسجّل بالفورم، والرقم الأصلي وسيلزه زي ما هما =====
+    // ===== كلام العميل في الفورم: سجل لكل ليد عنده إجابات (جديد أو متكرر) =====
+    const newAnswers = buildAnswerEntries({
+      rows: fetched,
+      existing: Array.isArray(data[LEAD_ANSWERS_KEY]) ? data[LEAD_ANSWERS_KEY] : [],
+      at,
+    });
+
     const newRepeats = buildRepeats({
       rows: built.duplicateRows,
       records: [...assigned, ...clients, ...built.added],
@@ -950,7 +960,7 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
         })
       : { leads: built.added, assignments: [], byRule: {} };
 
-    if (auto.leads.length || newRepeats.length) {
+    if (auto.leads.length || newRepeats.length || newAnswers.length) {
       // ===== وقت الإسناد معلَّم على الرقم =====
       // إشعار المندوب يُحسب من لحظة الإسناد لا من لحظة وصول الرقم: رقم وارد من ساعات
       // واتوزّع الآن لازم يوصل صاحبه إشعار، والعكس.
@@ -983,6 +993,13 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
         by: 'التوزيع التلقائي',
       });
       if (newClients.length) freshData.crm_clients = [...newClients, ...freshClients];
+
+      // كلام العميل في الفورم: قائمة لوحدها، تندمج بالمعرّف
+      if (newAnswers.length) {
+        const freshAnswers = Array.isArray(freshData[LEAD_ANSWERS_KEY]) ? freshData[LEAD_ANSWERS_KEY] : [];
+        const answerIds = new Set(freshAnswers.map((item) => String(item?.id || '')));
+        freshData[LEAD_ANSWERS_KEY] = [...newAnswers.filter((item) => !answerIds.has(item.id)), ...freshAnswers];
+      }
 
       // التكرارات: قائمة لوحدها، تندمج بالمعرّف (المعرّف ثابت فما بيتكررش)
       if (newRepeats.length) {

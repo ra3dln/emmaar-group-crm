@@ -99,6 +99,8 @@ const SYNC_KEYS: string[] = [
   'crm_manual_forms',
   // الأرقام المتكررة من الكامبين (shared/leadRepeats.js) — السيرفر بيكتبها وقت السحب
   'crm_lead_repeats',
+  // كلام العميل في فورم الكامبين (shared/leadAnswers.js) — السيرفر بيكتبه وقت السحب
+  'crm_lead_answers',
 ];
 const ALL_KEYS = [...SYNC_KEYS, TOMBSTONE_KEY];
 // مفاتيح البيانات التي تُستبدل بالكامل عند إعادة الضبط

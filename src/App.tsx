@@ -83,6 +83,7 @@ import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import { PartnerPanel } from './PartnerPanel';
 import { ManualFormsView, knownFormNames, useManualFormNames } from './ManualFormsView';
 import { LeadRepeatBadge, repeatTextOf, useLeadRepeats } from './LeadRepeatBadge';
+import { LeadFormAnswers } from './LeadFormAnswers';
 import { repeatPhoneKey } from '../shared/leadRepeats.js';
 import { SalesExportView } from './SalesExportView';
 import { AdminDashboardView } from './AdminDashboardView';
@@ -15739,6 +15740,9 @@ function ClientDetailModal({ client, users = [], onClose, onSuccess, onCall, cal
           )}
           {client.source && <p className="text-xs text-[var(--text-muted)]">المصدر: {client.source}</p>}
         </div>
+
+        {/* كلام العميل نفسه وهو بيسجّل في فورم الكامبين (إجابات الأسئلة) */}
+        <LeadFormAnswers phones={[client.phone, ...((client.phones || []) as string[])]} />
 
         <div className="mt-4">
           <h3 className="text-sm font-bold text-[var(--text-strong)] mb-2 flex items-center gap-2">
