@@ -108,7 +108,7 @@ check('عدد Delay = الرقمين المتأخرين بس', delayedCount === 
 
 // ===== الواجهة: العدّاد + الفلتر + اللون =====
 check('Delay ليها كارت في لوحة الأرقام', /\{\s*id:\s*DELAY_ID,\s*label:\s*'Delay',\s*cls:\s*'fs-delay'\s*\}/.test(app));
-check('Delay في شريط الفلاتر بعد Cold Calls', /COLD_CALL_ID,\s*DELAY_ID,\s*SHARED_ID,\s*'follow-up'/.test(app));
+check('Delay في شريط الفلاتر بعد Cold Calls', /COLD_CALL_ID,\s*DELAY_ID,\s*SHARED_ID,\s*'not-answered',\s*'follow-up'/.test(app));
 check('عدّاد اللوحة بيحسب Delay من alertMap', /card\.id === DELAY_ID\s*\?\s*delayed/.test(app) && /isDelayedNumber\(record, alertMap\)/.test(app));
 check('الرئيسية بتستلم alertMap', /<DashboardView[^>]*alertMap=\{alertMap\}/.test(app));
 check('فلتر Delay في صفحة الأرقام', /filter === DELAY_ID\) list = list\.filter\(\(row\) => row\.delayed\)/.test(app));

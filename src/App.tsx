@@ -7346,6 +7346,7 @@ const LEAD_STATUS_LABELS: Record<string, string> = {
   [COLD_CALL_ID]: 'Cold Calls',
   [DELAY_ID]: 'Delay',
   [SHARED_ID]: 'Shared Leads',
+  'not-answered': 'Not Answer At All',
   'follow-up': 'Follow Up',
   meeting: 'Meeting',
   'after-meeting': 'Following after Meeting',
@@ -7356,7 +7357,7 @@ const LEAD_STATUS_LABELS: Record<string, string> = {
   reservation: 'Reservation',
 };
 const LEAD_STATUS_ORDER = [
-  'fresh-stage', COLD_CALL_ID, DELAY_ID, SHARED_ID, 'follow-up', 'meeting', 'after-meeting',
+  'fresh-stage', COLD_CALL_ID, DELAY_ID, SHARED_ID, 'not-answered', 'follow-up', 'meeting', 'after-meeting',
   'reschedule', 'cancellation', 'no-answer', 'done-deal', 'reservation',
 ];
 
@@ -7369,6 +7370,8 @@ const DASH_CARDS: Array<{ id: string; label: string; cls: string }> = [
   { id: COLD_CALL_ID, label: 'Cold Calls', cls: 'fs-cold' },
   { id: DELAY_ID, label: 'Delay', cls: 'fs-delay' },
   { id: SHARED_ID, label: 'Shared Leads', cls: 'fs-shared' },
+  // «No Answer» على رقم في Fresh بتنقله هنا (src/feedbackBuckets.ts)
+  { id: 'not-answered', label: 'Not Answer At All', cls: 'fs-noanswer' },
   { id: 'follow-up', label: 'Follow Up', cls: 'fs-follow' },
   { id: 'meeting', label: 'Meeting', cls: 'fs-meeting' },
   { id: 'after-meeting', label: 'Following after Meeting', cls: 'fs-after' },
@@ -7572,7 +7575,7 @@ function LeadsView({
         phone: String(n?.phone || record?.phone || ''),
         status: cold ? COLD_CALL_ID : bucket,
         statusLabel: cold ? LEAD_STATUS_LABELS[COLD_CALL_ID] : (LEAD_STATUS_LABELS[bucket] || LEAD_STATUS_LABELS['fresh-stage']),
-        statusCls: cold ? 'fs-cold' : (FEEDBACK_STATUS_BY_ID[bucket]?.cls || 'fs-fresh'),
+        statusCls: cold ? 'fs-cold' : (FEEDBACK_STATUS_BY_ID[bucket]?.cls || (bucket === 'not-answered' ? 'fs-noanswer' : 'fs-fresh')),
         dateLabel: campaignStamp(time.at),
         formName: formNameOf(record),
         note: String(n?.salesNote || '') || leadNoteOf(lead || client || {}),
@@ -11112,17 +11115,21 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
   const leadStage = (lead: AssignedLead): Client['stage'] =>
     (FEEDBACK_STATUS_TO_STAGE[LEAD_STATUS_TO_FEEDBACK_STATUS[String(lead.status || '')] || 'fresh-stage'] ||
       'new') as Client['stage'];
-  const visible = campaignClients.filter((c: Client) => (stage === 'all' || c.stage === stage) && matches(c));
+  // «جديد» هنا = رقم لسه ما اتوزّعش على حد. كان بيعدّ كمان العملاء اللي اتوزّعوا
+  // ومرحلتهم لسه «جديد» عند السيلز — فالعدّاد كان أكبر من الأرقام غير الموزّعة فعلاً.
+  const clientUnassigned = (c: Client) => !String(c.assignedTo || c.userId || '').trim();
+  const leadUnassigned = (l: AssignedLead) => !String(l.salesId || '').trim();
+  const clientInStage = (c: Client, id: 'all' | Client['stage']) =>
+    id === 'all' || (id === 'new' ? clientUnassigned(c) : c.stage === id);
+  const leadInStage = (l: AssignedLead, id: 'all' | Client['stage']) =>
+    id === 'all' || (id === 'new' ? leadUnassigned(l) : leadStage(l) === id);
+  const visible = campaignClients.filter((c: Client) => clientInStage(c, stage) && matches(c));
   const visibleLeads = campaignLeads.filter(
-    (lead: AssignedLead) => (stage === 'all' || leadStage(lead) === stage) && matchesLead(lead)
+    (lead: AssignedLead) => leadInStage(lead, stage) && matchesLead(lead)
   );
-  const stageCount = (id: 'all' | Client['stage']) => {
-    const fromClients =
-      id === 'all' ? campaignClients.length : campaignClients.filter((c: Client) => c.stage === id).length;
-    const fromLeads =
-      id === 'all' ? campaignLeads.length : campaignLeads.filter((l: AssignedLead) => leadStage(l) === id).length;
-    return fromClients + fromLeads;
-  };
+  const stageCount = (id: 'all' | Client['stage']) =>
+    campaignClients.filter((c: Client) => clientInStage(c, id)).length +
+    campaignLeads.filter((l: AssignedLead) => leadInStage(l, id)).length;
   const inProgress =
     campaignClients.filter((c: Client) => c.stage !== 'closed' && c.stage !== 'lost').length +
     campaignLeads.filter((l: AssignedLead) => l.status !== 'closed').length;
@@ -11136,7 +11143,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
     { id: 'all', label: 'الكل' },
     ...(['new', 'contacted', 'meeting', 'negotiation', 'closed', 'lost'] as Client['stage'][]).map((id) => ({
       id,
-      label: STAGE_META[id]?.label || id,
+      label: id === 'new' ? 'جديد (مش موزّع)' : STAGE_META[id]?.label || id,
     })),
   ];
 

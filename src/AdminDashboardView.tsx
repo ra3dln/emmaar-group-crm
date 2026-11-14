@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowUp } from 'lucide-react';
 import { SYNC_EVENT } from './sync';
-import { buildWorkNumbers, coldPhonesOf, digitsOfPhone, feedbackByPhone } from './feedbackBuckets';
+import { buildWorkNumbers, coldPhonesOf, feedbackByPhone } from './feedbackBuckets';
 
 const readList = (key: string): any[] => {
   try {
@@ -67,8 +67,8 @@ export function AdminDashboardView({ currentUser, users = [] }: any) {
     { id: 'meeting', label: 'Meeting', match: (n) => assigned(n) && n.bucket === 'meeting' },
     { id: 'after', label: 'Following After Meeting', match: (n) => assigned(n) && n.bucket === 'after-meeting' },
     { id: 'cancel', label: 'Cancellation', match: (n) => assigned(n) && n.bucket === 'cancellation' },
-    // رقم Fresh آخر مكالمة عليه «لم يرد»
-    { id: 'na-fresh', label: 'No Answer Fresh', match: (n) => assigned(n) && n.bucket === 'fresh-stage' && data.coldPhones.has(digitsOfPhone(n.phone)) },
+    // رقم كان Fresh واتعمل عليه «No Answer» (خانة «Not Answer At All»)
+    { id: 'na-fresh', label: 'Not Answer At All', match: (n) => assigned(n) && n.bucket === 'not-answered' },
     { id: 'resched', label: 'Reschedule Meeting', match: (n) => assigned(n) && n.bucket === 'reschedule' },
     { id: 'done', label: 'Done Deal', match: (n) => assigned(n) && n.bucket === 'done-deal' },
     { id: 'reserve', label: 'Reservation', match: (n) => assigned(n) && n.bucket === 'reservation' },

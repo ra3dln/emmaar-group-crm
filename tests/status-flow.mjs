@@ -106,7 +106,7 @@ check(
     [],
     feedbackByPhone([], [callLog('answered', '2026-11-12T09:25:00.000Z')])
   )[0];
-  check('عميل اختار له No Answer ما يتحسبش Follow Up بسبب مكالمة «تم الرد»', clientNa?.bucket === 'fresh-stage', clientNa?.bucket);
+  check('عميل اختار له No Answer ما يتحسبش Follow Up بسبب مكالمة «تم الرد» (Not Answer At All)', clientNa?.bucket === 'not-answered', clientNa?.bucket);
 }
 
 // ===== Follow Up منفصل عن Cold Calls =====
@@ -147,9 +147,9 @@ const freshCalledNoAnswer = buildWorkNumbers(
   feedbackByPhone([{ ...feedback('no-answer'), id: 'f-na2' }], [callLog('no-answer')])
 )[0];
 check(
-  'رقم Fresh اتصلنا بيه وما ردّش → يفضل Fresh (مش Cold Calls ولا Follow Up)',
-  freshCalledNoAnswer?.bucket === 'fresh-stage' &&
-    isFreshNumber(freshCalledNoAnswer, new Set([PHONE])) &&
+  'رقم Fresh اتصلنا بيه وما ردّش → Not Answer At All (مش Cold Calls ولا Follow Up)',
+  freshCalledNoAnswer?.bucket === 'not-answered' &&
+    !isFreshNumber(freshCalledNoAnswer, new Set([PHONE])) &&
     !isColdNumber(freshCalledNoAnswer, coldPhonesOf([callLog('no-answer')])),
   freshCalledNoAnswer?.bucket
 );
@@ -162,8 +162,8 @@ const freshClientNoAnswer = buildWorkNumbers(
   feedbackByPhone([], [callLog('no-answer')])
 )[0];
 check(
-  'عميل جديد كل اللي عليه No Answer → يفضل Fresh',
-  freshClientNoAnswer?.bucket === 'fresh-stage',
+  'عميل جديد كل اللي عليه No Answer → Not Answer At All',
+  freshClientNoAnswer?.bucket === 'not-answered',
   freshClientNoAnswer?.bucket
 );
 
@@ -252,14 +252,14 @@ const coldPhones = coldPhonesOf([{ clientPhone: '01000000005', result: 'no-answe
 const cold = split.filter((n) => isColdNumber(n, coldPhones));
 const fresh = split.filter((n) => isFreshNumber(n, calledPhones));
 check('«Cold Calls» فاضية (لم يرد ما بتنقلش الرقم)', cold.length === 0, `وجد ${cold.length}`);
-check('«Fresh Leads» = كل الأرقام الجديدة حتى اللي ما ردّتش (٥)', fresh.length === 5, `وجد ${fresh.length}`);
+check('«Fresh Leads» = الأرقام الجديدة من غير اللي اتصلنا بيها وما ردّتش (٤)', fresh.length === 4, `وجد ${fresh.length}`);
 check(
   'الرقم الواحد ما بيحسبش في الاتنين',
   cold.every((n) => !fresh.some((f) => f.key === n.key))
 );
 check(
-  'الرقم اللي اتصلنا بيه وما ردّنا بيفضل Fresh',
-  fresh.some((n) => n.phone === '01000000005')
+  'الرقم اللي اتصلنا بيه وما ردّش راح «Not Answer At All»',
+  !fresh.some((n) => n.phone === '01000000005') && split.find((n) => n.phone === '01000000005')?.bucket === 'not-answered'
 );
 check(
   'الرقم اللي اتفتح من التوزيع (-opening) بيفضل Fresh لحد ما يتصل بيه',
@@ -398,7 +398,34 @@ check(
     [],
     feedbackByPhone([{ ...feedback('no-answer', T0), id: 'fa' }], [{ ...callLog('no-answer', T0), id: 'la' }])
   )[0];
-  check('عميل كل مكالماته «لم يرد» لسه يفضل Fresh', onlyNa?.bucket === 'fresh-stage', onlyNa?.bucket);
+  check('عميل كل مكالماته «لم يرد» → Not Answer At All', onlyNa?.bucket === 'not-answered', onlyNa?.bucket);
+
+  // المندوب رجّعه «جديد» بنفسه بعد الـ No Answer → يرجع Fresh
+  const backToNew = buildWorkNumbers(
+    [{ id: 'c-back', name: 'عميل', phone: PHONE, stage: 'new',
+      activities: [
+        { id: 'a3', type: 'stage', text: 'تغيير المرحلة: تم التواصل ← جديد', status: 'fresh-stage', at: '2026-11-01T12:50:00.000Z' },
+        { id: 'a2', type: 'feedback', text: 'No answer', status: 'no-answer', at: T0 },
+      ] }],
+    [],
+    feedbackByPhone([{ ...feedback('no-answer', T0), id: 'fa' }], [{ ...callLog('no-answer', T0), id: 'la' }])
+  )[0];
+  check('رجّعه «جديد» بإيده بعد No Answer → Fresh', backToNew?.bucket === 'fresh-stage', backToNew?.bucket);
+
+  // No Answer بعد Meeting → يفضل Meeting (الخانة الجديدة للـ Fresh بس)
+  const meetingNa = buildWorkNumbers(
+    [],
+    [{ id: 'l-m', name: 'رقم', phone: PHONE, status: 'contacted', salesId: 'u1' }],
+    feedbackByPhone(
+      [feedback('meeting', '2026-10-30T10:00:00.000Z'), { ...feedback('no-answer', '2026-11-02T10:00:00.000Z'), id: 'fm' }],
+      [{ ...callLog('no-answer', '2026-11-02T10:00:00.000Z'), id: 'lm' }]
+    )
+  )[0];
+  check('Meeting + No Answer بعدها → يفضل Meeting', meetingNa?.bucket === 'meeting', meetingNa?.bucket);
+
+  // رقم موزّع جديد من غير أي مكالمة → Fresh
+  const untouched = buildWorkNumbers([], [{ id: 'l-u', name: 'رقم', phone: '01009998887', status: 'new', salesId: 'u1' }], new Map())[0];
+  check('رقم ما اتصلناش بيه خالص → Fresh', untouched?.bucket === 'fresh-stage', untouched?.bucket);
 
   // «تم الرد» اتضغطت غلط والكومنت بيقول إنه ما ردّش → «No Answer» هي الصح (يفضل Fresh)
   for (const text of ['مش بيرد', 'مش ييرد', 'م بيرد', 'رنيت تاني مش بترد', 'تلفونه مقفول', 'الرقم خارج الخدمه']) {

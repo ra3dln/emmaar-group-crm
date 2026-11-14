@@ -75,7 +75,7 @@ check(
 check(
   'ألوان الحالات هي ألوان المراحل نفسها (fs-*)',
   /FEEDBACK_STATUS_BY_ID\[bucket\]\?\.cls/.test(leadsView) &&
-    /statusCls: cold \? 'fs-cold' : \(FEEDBACK_STATUS_BY_ID\[bucket\]\?\.cls \|\| 'fs-fresh'\)/.test(leadsView)
+    /statusCls: cold \? 'fs-cold' : \(FEEDBACK_STATUS_BY_ID\[bucket\]\?\.cls \|\| \(bucket === 'not-answered' \? 'fs-noanswer' : 'fs-fresh'\)\)/.test(leadsView)
 );
 check(
   '«Cold Calls» فلتر خاص (رقم اتفتح وما اتصلناش فيه) والعدّاد زي اللوحة',
@@ -124,9 +124,9 @@ check('صفحة الأرقام بالإنجليزي (Lead Info / Search)', /<opt
 // ===== ٤) صفحة الأرقام: بحث + فلاتر + كارت =====
 check('صفحة الأرقام فيها بحث + فلاتر حالة + كروت', /eg-search/.test(leadsView) && /eg-filter/.test(leadsView) && /EngazLeadCard/.test(leadsView));
 check(
-  'فلاتر الحالة بالترتيب: All Leads، Fresh، Cold Calls، Delay، Shared Leads، Follow Up…',
+  'فلاتر الحالة بالترتيب: All Leads، Fresh، Cold Calls، Delay، Shared Leads، Not Answer At All، Follow Up…',
   /LEAD_STATUS_ORDER = \[/.test(app) &&
-    /'fresh-stage', COLD_CALL_ID, DELAY_ID, SHARED_ID, 'follow-up', 'meeting', 'after-meeting'/.test(app) &&
+    /'fresh-stage', COLD_CALL_ID, DELAY_ID, SHARED_ID, 'not-answered', 'follow-up', 'meeting', 'after-meeting'/.test(app) &&
     /'reschedule', 'cancellation', 'no-answer', 'done-deal', 'reservation'/.test(app)
 );
 check('اسم الفورم مكتوب زي ما هو في الكارت', /formName: formNameOf\(record\)/.test(leadsView) && /eg-form/.test(card));

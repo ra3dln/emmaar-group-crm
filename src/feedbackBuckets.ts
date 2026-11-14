@@ -25,6 +25,7 @@ export const FEEDBACK_STATUS_TO_STAGE: Record<string, string> = {
   'fresh-stage': 'new',
   'follow-up': 'contacted',
   'no-answer': 'contacted',
+  'not-answered': 'contacted',
   meeting: 'meeting',
   'after-meeting': 'meeting',
   reschedule: 'meeting',
@@ -69,10 +70,27 @@ const stageBucketOf = (record: any): string => {
   return STAGE_TO_FEEDBACK_STATUS[stage] || '';
 };
 
+// ===== «Not Answer At All» =====
+// «No Answer» على رقم في Fresh بتنقله لخانة «Not Answer At All» (اتصلنا وما ردّش).
+// ولو الرقم في Follow Up أو أي خانة تانية، «No Answer» ما بتحرّكوش — بيفضل زي ما هو.
+// ولو المندوب رجّعه «جديد» بنفسه بعد الـ No Answer → يرجع Fresh.
+export const NOT_ANSWERED = 'not-answered';
+const isFreshChoice = (a: any): boolean =>
+  a?.status === 'fresh-stage' || (a?.type === 'stage' && /←\s*جديد\s*$/.test(String(a?.text || '')));
+const latestAtOf = (activities: any[], pick: (a: any) => boolean): string =>
+  activities.reduce((max: string, a: any) => (pick(a) && String(a?.at || '') > max ? String(a.at) : max), '');
+const withNoAnswer = (bucket: string, noAnswerAt: string, freshAt: string): string =>
+  bucket === 'fresh-stage' && !!noAnswerAt && noAnswerAt > freshAt ? NOT_ANSWERED : bucket;
+
 export const feedbackBucketOf = (record: any): string => {
   const status = bucketStatus(latestBucketActivityOf(record)?.status);
   if (status) return status;
-  return stageBucketOf(record);
+  const activities: any[] = Array.isArray(record?.activities) ? record.activities : [];
+  return withNoAnswer(
+    stageBucketOf(record),
+    latestAtOf(activities, (a) => a?.status === NO_ANSWER),
+    latestAtOf(activities, isFreshChoice)
+  );
 };
 
 // ===== فهرس الفيدباك بالرقم =====
@@ -99,6 +117,8 @@ export type PhoneSnapshot = {
   implicit?: boolean;
   // أوقات مكالمات «تم الرد» على الرقم — عشان نعرف «No Answer» المتسجّلة معاها في نفس الإجراء
   answeredAts?: string[];
+  // وقت آخر «No Answer» حقيقية على الرقم
+  noAnswerAt?: string;
 };
 
 // ===== «تم الرد» + «No Answer» في نفس الإجراء =====
@@ -192,9 +212,21 @@ export const feedbackByPhone = (
     return isAnsweredSameAction(at, answeredByPhone.get(digitsOfPhone(feedback?.clientPhone))) ? 'follow-up' : raw;
   };
 
+  // آخر «No Answer» حقيقية على كل رقم (مكالمة ما اترد عليها أو كارت No Answer) —
+  // بتنقل الرقم من Fresh لـ «Not Answer At All»
+  const noAnswerAt = new Map<string, string>();
+  const markNoAnswer = (phone: any, at: string) => {
+    const k = digitsOfPhone(phone);
+    if (!k || !at) return;
+    if (at > String(noAnswerAt.get(k) || '')) noAnswerAt.set(k, at);
+  };
+
   for (const log of callLogs || []) {
+    // «تم الرد» والكومنت بيقول إنه ما ردّش = «لم يرد»
+    const missed = log?.result === 'no-answer' || looksLikeNoAnswerText(log?.comment);
+    if (missed) markNoAnswer(log?.clientPhone, String(log?.createdAt || ''));
     put(log?.clientPhone, {
-      status: log?.result === 'no-answer' ? NO_ANSWER : 'follow-up',
+      status: missed ? NO_ANSWER : 'follow-up',
       cancelReason: '',
       note: '',
       at: String(log?.createdAt || ''),
@@ -204,6 +236,7 @@ export const feedbackByPhone = (
 
   for (const feedback of feedbacks || []) {
     const at = String(feedback?.createdAt || feedback?.date || '');
+    if (fixedStatus(feedback) === NO_ANSWER) markNoAnswer(feedback?.clientPhone, at);
     put(feedback?.clientPhone, {
       status: fixedStatus(feedback),
       cancelReason: String(feedback?.cancelReason || ''),
@@ -243,6 +276,8 @@ export const feedbackByPhone = (
   for (const [key, entry] of map) {
     const answered = answeredByPhone.get(key);
     if (answered) entry.answeredAts = answered;
+    const missedAt = noAnswerAt.get(key);
+    if (missedAt) entry.noAnswerAt = missedAt;
   }
 
   // الملاحظة = آخر كلام مندوب على الرقم (وليس آخر لوج)
@@ -413,10 +448,19 @@ export const buildWorkNumbers = (
     const onlyNoAnswerCalls = !!snapshot && !snapUsable && !actStatus;
     const stageBucket =
       onlyNoAnswerCalls && String(client?.stage || '') === 'contacted' ? 'fresh-stage' : stageBucketOf(client);
-    const bucket =
+    const baseBucket =
       snapUsable && (!actAt || snapAt >= actAt)
         ? snapStatus
         : actStatus || stageBucket;
+    const actNaAt = latestAtOf(activities, (a) => statusOfAct(a) === NO_ANSWER);
+    const snapNaAt = String(snapshot?.noAnswerAt || '');
+    const actFreshAt = latestAtOf(activities, isFreshChoice);
+    const snapFreshAt = snapUsable && snapStatus === 'fresh-stage' ? snapAt : '';
+    const bucket = withNoAnswer(
+      baseBucket,
+      actNaAt > snapNaAt ? actNaAt : snapNaAt,
+      actFreshAt > snapFreshAt ? actFreshAt : snapFreshAt
+    );
     // «مفتوح» = المندوب فتح الرقم من التوزيع (viewed) أو كتب عليه كلام.
     // وعميل مش من التوزيع (أضافه بنفسه) = مفتوح برضه.
     const lead = leadByPhone.get(key);
@@ -457,10 +501,13 @@ export const buildWorkNumbers = (
     // «لم يرد»، الحالة دي مش خانة حقيقية: الرقم لسه Fresh.
     const leadStatus = String(lead?.status || '');
     const onlyNoAnswerCalls = !!snapshot && !snapshot.status && leadStatus === 'contacted';
-    const bucket =
+    const bucket = withNoAnswer(
       snapshot?.status ||
-      (onlyNoAnswerCalls ? 'fresh-stage' : LEAD_STATUS_TO_FEEDBACK_STATUS[leadStatus]) ||
-      'fresh-stage';
+        (onlyNoAnswerCalls ? 'fresh-stage' : LEAD_STATUS_TO_FEEDBACK_STATUS[leadStatus]) ||
+        'fresh-stage',
+      String(snapshot?.noAnswerAt || ''),
+      snapshot?.status === 'fresh-stage' ? String(snapshot?.statusAt || '') : ''
+    );
     out.push({
       key,
       name: String(lead?.name || 'بدون اسم'),

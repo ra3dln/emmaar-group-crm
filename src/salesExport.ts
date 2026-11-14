@@ -17,6 +17,7 @@ import { formNameOf } from './campaignForms.ts';
 
 const STATUS_LABELS: Record<string, string> = {
   'fresh-stage': 'Fresh',
+  'not-answered': 'Not Answer At All',
   'follow-up': 'Follow Up',
   meeting: 'Meeting',
   'after-meeting': 'Following after Meeting',

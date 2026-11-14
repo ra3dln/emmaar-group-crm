@@ -110,7 +110,7 @@ check('زر «إضافة سيلز مشترك» + قائمة منسدلة', /إض
 check('الزر مقفول لحد ما يتختار سيلز ووقت الحفظ (مفيش ضغطة مكررة)', /disabled=\{!pick \|\| busy\}/.test(panel));
 check('الشريك يشوف الشركاء من غير زر شيل', /\{canManage && \(\s*<button/.test(panel));
 check('خانة Shared Leads في لوحة الأرقام', /\{\s*id:\s*SHARED_ID,\s*label:\s*'Shared Leads',\s*cls:\s*'fs-shared'\s*\}/.test(app));
-check('خانة Shared Leads في فلاتر صفحة الأرقام', /DELAY_ID, SHARED_ID, 'follow-up'/.test(app) && /filter === SHARED_ID\) list = list\.filter\(\(row\) => row\.shared\)/.test(app));
+check('خانة Shared Leads في فلاتر صفحة الأرقام', /DELAY_ID, SHARED_ID, 'not-answered', 'follow-up'/.test(app) && /filter === SHARED_ID\) list = list\.filter\(\(row\) => row\.shared\)/.test(app));
 check('الرئيسية وصفحة الأرقام بيستلموا أرقام الشراكة', /<DashboardView[^>]*sharedPhones=\{sharedWithMePhones\}/.test(app) && /sharedPhones=\{sharedWithMePhones\}\s*filter=\{leadsFilter\}/.test(app));
 check('لون Shared Leads + تنسيق اللوحة', /\.fs-shared\s*\{/.test(css) && /\.eg-partners\s*\{/.test(css));
 

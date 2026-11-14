@@ -361,7 +361,7 @@ check('الضغط على الرقم يفتح كل الكومنتات', /كل ا�
   check(
     'تبويب «داشبورد» للإدارة بكروت الخانات والنسبة',
     /id: 'admin-dashboard', icon: BarChart3, label: 'داشبورد'/.test(app) && /<AdminDashboardView currentUser=\{currentUser\} users=\{scopedUsers\} \/>/.test(app) &&
-      /'All Leads'/.test(dash) && /'Pending Leads'/.test(dash) && /'No Answer Fresh'/.test(dash) && /Sales Rep/.test(dash) && /Managers/.test(dash)
+      /'All Leads'/.test(dash) && /'Pending Leads'/.test(dash) && /'Not Answer At All'/.test(dash) && /Sales Rep/.test(dash) && /Managers/.test(dash)
   );
   check(
     'أي توزيع لأكتر من رقم بيسأل الأول بالعدد واسم السيلز',
