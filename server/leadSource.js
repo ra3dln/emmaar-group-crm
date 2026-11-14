@@ -395,7 +395,7 @@ async function fetchFromMeta(config, channel = 'facebook') {
           dateIso: created ? new Date(created * 1000).toISOString() : '',
           test,
           // كلام العميل في الفورم (إجابات الأسئلة) — بيظهر للسيلز من زرار العين
-          answers: answersFromFields(lead.field_data, normalizeEgyptPhone(rawPhone)),
+          answers: answersFromFields(lead.field_data),
         });
       }
       cursors[form.id] = formMax;

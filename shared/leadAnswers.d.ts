@@ -10,6 +10,6 @@ export type LeadAnswerEntry = {
 };
 export function questionLabel(name: string): string;
 export function answerText(values: any): string;
-export function answersFromFields(fieldData?: any[], mainPhone?: string): FormAnswer[];
+export function answersFromFields(fieldData?: any[]): FormAnswer[];
 export function buildAnswerEntries(params?: { rows?: any[]; existing?: any[]; at?: string }): LeadAnswerEntry[];
 export function answersByPhone(list?: any[]): Map<string, LeadAnswerEntry[]>;

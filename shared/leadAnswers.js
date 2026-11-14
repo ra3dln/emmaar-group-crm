@@ -10,11 +10,17 @@ import { repeatPhoneKey } from './leadRepeats.js';
 
 export const LEAD_ANSWERS_KEY = 'crm_lead_answers';
 
-// حقول مش كلام عميل: الاسم ورقمه الأساسي ولينك الإنبوكس
-const SKIP_FIELDS = new Set(['full_name', 'name', 'first_name', 'last_name', 'phone_number', 'inbox_url']);
+// كل اللي كتبه العميل بيتعرض (الاسم والرقم والواتساب وكل الأسئلة) — الحاجة الوحيدة
+// اللي بتتشال لينك الإنبوكس، لأن فيسبوك هو اللي بيحطه مش العميل.
+const SKIP_FIELDS = new Set(['inbox_url']);
 
 // أسماء الحقول الجاهزة من فيسبوك بالعربي
 const KNOWN_LABELS = {
+  full_name: 'الاسم',
+  name: 'الاسم',
+  first_name: 'الاسم الأول',
+  last_name: 'اسم العيلة',
+  phone_number: 'رقم الموبايل',
   job_title: 'الوظيفة',
   'job title': 'الوظيفة',
   email: 'الإيميل',
@@ -51,17 +57,14 @@ export const answerText = (values) => {
     .join(' / ');
 };
 
-// إجابات ليد واحد من field_data — من غير الاسم والرقم الأساسي
-export function answersFromFields(fieldData = [], mainPhone = '') {
-  const mainKey = repeatPhoneKey(mainPhone);
+// كل إجابات ليد واحد من field_data — بنفس ترتيب الفورم
+export function answersFromFields(fieldData = []) {
   const out = [];
   for (const field of Array.isArray(fieldData) ? fieldData : []) {
     const name = String(field?.name || '').trim();
     if (!name || SKIP_FIELDS.has(name.toLowerCase())) continue;
     const a = answerText(field?.values);
     if (!a) continue;
-    // نفس الرقم الأساسي مكتوب تاني في حقل تاني — مش معلومة جديدة
-    if (mainKey && repeatPhoneKey(a) === mainKey && /^[\d\s+()\-٠-٩]+$/.test(a)) continue;
     out.push({ q: questionLabel(name), a });
   }
   return out;

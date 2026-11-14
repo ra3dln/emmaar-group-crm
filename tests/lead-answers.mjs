@@ -30,11 +30,14 @@ const fieldData = [
 
 // ===== ١) استخراج الكلام =====
 {
-  const answers = answersFromFields(fieldData, '01221804014');
+  const answers = answersFromFields(fieldData);
   const text = (q) => answers.find((x) => x.q === q)?.a;
-  check('الاسم والرقم الأساسي مش من الكلام', !answers.some((x) => x.a === 'Ahmed Saied Salem' || x.a === '+201221804014'));
-  check('لينك الإنبوكس مش من الكلام', !answers.some((x) => /business\.facebook\.com/.test(x.a)));
-  check('نفس الرقم الأساسي مكرر في سؤال تاني ما بيتعرضش', !answers.some((x) => x.a === '01221804014'));
+  // كل اللي كتبه العميل بيتعرض — الاسم والرقم والواتساب كمان
+  check('الاسم بيتعرض', text('الاسم') === 'Ahmed Saied Salem');
+  check('رقم الموبايل بيتعرض', text('رقم الموبايل') === '+201221804014');
+  check('رقم الواتساب بيتعرض حتى لو نفس الرقم', text('برجاء إدخال الواتساب للحجز') === '01221804014');
+  check('كل حقول العميل موجودة بترتيب الفورم', answers.map((x) => x.q).join('|') === 'الاسم|رقم الموبايل|برجاء إدخال الواتساب للحجز|الوظيفة|مهتم بحجز|الموعد المناسب للتواصل|رقم تاني', answers.map((x) => x.q).join('|'));
+  check('لينك الإنبوكس مش من الكلام (فيسبوك بيحطه مش العميل)', !answers.some((x) => /business\.facebook\.com/.test(x.a)));
   check('الوظيفة بالعربي', text('الوظيفة') === 'شف حلوانى');
   check('السؤال من غير «:» ولا «_»', text('مهتم بحجز') === 'عدد 3 غرف', JSON.stringify(answers));
   check('الموعد بيتعرض مقروء', text('الموعد المناسب للتواصل') === '2026-10-25 15:00');
