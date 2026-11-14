@@ -49,6 +49,16 @@ export const campaignTimeOf = (record) => {
 
 const asList = (value) => (Array.isArray(value) ? value : []);
 
+// ===== الترتيب من الأحدث للأقدم =====
+// وقت الرقم = وقت تسجيله في الكامبين، وإلا وقت إضافته للسيستم. كل القوائم (All Leads،
+// المراحل، عملاء كامبين، توزيع الأرقام…) بتترتب بيه — الأحدث فوق.
+export const campaignTimeMs = (record) => {
+  const at = Date.parse(campaignTimeOf(record).at || '');
+  return Number.isFinite(at) ? at : 0;
+};
+export const newestFirst = (list, pick = (item) => item) =>
+  [...asList(list)].sort((a, b) => campaignTimeMs(pick(b)) - campaignTimeMs(pick(a)));
+
 // معرّف العميل التلقائي لرقم معيّن — نفس الرقم = نفس المعرّف على كل الأجهزة
 export const leadClientIdFor = (phone) => {
   const key = phoneKeyOf(phone);

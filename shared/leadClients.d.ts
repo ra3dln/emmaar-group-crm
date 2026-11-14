@@ -6,6 +6,9 @@ export declare function leadClientIdFor(phone?: unknown): string;
 export declare function campaignAtFromText(text?: unknown): string;
 
 export declare function campaignTimeOf(record?: any): { at: string; kind: 'campaign' | 'added' };
+// الترتيب من الأحدث للأقدم بوقت التسجيل في الكامبين (وإلا وقت الإضافة)
+export declare function campaignTimeMs(record?: any): number;
+export declare function newestFirst(list: any[], pick?: (item: any) => any): any[];
 
 export declare function clientPhoneKeys(clients?: any[]): Set<string>;
 

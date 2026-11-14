@@ -47,7 +47,7 @@ import {
   type LeadAssignment,
 } from '../shared/autoAssign.js';
 import { dataScopeOf, effectiveRoleOf, isDeveloperAccount, isManagerAccount, worksAsSales } from '../shared/roles.js';
-import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor, leadCommentActivity, LEAD_CLIENT_ID_PREFIX } from '../shared/leadClients.js';
+import { buildLeadClients, campaignAtFromText, campaignTimeOf, leadClientIdFor, leadCommentActivity, LEAD_CLIENT_ID_PREFIX, newestFirst } from '../shared/leadClients.js';
 import {
   cleanCommentText,
   commentActivitiesOf,
@@ -7007,8 +7007,11 @@ function PipelineStatusBoard({ users = [], onSelectClient }: any) {
   };
 
   const q = normalizeArabicText(query).trim();
-  const openList = (openStatus ? byStatus.get(openStatus) || [] : []).filter(
-    (n: any) => !q || normalizeArabicText(`${n.name} ${n.phone} ${n.ownerName}`).includes(q)
+  const openList = newestFirst(
+    (openStatus ? byStatus.get(openStatus) || [] : []).filter(
+      (n: any) => !q || normalizeArabicText(`${n.name} ${n.phone} ${n.ownerName}`).includes(q)
+    ),
+    (n: any) => n.client || n.lead || n
   );
 
   // كل الكومنتات على الرقم: خط العميل + بطاقات الفيدباك + المكالمات + كومنت الإدارة على الرقم
@@ -7607,7 +7610,8 @@ function LeadsView({
     else if (filter === SHARED_ID) list = list.filter((row) => row.shared);
     else if (filter) list = list.filter((row) => row.status === filter);
     // المقارنة في دالة مستقلة ومختبَرة: البحث بالحروف للاسم/الفورم وبالأرقام للتليفون
-    return list.filter((row) => matchLeadSearch(row, query, field));
+    // الأحدث فوق (وقت التسجيل في الكامبين، وإلا وقت الإضافة)
+    return newestFirst(list.filter((row) => matchLeadSearch(row, query, field)), (row) => row.client || row.lead);
   }, [rows, filter, query, field]);
 
   return (
@@ -7749,10 +7753,12 @@ function PipelineView({ clients, users = [], numbers = [], leads = [], alertMap,
 function StatusBoardView({ statusId, users = [], numbers = [], leads = [], alertMap, nextActionMap, currentUser, onClose, onSelect, onSetStage, onRefresh, onLeadViewed, onCall }: any) {
   const meta = FEEDBACK_STATUS_BY_ID[statusId];
   // نفس قاعدة لوحة الحالات: كل رقم بحالته (عميل مسجّل أو رقم في التوزيع)
-  const items: any[] = (numbers || []).filter(
-    (record: any) => (record.bucket || feedbackBucketOf(record)) === statusId
-  );
   const leadById = new Map<string, any>((leads || []).map((l: any) => [String(l.id), l]));
+  // الأحدث فوق
+  const items: any[] = newestFirst(
+    (numbers || []).filter((record: any) => (record.bucket || feedbackBucketOf(record)) === statusId),
+    (record: any) => record.client || leadById.get(String(record.leadId || '')) || record
+  );
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="status-board">
       <div className="status-board-head">
@@ -11115,10 +11121,11 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
     id === 'all' || (id === 'new' ? clientUnassigned(c) : c.stage === id);
   const leadInStage = (l: AssignedLead, id: 'all' | Client['stage']) =>
     id === 'all' || (id === 'new' ? leadUnassigned(l) : leadStage(l) === id);
-  const visible = campaignClients.filter((c: Client) => clientInStage(c, stage) && matches(c));
-  const visibleLeads = campaignLeads.filter(
+  // الأحدث فوق
+  const visible = newestFirst(campaignClients.filter((c: Client) => clientInStage(c, stage) && matches(c)));
+  const visibleLeads = newestFirst(campaignLeads.filter(
     (lead: AssignedLead) => leadInStage(lead, stage) && matchesLead(lead)
-  );
+  ));
   const stageCount = (id: 'all' | Client['stage']) =>
     campaignClients.filter((c: Client) => clientInStage(c, id)).length +
     campaignLeads.filter((l: AssignedLead) => leadInStage(l, id)).length;
@@ -11539,11 +11546,12 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
 
   const nameOf = (id?: string) => users.find((u: User) => u.id === id)?.name || 'غير مخصص';
   const q = normalizeArabicText(query).trim();
-  const visible = formLeads
+  // الأحدث فوق
+  const visible = newestFirst(formLeads
     .filter((l: AssignedLead) => (filter === 'unassigned' ? !salesUsers.some((u: User) => u.id === l.salesId) : true))
     .filter((l: AssignedLead) =>
       !q || normalizeArabicText(`${l.name} ${l.phone} ${nameOf(l.salesId)} ${l.description || ''} ${formNameOf(l)}`).includes(q)
-    );
+    ));
   const unassignedCount = formLeads.filter((l: AssignedLead) => !salesUsers.some((u: User) => u.id === l.salesId)).length;
 
   // حصة كل سيلز: نافذة تعرض كل السيلز وعدد الأرقام لكل واحد
