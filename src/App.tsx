@@ -11262,6 +11262,8 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
 
   // فلتر الفورم: لو الفورم المختار مابقاش ظاهر (بعد بحث أو تصفية) نرجع لـ«كل الفورمات»
   const [form, setForm] = useState('all');
+  // لوحة الفلتر (زرار «فلتر» فوق): بتتفتح وتختار منها الكامبين والسيلز
+  const [showFilter, setShowFilter] = useState(false);
   const activeForm = form === 'all' || formOptions.some((option) => option.name === form) ? form : 'all';
   const selectedCounts = formOptions.find((option) => option.name === activeForm);
 
@@ -11283,6 +11285,8 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
   if (activeSales !== 'all' && !salesOptions.some((option) => option.id === activeSales)) {
     salesOptions.push({ id: activeSales, name: userName(activeSales), count: 0 });
   }
+  // عدد الفلاتر المطبّقة — يظهر على زرار «فلتر» فوق
+  const activeFilterCount = (activeForm !== 'all' ? 1 : 0) + (activeSales !== 'all' ? 1 : 0);
   // الفورم المختار يظهر له قسم حتى لو لم يصل منه أي رقم بعد
   const shownGroups =
     activeForm === 'all'
@@ -11347,7 +11351,103 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
             تصدير شيت كل فورم بقى في تبويب «شيت الفورمات». اضغط على الكارت لعرض التفاصيل الكاملة.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+        <div className="relative flex flex-wrap gap-2 self-start sm:self-auto">
+          {/* ===== زرار الفلتر فوق القائمة =====
+              بيِفتح لوحة صغيرة تختار منها الكامبين والسيلز، والعدد على الزرار
+              بيوضّح إن فيه فلتر شغّال. */}
+          <button
+            type="button"
+            onClick={() => setShowFilter((value) => !value)}
+            aria-expanded={showFilter}
+            className={`text-[11.5px] font-bold border px-3 py-2 rounded-[var(--r-sm)] flex items-center gap-1.5 transition-colors ${
+              activeFilterCount > 0
+                ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
+                : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text)] hover:bg-[var(--tint-2)]'
+            }`}
+            title="فلتر بالكامبين والسيلز"
+          >
+            <Filter className="w-3.5 h-3.5" /> فلتر
+            {activeFilterCount > 0 && (
+              <span className="text-[10px] font-extrabold bg-[var(--brand)] text-white rounded-full w-4 h-4 inline-flex items-center justify-center tabular-nums" dir="ltr">
+                {activeFilterCount}
+              </span>
+            )}
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showFilter ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showFilter && (
+            <>
+              <button
+                type="button"
+                aria-label="إغلاق الفلتر"
+                onClick={() => setShowFilter(false)}
+                className="fixed inset-0 z-30 cursor-default bg-transparent"
+              />
+              <div className="absolute z-40 top-full mt-2 right-0 w-[min(92vw,26rem)] panel p-3.5 space-y-2.5 shadow-2xl">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-extrabold text-[var(--text-strong)] flex items-center gap-1.5">
+                    <Filter className="w-3.5 h-3.5 text-[var(--brand)]" /> فلتر الأرقام
+                  </p>
+                  <button type="button" onClick={() => setShowFilter(false)} className="icon-btn !w-7 !h-7" title="إغلاق">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div>
+                  <label htmlFor="campaign-form-select" className="block text-[11px] font-bold text-[var(--text-dim)] mb-1">
+                    الكامبين (الفورم)
+                  </label>
+                  <select
+                    id="campaign-form-select"
+                    value={activeForm}
+                    onChange={(e) => setForm(e.target.value)}
+                    className="w-full min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
+                  >
+                    <option value="all" className="bg-gray-900">كل الفورمات ({totalCampaign})</option>
+                    {formOptions.map((option) => (
+                      <option key={option.name} value={option.name} className="bg-gray-900">
+                        {withManualTag(option.name, manualFormNames)} — {option.clients} عميل مسجّل • {option.leads} في التوزيع
+                        {repeatRowsOf(option.name).length ? ` • ${repeatRowsOf(option.name).length} متكرر` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="campaign-sales-select" className="block text-[11px] font-bold text-[var(--text-dim)] mb-1">
+                    السيلز
+                  </label>
+                  <select
+                    id="campaign-sales-select"
+                    value={activeSales}
+                    onChange={(e) => setSales(e.target.value)}
+                    className="w-full min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
+                  >
+                    <option value="all" className="bg-gray-900">كل السيلز</option>
+                    {salesOptions.map((option) => (
+                      <option key={option.id || 'none'} value={option.id} className="bg-gray-900">
+                        {option.name} ({option.count})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--border)]">
+                  <span className="text-[11px] text-[var(--text-muted)]">
+                    المعروض: <b className="text-[var(--text)]" dir="ltr">{visible.length + visibleLeads.length}</b> رقم
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => { setForm('all'); setSales('all'); }}
+                    className="text-[11px] font-bold text-[var(--brand)]"
+                  >
+                    مسح الفلاتر
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
           {/* إضافة عميل يدوي + رفع شيت (أي شيت فيه اسم الشخص ورقمه) */}
           <button
             type="button"
@@ -11424,57 +11524,45 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
         </div>
       </div>
 
-      {/* ===== قائمة الفورمات المسندلة =====
-          كل فورم مفعّل في إعدادات السحب يظهر هنا تلقائياً، واختياره يعرض أرقامه
-          وعدده فقط. العدد المكتوب جوه القائمة هو عدد العملاء المسجّلين في الفورم. */}
-      <div className="panel p-3.5">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
-          <label htmlFor="campaign-form-select" className="text-[11px] font-bold text-[var(--text-dim)] shrink-0">
-            الفورم
-          </label>
-          <select
-            id="campaign-form-select"
-            value={activeForm}
-            onChange={(e) => setForm(e.target.value)}
-            className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
+      {/* ===== الفلاتر المطبّقة =====
+          الكامبين والسيلز بيتحطوا من زرار «فلتر» فوق؛ وهنا بيتعرضوا كشرائح
+          عشان تعرف إنت شايف إيه وتشيل أي واحد منهم بضغطة. */}
+      {activeFilterCount > 0 && (
+        <div className="panel p-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-bold text-[var(--text-dim)]">الفلاتر المطبّقة:</span>
+          {activeForm !== 'all' && (
+            <button
+              type="button"
+              onClick={() => setForm('all')}
+              className="text-[11px] font-bold bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--brand)] px-2.5 py-1 rounded-full flex items-center gap-1.5"
+              title="إزالة فلتر الكامبين"
+            >
+              الكامبين: {activeForm} <X className="w-3 h-3" />
+            </button>
+          )}
+          {activeSales !== 'all' && (
+            <button
+              type="button"
+              onClick={() => setSales('all')}
+              className="text-[11px] font-bold bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--brand)] px-2.5 py-1 rounded-full flex items-center gap-1.5"
+              title="إزالة فلتر السيلز"
+            >
+              السيلز: {userName(activeSales)} <X className="w-3 h-3" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => { setForm('all'); setSales('all'); }}
+            className="text-[11px] font-bold text-[var(--text-muted)] underline"
           >
-            <option value="all" className="bg-gray-900">كل الفورمات ({totalCampaign})</option>
-            {formOptions.map((option) => (
-              <option key={option.name} value={option.name} className="bg-gray-900">
-                {withManualTag(option.name, manualFormNames)} — {option.clients} عميل مسجّل • {option.leads} في التوزيع
-                {repeatRowsOf(option.name).length ? ` • ${repeatRowsOf(option.name).length} متكرر` : ''}
-              </option>
-            ))}
-          </select>
+            مسح الفلاتر
+          </button>
         </div>
+      )}
 
-        {/* فلتر السيلز: كل سيلز وعدد أرقامه في الكامبين المختارة */}
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 mt-2.5">
-          <label htmlFor="campaign-sales-select" className="text-[11px] font-bold text-[var(--text-dim)] shrink-0">
-            السيلز
-          </label>
-          <select
-            id="campaign-sales-select"
-            value={activeSales}
-            onChange={(e) => setSales(e.target.value)}
-            className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
-          >
-            <option value="all" className="bg-gray-900">كل السيلز</option>
-            {salesOptions.map((option) => (
-              <option key={option.id || 'none'} value={option.id} className="bg-gray-900">
-                {option.name} ({option.count})
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {activeForm === 'all' ? (
-          <p className="text-[11px] text-[var(--text-dim)] mt-2">
-            اختر فورم من القائمة لعرض أرقامه وعدد العملاء المسجّلين فيه. الفورمات المفعّلة
-            في إعدادات السحب تظهر هنا تلقائياً.
-          </p>
-        ) : (
-          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
+      {activeForm !== 'all' && (
+        <div className="panel p-3.5">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <div className="rounded-[var(--r-md)] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] px-3 py-2.5">
               <p className="text-[10.5px] text-[var(--text-muted)]">عملاء مسجّلون</p>
               <p className="text-2xl font-extrabold text-[var(--brand)] leading-tight" dir="ltr">{selectedCounts?.clients || 0}</p>
@@ -11492,8 +11580,8 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
               <p className="text-2xl font-extrabold text-[var(--text-strong)] leading-tight" dir="ltr">{(selectedCounts?.clients || 0) + (selectedCounts?.leads || 0) + repeatRowsOf(activeForm).length}</p>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {shownGroups.map((group) => (
         <section key={group.name} className="space-y-3">
