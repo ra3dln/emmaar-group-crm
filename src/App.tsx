@@ -11318,9 +11318,10 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
   // ===== الأرقام المتكررة جوه الفورم =====
   // رقم اتسجّل في الفورم دي بس كان موجود أصلاً من فورم تانية — ما اتضافش تاني،
   // بس بيظهر هنا (عشان عدد الفورم يطابق فيسبوك) ومكتوب عليه مكرر وأصله فين ومع مين.
-  // الرقم الأصلي وسيلزه زي ما هما.
+  // الرقم الأصلي وسيلزه زي ما هما — فلو فيه فلتر سيلز، الصف المكرر يظهر مع
+  // صاحبه الأصلي بس (مفلتر سيلز يعني أرقام السيلز ده لوحده).
   const repeatRowsOf = (formName: string) => {
-    const out: { id: string; name: string; phone: string; at: string; client: Client | null; originForm: string; owner: string }[] = [];
+    const out: { id: string; name: string; phone: string; at: string; client: Client | null; originForm: string; owner: string; ownerId: string }[] = [];
     for (const entries of repeatMap.values()) {
       for (const entry of entries) {
         if (String(entry.formName || '').trim() !== formName) continue;
@@ -11330,6 +11331,8 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
         const original: any = client || lead;
         // الأصل في نفس الفورم = الرقم ظاهر أصلاً (ولافتة «متكرر» عليه)
         if (original && formNameOf(original) === formName) continue;
+        const ownerId = client ? ownerIdOf(client) : lead ? leadOwnerIdOf(lead) : '';
+        if (!inSales(ownerId)) continue;
         const name = String(entry.name || original?.name || 'بدون اسم');
         if (q && !normalizeArabicText(`${name} ${entry.phone}`).includes(q)) continue;
         out.push({
@@ -11340,6 +11343,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
           client,
           originForm: original ? formNameOf(original) : '',
           owner: client ? ownerName(client) : lead ? userName(lead.salesId) : '',
+          ownerId,
         });
       }
     }
