@@ -11292,6 +11292,11 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
     activeForm === 'all'
       ? formGroups
       : [formGroups.find((g) => g.name === activeForm) || { name: activeForm, clients: [], leads: [] }];
+  // عدد الأرقام المعروضة فعّلاً بعد الفلاتر (للعدّاد جوه لوحة الفلتر)
+  const shownCount = shownGroups.reduce(
+    (sum, group) => sum + group.clients.length + group.leads.length,
+    0
+  );
 
   // ===== سيلز كل كامبين بعدده =====
   // «لما أختار كامبين أشوف كل السيلز اللي معاهم أرقام فيها» — شرائح لكل كامبين
@@ -11434,7 +11439,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
 
                 <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--border)]">
                   <span className="text-[11px] text-[var(--text-muted)]">
-                    المعروض: <b className="text-[var(--text)]" dir="ltr">{visible.length + visibleLeads.length}</b> رقم
+                    المعروض: <b className="text-[var(--text)]" dir="ltr">{shownCount}</b> رقم
                   </span>
                   <button
                     type="button"
