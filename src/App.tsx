@@ -15,7 +15,7 @@ import {
   ChevronRight, ChevronLeft, Filter, KeyRound,
   Workflow, BellRing, ClipboardList, MessagesSquare, Share2, LineChart,
   Megaphone, Globe, Link2, Facebook, ChevronDown, Palette, Calculator,
-  CalendarClock, LayoutDashboard
+  CalendarClock
 } from 'lucide-react';
 import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, CallTarget, TabType } from './types';
 import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, syncNow, ownerOfPhoneOnServer, leadOwnerOfPhoneOnServer, clientPhonesOnServer } from './sync';
@@ -89,8 +89,6 @@ import { repeatPhoneKey } from '../shared/leadRepeats.js';
 import { SalesExportView } from './SalesExportView';
 import { AdminDashboardView } from './AdminDashboardView';
 import { MANUAL_FORMS_KEY, addToManualFormCount, formNameTaken, parseManualForms, withManualTag } from './manualForms';
-import { AdminOverviewView } from './AdminOverviewView';
-import { SectionTabs } from './SectionTabs';
 import {
   ATTENDANCE_END_DEFAULT,
   ATTENDANCE_GRACE_DEFAULT,
@@ -1835,7 +1833,6 @@ function App() {
   const [syncOnline, setSyncOnline] = useState(isOnline());
   // المدير الذي «دخل» إلى حساب سيلز — محفوظ على هذا الجهاز فقط ولا يُزامَن
   const [impersonator, setImpersonator] = useState<User | null>(null);
-  const [sidebarSection, setSidebarSection] = useState<'admin' | 'sales'>('admin');
 
   // نقرأ «ما رآه المستخدم من إشعارات» من جهازه كلما تبدّل الحساب
   useEffect(() => {
@@ -1929,15 +1926,6 @@ function App() {
     };
   }, []);
 
-  // حفظ الصفحة الحالية مع كل تنقل
-  useEffect(() => {
-    if (!currentUser) return;
-    if (String(activeTab || '').startsWith('admin-')) setSidebarSection('admin');
-    else if (['dashboard', 'clients', 'chat', 'reports', 'new-leads'].includes(String(activeTab || ''))) {
-      setSidebarSection('sales');
-    }
-  }, [activeTab, currentUser]);
-
   // نحفظ الصفحة الحالية مع كل تنقل — مثال: من «توزيع الأرقام» إلى «الإعدادات»
   // فلو عملت ريفريش ترجع لنفس المكان، ولو قفلت الموقع وفتحته تاني كذلك.
   useEffect(() => {
@@ -1954,7 +1942,7 @@ function App() {
       return;
     }
     if (!isTabAllowed(guardRole, activeTab, devMenus)) {
-      setActiveTab(MERGED_TABS[activeTab] || (guardRole === 'sales' || devMenus ? 'dashboard' : 'admin-overview'));
+      setActiveTab(guardRole === 'sales' || devMenus ? 'dashboard' : 'admin-users');
       return;
     }
     try {
@@ -2327,7 +2315,7 @@ function App() {
     setSelectedClient(null);
     setCallClient(null);
     setSelectedUserFeedback(null);
-    setActiveTab(target.role === 'sales' || worksAsSales(target) ? 'dashboard' : 'admin-overview');
+    setActiveTab(target.role === 'sales' || worksAsSales(target) ? 'dashboard' : 'admin-users');
     setLoginAnimation(target);
   };
 
@@ -3028,10 +3016,6 @@ function App() {
   // يرى واجهات السيلز والإدارة معاً (بلا لقب «مطوّر» — اللقب يتبع الرتبة)
   const isDeveloper = worksAsSales(currentUser);
   const isSalesView = currentUser.role === 'sales' || isDeveloper;
-  const isAdminActiveTab = String(activeTab || '').startsWith('admin-');
-  const visibleNavGroups = developerMenus
-    ? navGroups.filter((g) => (sidebarSection === 'admin' ? g.section === 'قوائم الادارة' : g.section === 'قوائم السيلز'))
-    : navGroups;
   const activeTabMeta = navGroups.flatMap((g) => g.items).find((t) => t.id === activeTab);
   const userInitial = (currentUser.name || '؟').trim().charAt(0);
   const closeSidebar = () => setSidebarOpen(false);
@@ -3577,36 +3561,12 @@ function App() {
           </div>
 
           <div className="sidebar-scroll">
-            {developerMenus && (
-              <div className="sidebar-mode-switch" role="tablist" aria-label="تبديل القوائم">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={sidebarSection === 'admin'}
-                  onClick={() => {
-                    setSidebarSection('admin');
-                    if (!String(activeTab).startsWith('admin-')) setActiveTab('admin-overview');
-                  }}
-                  className={`sidebar-mode-btn ${sidebarSection === 'admin' ? 'active' : ''}`}
-                >
-                  الإدارة
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={sidebarSection === 'sales'}
-                  onClick={() => {
-                    setSidebarSection('sales');
-                    if (String(activeTab).startsWith('admin-')) setActiveTab('dashboard');
-                  }}
-                  className={`sidebar-mode-btn ${sidebarSection === 'sales' ? 'active' : ''}`}
-                >
-                  السيلز
-                </button>
-              </div>
-            )}
-            {visibleNavGroups.map((group) => (
-              <div key={`${group.section || ''}-${group.label}`} className="nav-group-block">
+            {navGroups.map((group, groupIndex) => (
+              <div key={`${group.section || ''}-${group.label}`} className="mb-1">
+                {/* فاصل قسم كبير فوق مجموعة القوائم (قوائم السيلز / قوائم الادارة) */}
+                {group.section && group.section !== navGroups[groupIndex - 1]?.section && (
+                  <p className="nav-section-title">{group.section}</p>
+                )}
                 <p className="nav-group-title">{group.label}</p>
                 {group.items.map((tab) => (
                   <button
@@ -3625,7 +3585,19 @@ function App() {
             ))}
           </div>
 
-          <div className="sidebar-foot">
+          <div className="sidebar-foot space-y-3">
+            {/* زر الرجوع للإدارة موجود في الشريط العلوي الثابت دائماً —
+                تكراره هنا كان يزحم المساحة بنفس اللون والوظيفة. */}
+            <div className="flex items-center justify-between gap-2">
+              <ModeToggle />
+              <button
+                onClick={() => setSoundEnabled(!soundEnabled)}
+                className="icon-btn !w-9 !h-9"
+                title={soundEnabled ? 'صوت رسائل المحادثة: مفعّل' : 'صوت رسائل المحادثة: مكتوم'}
+              >
+                {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              </button>
+            </div>
             <div className="user-card">
               <span className="avatar">{userInitial}</span>
               <div className="min-w-0 flex-1">
@@ -3635,15 +3607,8 @@ function App() {
                 </span>
               </div>
               <button
-                onClick={() => setSoundEnabled(!soundEnabled)}
-                className="icon-btn !w-8 !h-8 !bg-transparent"
-                title={soundEnabled ? 'صوت رسائل المحادثة: مفعّل' : 'صوت رسائل المحادثة: مكتوم'}
-              >
-                {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-              </button>
-              <button
                 onClick={impersonator ? handleReturnToAdmin : handleLogout}
-                className="icon-btn !w-8 !h-8 !bg-transparent"
+                className="icon-btn !w-9 !h-9 !bg-transparent"
                 title={impersonator ? `الرجوع لحساب: ${impersonator.name}` : 'تسجيل الخروج'}
               >
                 {impersonator ? <Undo2 className="w-4 h-4" /> : <LogOut className="w-4 h-4" />}
@@ -3827,13 +3792,13 @@ function App() {
                 type="button"
                 className="rc-action is-done"
                 onClick={() => {
-                  // نفتح القناة مباشرة في «مصادر الأرقام» — نفس القناة المحفوظة داخلياً
+                  // نفتح تبويب القناة مباشرة في «فريق العمل» — نفس التبويب المحفوظ داخلياً
                   try {
-                    localStorage.setItem(SOURCES_CHANNEL_KEY, tokenNotice.channel);
+                    localStorage.setItem('crm_admin_users_tab', tokenNotice.channel);
                   } catch {
                     /* لا شيء */
                   }
-                  setActiveTab('admin-sources');
+                  setActiveTab('admin-users');
                 }}
               >
                 تجديد التوكن الآن
@@ -3950,64 +3915,37 @@ function App() {
           {activeTab === 'reports' && isSalesView && <ReportsView clients={clients} feedbacks={dailyFeedbacks} reminders={reminders} />}
           {activeTab === 'calculator' && <InstallmentCalculatorView />}
           {activeTab === 'admin-users' && currentUser.role !== 'sales' && <AdminUsersView users={scopedUsers} currentUser={currentUser} onSelect={setSelectedUserFeedback} onAdd={() => setShowAddUser(true)} onEdit={setEditingUser} onDelete={setDeletingUser} onImpersonate={handleImpersonate} />}
-          {/* ===== «نظرة عامة»: أول صفحة للإدارة — اللي محتاج تصرّف + أرقام الفترة + الفريق.
-              بنطاق الحساب: الـ CEO كل الشركة، وقائد الفريق فريقه. */}
-          {activeTab === 'admin-overview' && currentUser.role !== 'sales' && <AdminOverviewView
-            currentUser={currentUser}
+          {/* «الفيدباك اليومي لكل سيلز» = لوحة إدارة: تُبنى على مخزون الشركة الكامل،
+              لا على نطاق الحساب (وإلا تظهر فاضية لحساب إداري محدود النطاق مثل المطوّر). */}
+          {activeTab === 'admin-feedback' && currentUser.role !== 'sales' && <AdminFeedbackView
+            users={(currentUser.role === 'admin' ? users : scopedUsers).filter((u: User) => {
+              // حساب المطوّر إداري في القاعدة لكنه بيشتغل سيلز — لازم يظهر معاهم
+              const role = effectiveRoleOf(u);
+              return role === 'sales' || role === 'supervisor';
+            })}
+            dailyFeedbacks={currentUser.role === 'admin' ? fullFeedbacks : scopedFeedbacks}
+            clients={currentUser.role === 'admin' ? fullClients : scopedClients}
+            // الأرقام الموزّعة اللي لسه ما اتحولتش لعميل تتحسب برضه في «أرقامه»
+            leads={currentUser.role === 'admin' ? fullLeads : assignedLeads}
+            callLogs={currentUser.role === 'admin' ? fullCallLogs : scopedCallLogs}
+            onSelect={setSelectedUserFeedback}
+          />}
+          {/* كل عملاء الشركة: العدد + كارت لكل عميل يفتح التفاصيل كاملة */}
+          {/* لوحات أرقام الكامبين على المخزون الكامل (fullClients/fullLeads): هي لوحة
+              إدارة تدير أرقام الكامبين لكل المندوبين — ما تتأثر بنطاق الحساب.
+              أما لوحة السيلز (عملائي/المراحل/الفيدباك) فتبقى بنطاق الحساب وحده. */}
+          {activeTab === 'admin-clients' && currentUser.role !== 'sales' && <AdminClientsView
+            clients={fullClients}
+            leads={fullLeads}
             users={scopedUsers}
-            leads={scopedLeads}
-            clients={scopedClients}
-            callLogs={scopedCallLogs}
-            feedbacks={scopedFeedbacks}
-            reminders={scopedReminders}
-            attendance={getAttendance()}
             activeForms={activeCampaignForms}
-            onGo={setActiveTab}
-            onOpenUser={setSelectedUserFeedback}
+            onSelect={(c: Client) => setSelectedClient(c)}
+            onCall={(c: Client) => setCallClient(c)}
+            onAdd={() => openAddClient({ source: 'كامبين — إضافة يدوية' })}
+            onImport={() => setShowImportClients(true)}
           />}
-          {activeTab === 'admin-sources' && currentUser.role !== 'sales' && <AdminSourcesView />}
-          {/* ===== «أداء الفريق» = الفيدباك اليومي + التحليلات (كانوا تبويبين بنفس الغرض) =====
-              الفيدباك اليومي لوحة إدارة: تُبنى على مخزون الشركة الكامل، لا على نطاق الحساب
-              (وإلا تظهر فاضية لحساب إداري محدود النطاق مثل المطوّر). */}
-          {activeTab === 'admin-feedback' && currentUser.role !== 'sales' && <SectionTabs
-            label="أداء الفريق"
-            tabs={[{ id: 'daily', label: 'الفيدباك اليومي' }, { id: 'analytics', label: 'التحليلات' }]}
-            render={(id) => id === 'analytics'
-              ? <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />
-              : <AdminFeedbackView
-                users={(currentUser.role === 'admin' ? users : scopedUsers).filter((u: User) => {
-                  // حساب المطوّر إداري في القاعدة لكنه بيشتغل سيلز — لازم يظهر معاهم
-                  const role = effectiveRoleOf(u);
-                  return role === 'sales' || role === 'supervisor';
-                })}
-                dailyFeedbacks={currentUser.role === 'admin' ? fullFeedbacks : scopedFeedbacks}
-                clients={currentUser.role === 'admin' ? fullClients : scopedClients}
-                // الأرقام الموزّعة اللي لسه ما اتحولتش لعميل تتحسب برضه في «أرقامه»
-                leads={currentUser.role === 'admin' ? fullLeads : assignedLeads}
-                callLogs={currentUser.role === 'admin' ? fullCallLogs : scopedCallLogs}
-                onSelect={setSelectedUserFeedback}
-              />}
-          />}
-          {/* ===== «العملاء والفورمات» = عملاء كامبين + شيت الفورمات (نفس أرقام الكامبين) =====
-              على المخزون الكامل (fullClients/fullLeads): لوحة إدارة تدير أرقام الكامبين
-              لكل المندوبين — ما تتأثر بنطاق الحساب. أما لوحة السيلز (عملائي/المراحل/
-              الفيدباك) فتبقى بنطاق الحساب وحده. */}
-          {activeTab === 'admin-clients' && currentUser.role !== 'sales' && <SectionTabs
-            label="العملاء والفورمات"
-            tabs={[{ id: 'clients', label: 'العملاء' }, { id: 'forms', label: 'شيت الفورمات' }]}
-            render={(id) => id === 'forms'
-              ? <AdminFormsSheetView clients={fullClients} leads={fullLeads} />
-              : <AdminClientsView
-                clients={fullClients}
-                leads={fullLeads}
-                users={scopedUsers}
-                activeForms={activeCampaignForms}
-                onSelect={(c: Client) => setSelectedClient(c)}
-                onCall={(c: Client) => setCallClient(c)}
-                onAdd={() => openAddClient({ source: 'كامبين — إضافة يدوية' })}
-                onImport={() => setShowImportClients(true)}
-              />}
-          />}
+          {/* شيت الفورمات: كل فورم لوحده مع تصدير أرقامه وفيدباكه العام */}
+          {activeTab === 'admin-forms' && currentUser.role !== 'sales' && <AdminFormsSheetView clients={fullClients} leads={fullLeads} />}
           {/* الأرقام الجديدة التي وصلت للمندوب من الكامبينات — الكارت يفتح التفاصيل */}
           {activeTab === 'new-leads' && isSalesView && <NewLeadsViewForSales
             assignedLeads={assignedLeads.filter((l: AssignedLead) =>
@@ -4044,12 +3982,13 @@ function App() {
           {/* المحاسب: يسجّل حضوره هو + يشوف حضور كل الحسابات (مش نطاقه بس) */}
           {activeTab === 'admin-attendance' && currentUser.role === 'accountant' && <OwnAttendanceCard currentUser={currentUser} />}
           {activeTab === 'admin-attendance' && currentUser.role !== 'sales' && <AdminAttendanceView users={currentUser.role === 'accountant' ? users : scopedUsers} />}
+          {activeTab === 'admin-analytics' && currentUser.role !== 'sales' && <AdminAnalyticsView clients={scopedClients} users={scopedUsers} feedbacks={scopedFeedbacks} properties={scopedProperties} reminders={scopedReminders} />}
           {activeTab === 'chat' && isSalesView && <SalesChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} readOnly={!!impersonator} />}
           {activeTab === 'admin-chat' && currentUser.role !== 'sales' && <AdminChatView currentUser={currentUser} users={users} messages={messages} onSend={handleSendMessage} onRead={handleMarkRead} onGroupRead={handleMarkGroupRead} />}
           {activeTab === 'admin-settings' && currentUser.role === 'admin' && <AdminSettingsView currentUser={currentUser} />}
         </AnimatePresence>
         </main>
-        {isSalesView && !isAdminActiveTab && (
+        {isSalesView && (
           <MobileTabBar
             activeTab={activeTab}
             onTab={(id: string) => setActiveTab(id as TabType)}
@@ -4728,43 +4667,36 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
     },
   ];
 
-  // ===== قائمة الإدارة: ٤ مجموعات بمهمة واضحة لكل تبويب =====
-  // اتدمج المكرر: «شيت الفورمات» بقى تبويب جوّه «العملاء»، و«التحليلات» جوّه
-  // «أداء الفريق» مع الفيدباك اليومي، وإعداد سحب الكامبين (فيسبوك/إنستجرام) خرج
-  // من «فريق العمل» لـ«مصادر الأرقام». الصفحة الأولى «نظرة عامة».
   const adminGroups: NavGroup[] = [
     {
-      label: 'اليوم',
+      label: 'لوحة الإدارة',
       items: [
-        { id: 'admin-overview', icon: LayoutDashboard, label: 'نظرة عامة' },
+        { id: 'admin-users', icon: UserCheck, label: 'فريق العمل' },
+        { id: 'admin-attendance', icon: Clock, label: 'الحضور' },
+        { id: 'admin-analytics', icon: LineChart, label: 'التحليلات' },
+      ],
+    },
+    {
+      label: 'متابعة العمل',
+      items: [
+        // كل عملاء الشركة وعددهم في تبويب واحد، والكارت يفتح التفاصيل
+        { id: 'admin-clients', icon: Users, label: 'عملاء كامبين' },
+        // شيت الفورمات: كل فورم لوحده وأرقامه وفيدباكه العام في ملف Excel
+        { id: 'admin-forms', icon: FileText, label: 'شيت الفورمات' },
+        { id: 'pipeline', icon: Workflow, label: 'المراحل' },
+        { id: 'calculator', icon: Calculator, label: 'حساب المقدم والأقساط' },
         { id: 'admin-dashboard', icon: BarChart3, label: 'داشبورد' },
         { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
         { id: 'admin-add-form', icon: Upload, label: 'إضافة فورم' },
         { id: 'admin-export', icon: Download, label: 'تصدير الأرقام' },
-      ],
-    },
-    {
-      label: 'العملاء',
-      items: [
-        { id: 'admin-clients', icon: Users, label: 'العملاء والفورمات' },
-        { id: 'pipeline', icon: Workflow, label: 'المراحل' },
-      ],
-    },
-    {
-      label: 'الفريق',
-      items: [
-        { id: 'admin-feedback', icon: LineChart, label: 'أداء الفريق' },
-        { id: 'admin-attendance', icon: Clock, label: 'الحضور' },
+        { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
         { id: 'admin-chat', icon: MessagesSquare, label: 'المحادثات' },
-        { id: 'admin-users', icon: UserCheck, label: 'الحسابات' },
       ],
     },
     {
-      label: 'النظام',
+      label: 'المخزون والنظام',
       items: [
-        { id: 'admin-sources', icon: Megaphone, label: 'مصادر الأرقام' },
         { id: 'properties', icon: Building2, label: 'العقارات' },
-        { id: 'calculator', icon: Calculator, label: 'حاسبة الأقساط' },
         { id: 'admin-settings', icon: Settings, label: 'الإعدادات' },
       ],
     },
@@ -4775,14 +4707,34 @@ function getTabGroups(role: string, developer = false): NavGroup[] {
     return [{ label: 'الحضور', items: [{ id: 'admin-attendance', icon: Clock, label: 'الحضور والانصراف' }] }];
   }
 
-  // قائد الفريق (Team Leader): نفس القائمة على فريقه، من غير إعدادات النظام العامة
+  // قائد الفريق (Team Leader) يرى لوحة الإدارة الخاصة بفريقه بدون أدوات النظام العامة
   if (role === 'supervisor') {
-    return adminGroups.map((group) => ({
-      ...group,
-      items: group.items
-        .filter((item) => item.id !== 'admin-settings' && item.id !== 'admin-add-form' && item.id !== 'admin-export')
-        .map((item) => (item.id === 'admin-users' ? { ...item, label: 'حسابات فريقي' } : item)),
-    }));
+    return [
+      {
+        label: 'لوحة الفريق',
+        items: [
+          { id: 'admin-users', icon: UserCheck, label: 'فريقي' },
+          { id: 'admin-attendance', icon: Clock, label: 'الحضور' },
+          { id: 'admin-analytics', icon: LineChart, label: 'التحليلات' },
+        ],
+      },
+      {
+        label: 'متابعة العمل',
+        items: [
+          { id: 'admin-clients', icon: Users, label: 'عملاء كامبين' },
+          { id: 'admin-forms', icon: FileText, label: 'شيت الفورمات' },
+          { id: 'pipeline', icon: Workflow, label: 'المراحل' },
+          { id: 'calculator', icon: Calculator, label: 'حساب المقدم والأقساط' },
+          { id: 'admin-leads', icon: Share2, label: 'توزيع الأرقام' },
+          { id: 'admin-feedback', icon: ClipboardList, label: 'الفيدباك اليومي' },
+          { id: 'admin-chat', icon: MessagesSquare, label: 'المحادثات' },
+        ],
+      },
+      {
+        label: 'المخزون',
+        items: [{ id: 'properties', icon: Building2, label: 'العقارات' }],
+      },
+    ];
   }
 
   // حساب المطوّر: قوائم السيلز أولاً ثم قوائم الإدارة (بلا تكرار التبويب نفسه)،
@@ -4821,18 +4773,11 @@ function isTabAllowed(role: string, tab: string, developer = false): boolean {
   return inNav || (EXTRA_TABS[role] || []).includes(tab as TabType);
 }
 
-// تبويبات اتدمجت في قسم تاني — آخر صفحة محفوظة بالاسم القديم تفتح القسم الجديد
-const MERGED_TABS: Record<string, TabType> = {
-  'admin-forms': 'admin-clients',
-  'admin-analytics': 'admin-feedback',
-};
-
 function startTabFor(user: User): TabType {
   if (user.role === 'accountant') return 'admin-attendance';
-  const fallback: TabType = user.role === 'sales' || worksAsSales(user) ? 'dashboard' : 'admin-overview';
+  const fallback: TabType = user.role === 'sales' || worksAsSales(user) ? 'dashboard' : 'admin-users';
   try {
-    const stored = localStorage.getItem(tabKeyOf(user.id));
-    const saved = stored ? MERGED_TABS[stored] || stored : stored;
+    const saved = localStorage.getItem(tabKeyOf(user.id));
     if (!saved) return fallback;
     return isTabAllowed(user.role, saved, worksAsSales(user)) ? (saved as TabType) : fallback;
   } catch {
@@ -10052,13 +9997,15 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, leads = [], callLog
     clients.reduce((acc: number, c: Client) => acc + (c.activities || []).filter((a: ClientActivity) => /feedback|call|comment|note/i.test(`${a.type}`)).length, 0);
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2.5">
-        <p className="text-xs font-bold text-[var(--text-muted)]">
-          أعضاء الفريق ({salesUsers.length}) — اضغط على الكارت لفتح أرقامه وتفاصيل الفيدباك
-        </p>
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+          <MessageSquare className="w-6 h-6" />
+          الفيدباك اليومي لكل سيلز
+        </h2>
+        {/* زرار يعرض كل التعليقات وعددهم + زرار تلخيص للـ CEO */}
         <button onClick={() => setShowComments(true)}
-          className="flex items-center gap-2 text-xs font-bold text-amber-300 bg-amber-400/15 border border-amber-400/30 rounded-[var(--r-md)] px-3.5 py-2 hover:bg-amber-400/25 transition-colors">
+          className="flex items-center gap-2 text-xs font-bold text-amber-300 bg-amber-400/15 border border-amber-400/30 rounded-[var(--r-md)] px-3.5 py-2.5 hover:bg-amber-400/25 transition-colors self-start">
           <MessageSquare className="w-4 h-4" /> كل التعليقات
           <span className="bg-amber-400/25 rounded-full px-2 py-0.5">{totalComments}</span>
           <span className="text-[var(--text-muted)] font-normal">+ تلخيص</span>
@@ -10069,8 +10016,10 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, leads = [], callLog
         {showComments && <CommentsBoardModal clients={clients} callLogs={callLogs} onClose={() => setShowComments(false)} />}
       </AnimatePresence>
 
-      <div className="grid gap-3.5 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {salesUsers.map((user: User) => {
+          // نفس مصدر صفحة التفاصيل بالأسفل (بما فيها بطاقات «الفيدباك اليومي»)
+          // حتى تتطابق الأرقام مع ما يفتح بالضغط
           const nums = mergeDailyFeedbackCards(
             salesFeedbackByNumber(user.id, clients, leads, callLogs, user.name),
             user.id,
@@ -10083,73 +10032,81 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, leads = [], callLog
           const userLogs = (callLogs || []).filter((l: CallLog) => l.salesId === user.id);
           const calledToday = userLogs.filter((l: CallLog) => l.result === 'answered' && new Date(l.createdAt).toDateString() === today).length;
           const totalCalls = userLogs.length;
-
+          
           return (
             <motion.div
               key={user.id}
+              whileHover={{ scale: 1.02, y: -5 }}
               onClick={() => onSelect(user)}
-              className="panel p-4 cursor-pointer hover:border-[var(--brand-primary-soft)] transition-colors"
+              className="panel p-5 cursor-pointer"
             >
-              <div className="flex items-center justify-between gap-3 mb-3">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-10 h-10 gradient-primary rounded-full flex items-center justify-center shrink-0">
-                    <span className="text-[var(--text-strong)] font-bold text-sm">{user.name[0]}</span>
-                  </div>
-                  <div className="min-w-0">
-                    <h4 className="font-bold text-[var(--text-strong)] text-sm truncate">{user.name}</h4>
-                    <p className="text-xs text-[var(--text-muted)]">{isDeveloperAccount(user) ? 'سيلز' : user.role === 'admin' ? 'CEO' : effectiveRoleOf(user) === 'supervisor' ? 'مشرف' : 'سيلز'}</p>
-                  </div>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 gradient-primary rounded-full flex items-center justify-center">
+                  <span className="text-[var(--text-strong)] font-bold">{user.name[0]}</span>
                 </div>
-                <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-[var(--brand-primary-softer)] text-[var(--brand)] shrink-0">
-                  {nums.length} رقم ({withFeedback} بفيدباك)
-                </span>
-              </div>
-
-              <div className="grid grid-cols-4 gap-1.5 text-center">
-                <div className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] py-2 px-1">
-                  <p className="text-base font-extrabold text-[var(--text-strong)] tabular-nums">{todayFeedbacks.length}</p>
-                  <p className="text-[10px] text-[var(--text-muted)]">فيدباك اليوم</p>
-                </div>
-                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-[var(--r-sm)] py-2 px-1">
-                  <p className="text-base font-extrabold text-emerald-400 tabular-nums">{calledToday}</p>
-                  <p className="text-[10px] text-[var(--text-muted)]">مكالمات اليوم</p>
-                </div>
-                <div className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] rounded-[var(--r-sm)] py-2 px-1">
-                  <p className="text-base font-extrabold text-[var(--brand)] tabular-nums">{allItems.length}</p>
-                  <p className="text-[10px] text-[var(--text-muted)]">كل الفيدباك</p>
-                </div>
-                <div className="bg-amber-500/10 border border-amber-500/20 rounded-[var(--r-sm)] py-2 px-1">
-                  <p className="text-base font-extrabold text-amber-400 tabular-nums">{totalCalls}</p>
-                  <p className="text-[10px] text-[var(--text-muted)]">كل المكالمات</p>
+                <div>
+                  <h4 className="font-bold text-[var(--text-strong)]">{user.name}</h4>
+                  {/* الرتبة الحقيقية: الإداري الذي يعمل سيلزاً (فريدة) يظهر «CEO»،
+                      وحساب المطوّر يبقى يظهر «سيلز» كما هو. */}
+                  <p className="text-sm text-[var(--text-muted)]">{isDeveloperAccount(user) ? 'سيلز' : user.role === 'admin' ? 'CEO' : effectiveRoleOf(user) === 'supervisor' ? 'مشرف' : 'سيلز'}</p>
                 </div>
               </div>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-[var(--brand-primary-softer)] rounded-[var(--r-sm)] p-3 text-center">
+                  <p className="text-2xl font-bold text-[var(--text-muted)]">{todayFeedbacks.length}</p>
+                  <p className="text-xs text-[var(--text-muted)]">فيدباك اليوم</p>
+                </div>
+                <div className="bg-[var(--brand-primary-softer)] rounded-[var(--r-sm)] p-3 text-center col-span-2">
+                  <p className="text-2xl font-bold text-[var(--brand)]">{nums.length} <span className="text-sm text-[var(--text-muted)] font-normal">رقم — {withFeedback} فيه فيدباك</span></p>
+                  <p className="text-xs text-[var(--text-muted)]">أرقامه المسجّلة</p>
+                </div>
+                <div className="bg-emerald-500/10 rounded-[var(--r-sm)] p-3 text-center">
+                  <p className="text-2xl font-bold text-emerald-400">{calledToday}</p>
+                  <p className="text-xs text-[var(--text-muted)]">مكالمات اليوم</p>
+                </div>
+                <div className="bg-[var(--brand-primary-softer)] rounded-[var(--r-sm)] p-3 text-center">
+                  <p className="text-2xl font-bold text-[var(--brand)]">{allItems.length}</p>
+                  <p className="text-xs text-[var(--text-muted)]">إجمالي الفيدباك</p>
+                </div>
+                <div className="bg-amber-500/10 rounded-[var(--r-sm)] p-3 text-center">
+                  <p className="text-2xl font-bold text-amber-400">{totalCalls}</p>
+                  <p className="text-xs text-[var(--text-muted)]">إجمالي المكالمات</p>
+                </div>
+              </div>
 
+              {/* مراحل عملاء هذا السيلز — نظرة سريعة بجانب الفيدباك */}
               {(() => {
                 const userClients = clients.filter((c: Client) => c.userId === user.id || c.assignedTo === user.id);
                 if (!userClients.length) return null;
                 return (
-                  <div className="mt-2.5 border-t border-[var(--border)] pt-2.5 flex flex-wrap gap-1" onClick={(e) => e.stopPropagation()}>
-                    {Object.entries(STAGE_META).map(([id, meta]) => {
-                      const count = userClients.filter((c: Client) => c.stage === id).length;
-                      if (!count) return null;
-                      return (
-                        <span key={id} className={meta.cls}>
-                          {meta.icon} {meta.label}: {count}
-                        </span>
-                      );
-                    })}
+                  <div className="mt-3 border-t border-[var(--border)] pt-3" onClick={(e) => e.stopPropagation()}>
+                    <p className="text-[11px] text-[var(--text-muted)] mb-1.5">مراحل عملائه ({userClients.length}):</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries(STAGE_META).map(([id, meta]) => {
+                        const count = userClients.filter((c: Client) => c.stage === id).length;
+                        if (!count) return null;
+                        return (
+                          <span key={id} className={meta.cls}>
+                            {meta.icon} {meta.label}: {count}
+                          </span>
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })()}
+              
+              <p className="text-xs text-[var(--text-dim)] mt-3 text-center">اضغط لفتح صفحة الأرقام والفيدباك</p>
             </motion.div>
           );
         })}
       </div>
 
       {salesUsers.length === 0 && (
-        <div className="text-center py-12">
-          <Users className="w-12 h-12 text-[var(--text-dim)] mx-auto mb-3" />
-          <p className="text-sm text-[var(--text-muted)]">لا يوجد سيلز في الفريق</p>
+        <div className="text-center py-16">
+          <Users className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
+          <p className="text-[var(--text-muted)]">لا يوجد سيلز في الفريق</p>
         </div>
       )}
     </div>
@@ -10157,45 +10114,22 @@ function AdminFeedbackView({ users, dailyFeedbacks, clients, leads = [], callLog
 }
 
 // Admin Users View - Simplified
-// ===== «مصادر الأرقام»: سحب أرقام الكامبين من فيسبوك / إنستجرام =====
-// كانت تبويبات جوّه «فريق العمل» — ومالهاش علاقة بالحسابات، فبقت صفحة لوحدها.
-// متاحة للإدارة كلها (CEO و Team Leader): السيرفر بيسمح للرتبتين بنفس الصلاحية
-// (isManagerRole في api/lead-source)، فقائد الفريق يلصق التوكن ويسحب لفريقه.
-// القناة المختارة محفوظة على الجهاز ده بس عشان المدير يرجع لنفس القناة.
-const SOURCES_CHANNEL_KEY = 'crm_admin_sources_channel';
-
-function AdminSourcesView() {
-  const [channel, setChannel] = useState<LeadChannel>(() => {
-    try {
-      return localStorage.getItem(SOURCES_CHANNEL_KEY) === 'instagram' ? 'instagram' : 'facebook';
-    } catch {
-      return 'facebook';
-    }
-  });
-  const pick = (next: LeadChannel) => {
-    setChannel(next);
-    try {
-      localStorage.setItem(SOURCES_CHANNEL_KEY, next);
-    } catch {
-      /* التخزين معطّل — التبديل شغال من غير حفظ */
-    }
-  };
-  return (
-    <div className="space-y-3.5">
-      <div className="seg-bar" role="tablist" aria-label="قناة الكامبين">
-        {([['facebook', 'فيسبوك'], ['instagram', 'إنستجرام']] as Array<[LeadChannel, string]>).map(([id, label]) => (
-          <button key={id} type="button" role="tab" aria-selected={channel === id}
-            onClick={() => pick(id)} className={`seg-item${channel === id ? ' on' : ''}`}>
-            {label}
-          </button>
-        ))}
-      </div>
-      <ChannelSourceCard channel={channel} />
-    </div>
-  );
-}
-
 function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete, onImpersonate }: any) {
+  // التبويبات داخل «فريق العمل»: الحسابات، ثم قناة سحب الأرقام (فيسبوك / إنستجرام).
+  // الإعداد يبقى محفوظاً على هذا الجهاز فقط ليعود المدير لنفس التبويب الذي تركه.
+  const [view, setView] = useState<'accounts' | LeadChannel>(() => {
+    const saved = localStorage.getItem('crm_admin_users_tab');
+    return saved === 'facebook' || saved === 'instagram' ? saved : 'accounts';
+  });
+  const switchView = (next: 'accounts' | LeadChannel) => {
+    setView(next);
+    localStorage.setItem('crm_admin_users_tab', next);
+  };
+  const isAdmin = currentUser?.role === 'admin';
+  // سحب أرقام الكامبين متاح للإدارة كلها: CEO و Team Leader.
+  // السيرفر يسمح للرتبتين بنفس الصلاحية (isManagerRole في api/lead-source)،
+  // فقائد الفريق يستطيع لصق التوكن (الكود) وسحب أرقام كامبين لتوزيعها على فريقه.
+  const canPullCampaigns = currentUser?.role === 'admin' || currentUser?.role === 'supervisor';
   // حماية: لا يُحذف حساب CEO الرئيسي، ولا يستطيع قائد الفريق حذف أو تعديل الـ CEO
   // حساب الإدارة الأساسي (admin) يمكنه حذف حسابات المدراء (supervisor) وحسابات الإدارة الأخرى
   const isMainAdmin = currentUser?.role === 'admin' && currentUser?.username === 'admin';
@@ -10242,47 +10176,71 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
   );
 
   return (
-    <div className="space-y-3.5">
-      <div className="panel p-3 flex flex-col sm:flex-row sm:items-center gap-2.5">
-        <div className="relative flex-1">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="page-intro"><div><h2>فريق العمل</h2></div></div>
+        {view === 'accounts' && (
+          <button onClick={onAdd} className="gradient-primary text-[var(--text-strong)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 glow-primary">
+            <Plus className="w-4 h-4" /> إضافة حساب
+          </button>
+        )}
+      </div>
+
+      {/* التبويبات: الحسابات / كامبين فيسبوك / كامبين إنستجرام — كل قناة معزولة بإعدادها.
+          نفس شكل شريط التبديل المستخدم في كل مكان تاني في النظام. */}
+      {canPullCampaigns && (
+        <div className="seg-bar" role="tablist" aria-label="فريق العمل والكامبينات">
+          {([['accounts', 'الحسابات'], ['facebook', 'فيسبوك'], ['instagram', 'إنستجرام']] as Array<['accounts' | LeadChannel, string]>).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={view === id}
+              onClick={() => switchView(id)}
+              className={`seg-item${view === id ? ' on' : ''}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {view !== 'accounts' ? (
+        <ChannelSourceCard channel={view} />
+      ) : (
+      <>
+      <div className="panel p-3.5">
+        <div className="relative">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
           <input
             value={accountQuery}
             onChange={(e) => setAccountQuery(e.target.value)}
             placeholder="ابحث بالاسم أو اسم المستخدم أو الرقم أو الفريق..."
             aria-label="بحث حسابات الفريق"
-            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2 text-[var(--text-strong)] text-sm"
+            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm"
           />
-        </div>
-        <div className="flex items-center justify-between sm:justify-end gap-2">
-          <span className="text-xs text-[var(--text-muted)] px-1">إجمالي: <b className="text-[var(--text-strong)]">{accountRows.length}</b></span>
-          <button onClick={onAdd} className="btn-primary !py-2 !px-3.5 text-xs">
-            <Plus className="w-4 h-4" /> إضافة حساب
-          </button>
         </div>
       </div>
       {accountRows.length === 0 && (
-        <p className="panel p-6 text-center text-sm text-[var(--text-muted)]">لا يوجد حساب مطابق للبحث</p>
+        <p className="panel p-8 text-center text-sm text-[var(--text-muted)]">لا يوجد حساب مطابق للبحث</p>
       )}
-      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <AnimatePresence>
           {accountRows.map((user: User) => (
             <motion.div
               key={user.id}
               layout
-              initial={{ opacity: 0, y: 12 }}
+              initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9 }}
+              exit={{ opacity: 0, scale: 0.85 }}
+              whileHover={{ scale: 1.02 }}
               onClick={() => onSelect(user)}
-              className={`panel p-4 cursor-pointer hover:border-[var(--brand-primary-soft)] transition-colors ${user.isActive ? '' : 'opacity-60'}`}
+              className={`panel p-5 cursor-pointer ${user.isActive ? '' : 'opacity-60'}`}
             >
               <div className="flex items-center gap-3">
                 <span className={`avatar-plate rank-${displayRoleOf(user)}`} aria-hidden="true">{user.name[0]}</span>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <h4 className="font-bold text-[var(--text-strong)] text-sm truncate">{user.name}</h4>
-                    <span className="text-[11px] text-[var(--text-dim)] truncate" dir="ltr">{user.username ? `@${user.username}` : ''}</span>
-                  </div>
+                  <h4 className="font-bold text-[var(--text-strong)] truncate">{user.name}</h4>
                   <div className="flex items-center gap-1.5 flex-wrap mt-1">
                     <span className={rankClass(displayRoleOf(user))}>{rankLabel(displayRoleOf(user))}</span>
                     {user.team && <span className="chip">فريق: {user.team}</span>}
@@ -10290,42 +10248,47 @@ function AdminUsersView({ users, currentUser, onSelect, onAdd, onEdit, onDelete,
                   </div>
                 </div>
               </div>
-              <div className="flex items-center justify-end gap-1.5 mt-3 pt-2.5 border-t border-[var(--border)]">
-                <button
-                  onClick={(e) => { e.stopPropagation(); onImpersonate?.(user); }}
-                  disabled={!canImpersonate(user)}
-                  title={
-                    canImpersonate(user)
-                      ? `الدخول إلى حساب ${user.name} — ترى النظام بعيونه بدون كلمة مرور`
-                      : user.isActive
-                        ? (user.role === 'admin' ? 'حساب إداري — الدخول متاح لحساب المطوّر (system dev) فقط' : 'غير متاح لهذا الحساب')
-                        : 'الحساب موقوف — لا يمكن الدخول إليه'
-                  }
-                  className="icon-btn !w-8 !h-8 is-brand disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  <LogIn className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); onEdit(user); }}
-                  disabled={!canEdit(user)}
-                  title={canEdit(user) ? 'تعديل الحساب (الاسم / كلمة المرور / الرتبة)' : 'لا يمكن تعديل حساب الـ CEO'}
-                  className="icon-btn !w-8 !h-8 disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  <Edit3 className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); onDelete(user); }}
-                  disabled={!canDelete(user)}
-                  title={canDelete(user) ? 'حذف الحساب' : 'لا يمكن حذف هذا الحساب'}
-                  className="icon-btn !w-8 !h-8 is-danger disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+              <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--border)]">
+                <p className="text-xs text-[var(--text-dim)] truncate" dir="ltr">{user.username ? `@${user.username}` : '—'}</p>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onImpersonate?.(user); }}
+                    disabled={!canImpersonate(user)}
+                    title={
+                      canImpersonate(user)
+                        ? `الدخول إلى حساب ${user.name} — ترى النظام بعيونه بدون كلمة مرور`
+                        : user.isActive
+                          ? (user.role === 'admin' ? 'حساب إداري — الدخول متاح لحساب المطوّر (system dev) فقط' : 'غير متاح لهذا الحساب')
+                          : 'الحساب موقوف — لا يمكن الدخول إليه'
+                    }
+                    className="icon-btn is-brand disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <LogIn />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onEdit(user); }}
+                    disabled={!canEdit(user)}
+                    title={canEdit(user) ? 'تعديل الحساب (الاسم / كلمة المرور / الرتبة)' : 'لا يمكن تعديل حساب الـ CEO'}
+                    className="icon-btn disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <Edit3 />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDelete(user); }}
+                    disabled={!canDelete(user)}
+                    title={canDelete(user) ? 'حذف الحساب' : 'لا يمكن حذف هذا الحساب'}
+                    className="icon-btn is-danger disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <Trash2 />
+                  </button>
+                </div>
               </div>
             </motion.div>
           ))}
         </AnimatePresence>
       </div>
+      </>
+      )}
     </div>
   );
 }
@@ -10764,25 +10727,24 @@ function AdminFormsSheetView({ clients = [], leads = [] }: { clients?: Client[];
   };
 
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-4">
+      <div className="page-intro"><div><h2>شيت الفورمات</h2></div></div>
+
       {forms.length === 0 ? (
-        <div className="panel p-10 text-center">
-          <FileText className="w-12 h-12 text-[var(--text-dim)] mx-auto mb-3" />
-          <p className="text-sm text-[var(--text-muted)]">لا توجد فورمات بعد</p>
+        <div className="text-center py-16">
+          <FileText className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
+          <p className="text-[var(--text-muted)]">لا توجد فورمات بعد</p>
         </div>
       ) : (
         forms.map((form) => (
-          <div key={form.name} className="panel px-4 py-3 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <h3 className="font-bold text-sm text-[var(--text-strong)] break-words">{form.name}</h3>
-              <p className="text-[11px] text-[var(--text-muted)]">{form.rows.length} سجل</p>
-            </div>
+          <div key={form.name} className="panel p-4 flex items-center justify-between gap-3">
+            <h3 className="font-extrabold text-[var(--text-strong)] break-words">{form.name}</h3>
             <button
               type="button"
               onClick={() => exportSheet(form)}
-              className="shrink-0 gradient-primary text-[var(--text-strong)] px-3.5 py-2 rounded-[var(--r-md)] text-xs font-bold inline-flex items-center gap-1.5"
+              className="shrink-0 gradient-primary text-[var(--text-strong)] px-4 py-2.5 rounded-[var(--r-md)] text-sm font-bold inline-flex items-center gap-2"
             >
-              <Download className="w-3.5 h-3.5" /> تصدير Excel
+              <Download className="w-4 h-4" /> تصدير
             </button>
           </div>
         ))
@@ -11236,7 +11198,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
     id === 'all' || (id === 'new' ? clientUnassigned(c) : c.stage === id);
   const leadInStage = (l: AssignedLead, id: 'all' | Client['stage']) =>
     id === 'all' || (id === 'new' ? leadUnassigned(l) : leadStage(l) === id);
-  // الأحدث فوق — وفلاتر الكامبين (الفورم) والسيلز تنطبق على العملاء والأرقام معاً
+  // الأحدث فوق — فلتر السيلز ينطبق على العملاء والأرقام معاً
   const visible = newestFirst(campaignClients.filter(
     (c: Client) => clientInStage(c, stage) && matches(c) && inSales(ownerIdOf(c))
   ));
@@ -11327,6 +11289,23 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
       ? formGroups
       : [formGroups.find((g) => g.name === activeForm) || { name: activeForm, clients: [], leads: [] }];
 
+  // ===== سيلز كل كامبين بعدده =====
+  // «لما أختار كامبين أشوف كل السيلز اللي معاهم أرقام فيها» — شرائح لكل كامبين
+  // باسم السيلز وعدد أرقامه، والضغط عليها يفلتر على أرقامه هو.
+  const salesOfGroup = (formName: string) => {
+    const counts = new Map<string, number>();
+    const add = (id: string) => counts.set(id, (counts.get(id) || 0) + 1);
+    campaignClients
+      .filter((c: Client) => formKeyOf(c) === formName && clientInStage(c, stage) && matches(c))
+      .forEach((c: Client) => add(ownerIdOf(c)));
+    campaignLeads
+      .filter((l: AssignedLead) => formKeyOf(l) === formName && leadInStage(l, stage) && matchesLead(l))
+      .forEach((l: AssignedLead) => add(leadOwnerIdOf(l)));
+    return [...counts.entries()]
+      .map(([id, count]) => ({ id, name: userName(id), count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ar'));
+  };
+
   // ===== الأرقام المتكررة جوه الفورم =====
   // رقم اتسجّل في الفورم دي بس كان موجود أصلاً من فورم تانية — ما اتضافش تاني،
   // بس بيظهر هنا (عشان عدد الفورم يطابق فيسبوك) ومكتوب عليه مكرر وأصله فين ومع مين.
@@ -11358,50 +11337,22 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
     return out;
   };
 
-  // ===== سيلز كل كامبين بعدده =====
-  // «لما أختار كامبين أشوف كل السيلز اللي معاهم أرقام فيها» — سطر شرائح لكل
-  // كامبين: اسم السيلز وعدد أرقامه، والضغط عليه يفلتر على أرقامه هو.
-  const salesOfGroup = (formName: string) => {
-    const counts = new Map<string, number>();
-    const add = (id: string) => counts.set(id, (counts.get(id) || 0) + 1);
-    campaignClients
-      .filter((c: Client) => formKeyOf(c) === formName && clientInStage(c, stage) && matches(c))
-      .forEach((c: Client) => add(ownerIdOf(c)));
-    campaignLeads
-      .filter((l: AssignedLead) => formKeyOf(l) === formName && leadInStage(l, stage) && matchesLead(l))
-      .forEach((l: AssignedLead) => add(leadOwnerIdOf(l)));
-    return [...counts.entries()]
-      .map(([id, count]) => ({ id, name: userName(id), count }))
-      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ar'));
-  };
-
   return (
-    <div className="space-y-3.5">
-      {/* شريط الأرقام السريع + أزرار الإجراءات في سطر منظم */}
-      <div className="panel p-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] rounded-[var(--r-sm)] px-3 py-1.5">
-            <span className="text-[11px] text-[var(--text-muted)]">الإجمالي: </span>
-            <b className="text-sm font-extrabold text-[var(--brand)] tabular-nums" dir="ltr">{totalCampaign}</b>
-          </div>
-          <div className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-3 py-1.5">
-            <span className="text-[11px] text-[var(--text-muted)]">قيد المتابعة: </span>
-            <b className="text-sm font-extrabold text-[var(--text-strong)] tabular-nums" dir="ltr">{inProgress}</b>
-          </div>
-          <div className="bg-emerald-500/10 border border-emerald-500/25 rounded-[var(--r-sm)] px-3 py-1.5">
-            <span className="text-[11px] text-[var(--text-muted)]">تم البيع: </span>
-            <b className="text-sm font-extrabold text-emerald-400 tabular-nums" dir="ltr">{sold}</b>
-          </div>
-          <span className="text-[11px] text-[var(--text-dim)]">
-            ({campaignClients.length} عميل • {campaignLeads.length} بالتوزيع)
-          </span>
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+        <div>
+          <div className="page-intro"><div><h2>عملاء كامبين</h2></div></div>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            أرقام الكامبين مقسومة فورم فورم: كل فورم في قسم لوحده بعدده وحالته.
+            تصدير شيت كل فورم بقى في تبويب «شيت الفورمات». اضغط على الكارت لعرض التفاصيل الكاملة.
+          </p>
         </div>
-
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+          {/* إضافة عميل يدوي + رفع شيت (أي شيت فيه اسم الشخص ورقمه) */}
           <button
             type="button"
             onClick={() => onAdd?.()}
-            className="text-xs font-bold bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--brand-primary-soft)] flex items-center gap-1.5"
+            className="text-[11.5px] font-bold bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--brand-primary-soft)] flex items-center gap-1.5"
             title="إضافة عميل واحد يدوياً"
           >
             <Plus className="w-3.5 h-3.5" /> إضافة عميل
@@ -11409,7 +11360,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
           <button
             type="button"
             onClick={() => onImport?.()}
-            className="text-xs font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)] flex items-center gap-1.5"
+            className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)] flex items-center gap-1.5"
             title="رفع شيت فيه اسم الشخص ورقمه"
           >
             <Upload className="w-3.5 h-3.5" /> رفع شيت
@@ -11417,71 +11368,51 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
           <button
             type="button"
             onClick={() => setCampaignOnly((value) => !value)}
-            className="text-xs font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)]"
+            className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)]"
           >
             {campaignOnly ? 'عرض كل العملاء' : 'كامبين فقط'}
           </button>
         </div>
       </div>
 
-      {/* شريط الفلترة الموحد: الفورم + البحث + المراحل */}
-      <div className="panel p-3.5 space-y-2.5">
-        <div className="flex flex-col md:flex-row gap-2.5">
-          <div className="flex items-center gap-2 md:w-72 shrink-0">
-            <label htmlFor="campaign-form-select" className="text-[11px] font-bold text-[var(--text-dim)] shrink-0">
-              الفورم
-            </label>
-            <select
-              id="campaign-form-select"
-              value={activeForm}
-              onChange={(e) => setForm(e.target.value)}
-              className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-xs font-bold text-[var(--text-strong)]"
-            >
-              <option value="all" className="bg-gray-900">كل الفورمات ({totalCampaign})</option>
-              {formOptions.map((option) => (
-                <option key={option.name} value={option.name} className="bg-gray-900">
-                  {withManualTag(option.name, manualFormNames)} ({option.clients + option.leads + repeatRowsOf(option.name).length})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2 md:w-60 shrink-0">
-            <label htmlFor="campaign-sales-select" className="text-[11px] font-bold text-[var(--text-dim)] shrink-0">
-              السيلز
-            </label>
-            <select
-              id="campaign-sales-select"
-              value={activeSales}
-              onChange={(e) => setSales(e.target.value)}
-              className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-xs font-bold text-[var(--text-strong)]"
-            >
-              <option value="all" className="bg-gray-900">كل السيلز</option>
-              {salesOptions.map((option) => (
-                <option key={option.id || 'none'} value={option.id} className="bg-gray-900">
-                  {option.name} ({option.count})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="relative flex-1">
-            <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="ابحث بالاسم أو الرقم أو اسم الفورم أو المصدر..."
-              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2 text-[var(--text-strong)] text-sm"
-            />
-          </div>
+      {/* العدد الحالي — ثلاث خانات تكفي للنظرة السريعة */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="panel p-4">
+          <p className="text-[11px] text-[var(--text-muted)]">إجمالي أرقام الكامبين</p>
+          <p className="text-3xl font-extrabold text-[var(--brand)] mt-1" dir="ltr">{totalCampaign}</p>
         </div>
+        <div className="panel p-4">
+          <p className="text-[11px] text-[var(--text-muted)]">قيد المتابعة</p>
+          <p className="text-3xl font-extrabold text-[var(--text-strong)] mt-1" dir="ltr">{inProgress}</p>
+        </div>
+        <div className="panel p-4">
+          <p className="text-[11px] text-[var(--text-muted)]">تم البيع</p>
+          <p className="text-3xl font-extrabold text-emerald-400 mt-1" dir="ltr">{sold}</p>
+        </div>
+      </div>
+      <p className="text-[11px] text-[var(--text-dim)]">
+        منهم <b className="text-[var(--text)]">{campaignClients.length}</b> عميل مسجّل، و<b className="text-[var(--text)]">{campaignLeads.length}</b> رقم لسه في «توزيع الأرقام» ما اتحوّلش لعميل.
+      </p>
+      {formNameCount > 0 && (
+        <p className="text-[11px] text-[var(--text-dim)]">منهم {formNameCount} سجل مسجّل باسم الفورم.</p>
+      )}
 
-        <div className="flex items-center gap-1.5 flex-wrap pt-1">
+      <div className="panel p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
+        <div className="relative flex-1">
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="ابحث بالاسم أو الرقم أو اسم الفورم أو المصدر..."
+            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm"
+          />
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
           {chips.map((chip) => (
             <button
               key={chip.id}
               onClick={() => setStage(chip.id)}
-              className={`text-[11.5px] font-bold px-2.5 py-1.5 rounded-[var(--r-sm)] border transition-colors ${
+              className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${
                 stage === chip.id
                   ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
                   : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
@@ -11493,21 +11424,96 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
         </div>
       </div>
 
-      {shownGroups.map((group) => (
-        <section key={group.name} className="space-y-2.5">
-          <div className="panel px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2">
-            <div className="min-w-0 flex items-center gap-2">
-              <Megaphone className="w-4 h-4 text-[var(--brand)] shrink-0" />
-              <h3 className="font-bold text-sm text-[var(--text-strong)] break-words">{withManualTag(group.name, manualFormNames)}</h3>
+      {/* ===== قائمة الفورمات المسندلة =====
+          كل فورم مفعّل في إعدادات السحب يظهر هنا تلقائياً، واختياره يعرض أرقامه
+          وعدده فقط. العدد المكتوب جوه القائمة هو عدد العملاء المسجّلين في الفورم. */}
+      <div className="panel p-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+          <label htmlFor="campaign-form-select" className="text-[11px] font-bold text-[var(--text-dim)] shrink-0">
+            الفورم
+          </label>
+          <select
+            id="campaign-form-select"
+            value={activeForm}
+            onChange={(e) => setForm(e.target.value)}
+            className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
+          >
+            <option value="all" className="bg-gray-900">كل الفورمات ({totalCampaign})</option>
+            {formOptions.map((option) => (
+              <option key={option.name} value={option.name} className="bg-gray-900">
+                {withManualTag(option.name, manualFormNames)} — {option.clients} عميل مسجّل • {option.leads} في التوزيع
+                {repeatRowsOf(option.name).length ? ` • ${repeatRowsOf(option.name).length} متكرر` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* فلتر السيلز: كل سيلز وعدد أرقامه في الكامبين المختارة */}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 mt-2.5">
+          <label htmlFor="campaign-sales-select" className="text-[11px] font-bold text-[var(--text-dim)] shrink-0">
+            السيلز
+          </label>
+          <select
+            id="campaign-sales-select"
+            value={activeSales}
+            onChange={(e) => setSales(e.target.value)}
+            className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
+          >
+            <option value="all" className="bg-gray-900">كل السيلز</option>
+            {salesOptions.map((option) => (
+              <option key={option.id || 'none'} value={option.id} className="bg-gray-900">
+                {option.name} ({option.count})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {activeForm === 'all' ? (
+          <p className="text-[11px] text-[var(--text-dim)] mt-2">
+            اختر فورم من القائمة لعرض أرقامه وعدد العملاء المسجّلين فيه. الفورمات المفعّلة
+            في إعدادات السحب تظهر هنا تلقائياً.
+          </p>
+        ) : (
+          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="rounded-[var(--r-md)] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] px-3 py-2.5">
+              <p className="text-[10.5px] text-[var(--text-muted)]">عملاء مسجّلون</p>
+              <p className="text-2xl font-extrabold text-[var(--brand)] leading-tight" dir="ltr">{selectedCounts?.clients || 0}</p>
             </div>
-            <p className="text-[11px] text-[var(--text-muted)]">
-              <b className="text-[var(--text)]" dir="ltr">{group.clients.length + group.leads.length}</b> رقم
-              {' '}({group.clients.length} عميل • {group.leads.length} بالتوزيع{repeatRowsOf(group.name).length ? ` • ${repeatRowsOf(group.name).length} متكرر` : ''})
-            </p>
+            <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] px-3 py-2.5">
+              <p className="text-[10.5px] text-[var(--text-muted)]">في توزيع الأرقام</p>
+              <p className="text-2xl font-extrabold text-[var(--text-strong)] leading-tight" dir="ltr">{selectedCounts?.leads || 0}</p>
+            </div>
+            <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--warn)] px-3 py-2.5">
+              <p className="text-[10.5px] text-[var(--text-muted)]">متكرر (موجود في فورم تانية)</p>
+              <p className="text-2xl font-extrabold text-[var(--warn)] leading-tight" dir="ltr">{repeatRowsOf(activeForm).length}</p>
+            </div>
+            <div className="rounded-[var(--r-md)] bg-[var(--tint-1)] border border-[var(--border)] px-3 py-2.5">
+              <p className="text-[10.5px] text-[var(--text-muted)]">إجمالي الفورم</p>
+              <p className="text-2xl font-extrabold text-[var(--text-strong)] leading-tight" dir="ltr">{(selectedCounts?.clients || 0) + (selectedCounts?.leads || 0) + repeatRowsOf(activeForm).length}</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {shownGroups.map((group) => (
+        <section key={group.name} className="space-y-3">
+          {/* رأس الفورم: اسمه وعدده */}
+          <div className="panel p-3.5 flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0 flex items-start gap-2">
+              <Megaphone className="w-4 h-4 text-[var(--brand)] mt-0.5 shrink-0" />
+              <div className="min-w-0">
+                <h3 className="font-extrabold text-[var(--text-strong)] break-words">{withManualTag(group.name, manualFormNames)}</h3>
+                <p className="text-[11px] text-[var(--text-muted)]">
+                  <b className="text-[var(--text)]" dir="ltr">{group.clients.length + group.leads.length}</b> رقم •{' '}
+                  {group.clients.length} عميل مسجّل • {group.leads.length} لسه في «توزيع الأرقام»
+                  {repeatRowsOf(group.name).length ? ` • ${repeatRowsOf(group.name).length} متكرر` : ''}
+                </p>
+              </div>
+            </div>
           </div>
 
           {salesOfGroup(group.name).length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 px-0.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[10.5px] font-bold text-[var(--text-dim)]">السيلز اللي معاهم أرقام:</span>
               {salesOfGroup(group.name).map((person) => (
                 <button
@@ -11527,81 +11533,87 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
           )}
 
           {group.clients.length + group.leads.length + repeatRowsOf(group.name).length === 0 && (
-            <div className="rounded-[var(--r-md)] border border-dashed border-[var(--border)] px-4 py-5 text-center">
-              <p className="text-xs text-[var(--text-muted)]">لا توجد أرقام في هذا الفورم بعد</p>
+            <div className="rounded-[var(--r-md)] border border-dashed border-[var(--border)] px-4 py-6 text-center">
+              <p className="text-sm text-[var(--text-muted)]">لا توجد أرقام في هذا الفورم بعد</p>
+              <p className="text-[11px] text-[var(--text-dim)] mt-1">
+                الفورم مفعّل في الإعدادات — أول ما يوصل منه رقم يظهر هنا وفي «توزيع الأرقام» تلقائياً.
+              </p>
             </div>
           )}
 
-          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {group.clients.map((client: Client) => {
               const meta = STAGE_META[client.stage] || STAGE_META.new;
               return (
                 <motion.div
                   key={client.id}
+                  whileHover={{ scale: 1.01 }}
                   onClick={() => onSelect(client)}
-                  className="panel p-3.5 cursor-pointer hover:border-[var(--brand-primary-soft)] transition-colors"
+                  className="panel p-4 cursor-pointer"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <h4 className="font-bold text-sm text-[var(--text-strong)] truncate">{client.name}</h4>
-                      <p className="text-[var(--brand)] text-xs font-bold mt-0.5 tabular-nums" dir="ltr">{client.phone}</p>
-                      <p className="mt-1">
-                        <span className="inline-block max-w-full px-1.5 py-0.5 rounded-full bg-[var(--brand-primary-softer)] text-[var(--brand)] text-[10px] font-bold break-words">
-                          {formNameOf(client) || UNKNOWN_FORM}
-                        </span>
-                      </p>
+                      <h4 className="font-bold text-[var(--text-strong)] truncate">{client.name}</h4>
+                      <p className="text-[var(--brand)] text-sm mt-0.5" dir="ltr">{client.phone}</p>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <span className={meta.cls}>{meta.label}</span>
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); onCall?.(client); }}
-                        className="icon-btn !w-7 !h-7 text-emerald-300"
-                        title="الاتصال بالعميل"
-                      >
-                        <PhoneCall className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                    <span className={meta.cls}>{meta.label}</span>
                   </div>
-                  <div className="mt-2.5 pt-2 border-t border-[var(--border)] flex flex-wrap items-center justify-between gap-1.5 text-[11px] text-[var(--text-muted)]">
-                    <span>السيلز: <b className="text-[var(--text)]">{ownerName(client)}</b></span>
-                    <span className="text-[10.5px] text-[var(--text-dim)]">{formatDateTime(campaignTimeOf(client).at)}</span>
+                  <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1 text-[11.5px] text-[var(--text-muted)]">
+                    <p>السيلز: <span className="text-[var(--text)] font-bold">{ownerName(client)}</span></p>
+                    <p className="truncate">المصدر: {client.source || '—'}</p>
+                    {formNameOf(client) && (
+                      <p className="break-words text-[var(--brand)] font-bold">الفورم: {formNameOf(client)}</p>
+                    )}
+                    <LeadRepeatBadge text={repeatTextOf(repeatMap, client.phone, client.phones || [])} />
+                    <p>
+                      {campaignTimeOf(client).kind === 'campaign' ? 'سُجّل في الكامبين: ' : 'أُضيف في النظام: '}
+                      {formatDateTime(campaignTimeOf(client).at)}
+                    </p>
                   </div>
-                  <LeadRepeatBadge text={repeatTextOf(repeatMap, client.phone, client.phones || [])} />
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onCall?.(client); }}
+                    className="icon-btn !w-9 !h-9 text-emerald-300 mt-3"
+                    title="الاتصال بالعميل"
+                  >
+                    <PhoneCall className="w-4 h-4" />
+                  </button>
                 </motion.div>
               );
             })}
 
+            {/* أرقام الكامبين اللي لسه في «توزيع الأرقام» — تظهر هنا أيضًا */}
             {group.leads.map((lead: AssignedLead) => (
-              <motion.div key={`lead-${lead.id}`} className="panel p-3.5 border border-dashed border-[var(--brand-primary-soft)]">
+              <motion.div key={`lead-${lead.id}`} className="panel p-4 border border-dashed border-[var(--brand-primary-soft)]">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <h4 className="font-bold text-sm text-[var(--text-strong)] truncate">{lead.name || 'بدون اسم'}</h4>
-                    <p className="text-[var(--brand)] text-xs font-bold mt-0.5 tabular-nums" dir="ltr">{lead.phone}</p>
-                    <p className="mt-1">
-                      <span className="inline-block max-w-full px-1.5 py-0.5 rounded-full bg-[var(--brand-primary-softer)] text-[var(--brand)] text-[10px] font-bold break-words">
-                        {formNameOf(lead) || UNKNOWN_FORM}
-                      </span>
-                    </p>
+                    <h4 className="font-bold text-[var(--text-strong)] truncate">{lead.name || 'بدون اسم'}</h4>
+                    <p className="text-[var(--brand)] text-sm mt-0.5" dir="ltr">{lead.phone}</p>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--brand-primary-softer)] text-[var(--brand)] whitespace-nowrap">
-                      {leadStatusLabel(lead.status)}
-                    </span>
-                    <a
-                      href={`tel:${lead.phone}`}
-                      className="icon-btn !w-7 !h-7 text-emerald-300 inline-flex"
-                      title="الاتصال بالرقم"
-                    >
-                      <PhoneCall className="w-3.5 h-3.5" />
-                    </a>
-                  </div>
+                  <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-[var(--brand-primary-softer)] text-[var(--brand)] whitespace-nowrap">
+                    رقم كامبين • {leadStatusLabel(lead.status)}
+                  </span>
                 </div>
-                <div className="mt-2.5 pt-2 border-t border-[var(--border)] flex flex-wrap items-center justify-between gap-1.5 text-[11px] text-[var(--text-muted)]">
-                  <span>السيلز: <b className="text-[var(--text)]">{userName(lead.salesId)}</b></span>
-                  <span className="text-[10.5px] text-[var(--text-dim)]">{formatDateTime(campaignTimeOf(lead).at)}</span>
+                <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1 text-[11.5px] text-[var(--text-muted)]">
+                  <p>السيلز: <span className="text-[var(--text)] font-bold">{userName(lead.salesId)}</span></p>
+                  <p className="truncate">المصدر: {formatLeadDescription(lead.description) || 'رقم كامبين'}</p>
+                  {formNameOf(lead) && (
+                    <p className="break-words text-[var(--brand)] font-bold">الفورم: {withManualTag(formNameOf(lead), manualFormNames)}</p>
+                  )}
+                  <LeadRepeatBadge text={repeatTextOf(repeatMap, lead.phone)} />
+                  <p>
+                    {campaignTimeOf(lead).kind === 'campaign' ? 'سُجّل في الكامبين: ' : 'أُضيف في النظام: '}
+                    {formatDateTime(campaignTimeOf(lead).at)}
+                  </p>
+                  <p className="text-[10.5px] text-[var(--text-dim)]">لسه ما اتحوّلش لسجل عميل — موجود في «توزيع الأرقام».</p>
                 </div>
-                <LeadRepeatBadge text={repeatTextOf(repeatMap, lead.phone)} />
+                <a
+                  href={`tel:${lead.phone}`}
+                  className="icon-btn !w-9 !h-9 text-emerald-300 mt-3 inline-flex"
+                  title="الاتصال بالرقم"
+                >
+                  <PhoneCall className="w-4 h-4" />
+                </a>
               </motion.div>
             ))}
 
@@ -11635,9 +11647,9 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
       ))}
 
       {campaignClients.length === 0 && campaignLeads.length === 0 && (
-        <div className="text-center py-12">
-          <Users className="w-12 h-12 text-[var(--text-dim)] mx-auto mb-3" />
-          <p className="text-sm text-[var(--text-muted)]">
+        <div className="text-center py-16">
+          <Users className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
+          <p className="text-[var(--text-muted)]">
             {clients.length === 0 ? 'لا يوجد عملاء بعد' : 'لا يوجد عملاء كامبين — جرّب «عرض كل العملاء»'}
           </p>
         </div>
@@ -11655,8 +11667,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
   // نفس قاعدة السيرفر حرفياً (isAssignableSales): سيلز/قائد فريق + حساب «مطوّر»
   // إداري يعمل سيلزاً أيضاً. والاشتراط بـ u.isActive كان يُخفي أي حساب قديم
   // لم يُكتب له الحقل أصلاً، فلا يظهر في توزيع الأرقام ولا يقبل رقمأ.
-  const salesUsers = users.filter(isAssignableSales);
-  const assignableIds = new Set(salesUsers.map((u: User) => u.id));
+  const salesUsers = users.filter((u: User) => isAssignableSales(u));
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'unassigned'>('all');
 
@@ -11838,35 +11849,35 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
   };
 
   return (
-    <div className="space-y-3.5">
-      {/* ١) الشريط العلوي الموحد: ملخص الأرقام + أزرار التحكم */}
-      <div className="panel p-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2.5 text-xs">
-          <span className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] rounded-[var(--r-sm)] px-2.5 py-1.5 text-[var(--text-muted)]">
-            إجمالي الأرقام: <b className="text-[var(--brand)] tabular-nums">{formLeads.length}</b>
-          </span>
-          <span className="bg-amber-500/10 border border-amber-400/30 rounded-[var(--r-sm)] px-2.5 py-1.5 text-[var(--text-muted)]">
-            غير مخصصة: <b className="text-amber-300 tabular-nums">{unassignedCount}</b>
-          </span>
-          <span className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-2.5 py-1.5 text-[var(--text-muted)]">
-            السيلز: <b className="text-[var(--text-strong)] tabular-nums">{salesUsers.length}</b>
-          </span>
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <div className="page-intro"><div><h2>توزيع الأرقام</h2></div></div>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            إجمالي الأرقام: <span className="text-[var(--brand)] font-bold">{formLeads.length}</span>
+            {' '}• غير مخصصة: <span className="text-amber-300 font-bold">{unassignedCount}</span>
+            {' '}• عدد السيلز: {salesUsers.length}
+            {activeForm !== 'all' && (
+              <> {' '}• الفورم: <span className="text-[var(--text)] font-bold">{activeForm}</span></>
+            )}
+          </p>
         </div>
-
-        <div className="flex gap-1.5 flex-wrap">
+        <div className="flex gap-2 flex-wrap">
+          {/* حفظ التوزيع: رفع فوري لكل الأجهزة — reassurance إن التعديل اتحفظ فعلاً */}
           <button
             onClick={async () => {
               const ok = await onSave?.();
               setFlash(ok ? 'تم حفظ التوزيع وإرساله لكل الأجهزة ✓' : 'تعذّر الحفظ — اتأكد من الاتصال ثم حاول تاني');
             }}
-            className="bg-emerald-500/10 border border-emerald-400/40 text-emerald-200 px-3.5 py-2 rounded-[var(--r-md)] font-bold text-xs flex items-center gap-1.5 hover:bg-emerald-500/20 transition-colors"
+            className="bg-emerald-500/10 border border-emerald-400/40 text-emerald-200 px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 hover:bg-emerald-500/20 transition-colors"
             title="حفظ التوزيع وإرساله لكل الأجهزة فوراً"
           >
-            <Check className="w-3.5 h-3.5" /> حفظ التوزيع
+            <Check className="w-4 h-4" /> حفظ التوزيع
           </button>
-          <button onClick={() => setShowShare(true)} className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-3.5 py-2 rounded-[var(--r-md)] font-bold text-xs flex items-center gap-1.5 hover:bg-[var(--brand-primary-soft)] transition-colors">
-            <BarChart3 className="w-3.5 h-3.5" /> الأرقام لكل سيلز
+          <button onClick={() => setShowShare(true)} className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--text)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 hover:bg-[var(--brand-primary-soft)] transition-colors">
+            <BarChart3 className="w-4 h-4" /> الأرقام لكل سيلز
           </button>
+          {/* إصلاح أي توزيع قديم: سحب كل الأرقام من عهدة السيلز مرة واحدة */}
           {formLeads.some((l: AssignedLead) => l.salesId) && (
             <button
               onClick={() => {
@@ -11876,24 +11887,25 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                 onAssign?.(ids, '');
                 setFlash(`تم إرجاع ${ids.length} رقم إلى «غير مخصص» ✓`);
               }}
-              className="bg-amber-500/10 border border-amber-400/40 text-amber-200 px-3.5 py-2 rounded-[var(--r-md)] font-bold text-xs flex items-center gap-1.5 hover:bg-amber-500/20 transition-colors"
+              className="bg-amber-500/10 border border-amber-400/40 text-amber-200 px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 hover:bg-amber-500/20 transition-colors"
               title="يسحب كل الأرقام من عهدة السيلز ويرجعها لقائمة غير المخصصة"
             >
-              <Undo2 className="w-3.5 h-3.5" /> إرجاع الكل
+              <Undo2 className="w-4 h-4" /> إرجاع كل الأرقام
             </button>
           )}
-          <button onClick={onImport} className="bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3.5 py-2 rounded-[var(--r-md)] font-bold text-xs flex items-center gap-1.5 hover:bg-[var(--tint-2)] transition-colors">
-            <Upload className="w-3.5 h-3.5" /> استيراد ملف
+          <button onClick={onImport} className="bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] text-[var(--brand)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 hover:bg-[var(--brand-primary-soft)] transition-colors">
+            <Upload className="w-4 h-4" /> استيراد ملف أرقام
           </button>
-          <button onClick={onAdd} className="gradient-primary text-[var(--text-strong)] px-3.5 py-2 rounded-[var(--r-md)] font-bold text-xs flex items-center gap-1.5 glow-primary">
-            <Plus className="w-3.5 h-3.5" /> إضافة رقم
+          <button onClick={onAdd} className="gradient-primary text-[var(--text-strong)] px-5 py-2.5 rounded-[var(--r-md)] font-bold text-sm flex items-center gap-2 glow-primary">
+            <Plus className="w-4 h-4" /> إضافة رقم
           </button>
         </div>
       </div>
 
-      {/* ٢) شريط الفلترة الموحد: الفورم + البحث + الكل/غير مخصصة */}
-      <div className="panel p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
-        <div className="flex items-center gap-2 lg:w-72 shrink-0">
+      {/* ===== الفورم: قائمة مسندلة تعرض كل فورم مفعّل وعدد أرقامه =====
+          اختيار فورم يفتح أرقامه وحدها، والتوزيع بعدها يقع على أرقام هذا الفورم فقط. */}
+      <div className="panel p-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
           <label htmlFor="lead-form-select" className="text-[11px] font-bold text-[var(--text-dim)] shrink-0">
             الفورم
           </label>
@@ -11901,7 +11913,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
             id="lead-form-select"
             value={activeForm}
             onChange={(e) => setForm(e.target.value)}
-            className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-xs font-bold text-[var(--text-strong)]"
+            className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
           >
             <option value="all" className="bg-gray-900">كل الفورمات ({openLeads.length})</option>
             {formOptions.map((option) => (
@@ -11911,310 +11923,379 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
             ))}
           </select>
         </div>
+        <p className="text-[11px] text-[var(--text-dim)] mt-2">
+          {activeForm === 'all'
+            ? 'اختر فورم لتوزيع أرقامه وحدها على السيلز. الفورمات المفعّلة في إعدادات السحب تظهر هنا تلقائياً.'
+            : `كل توزيع من هذه الشاشة يقع على أرقام «${activeForm}» فقط — ${formLeads.length} رقم.`}
+        </p>
+      </div>
 
+      {/* ===== التوزيع التلقائي: اختار الفورم ← اختار السيلز ← أرقامه تتوزع عليهم بس =====
+          اللي مش مختار في القائمة مايصلهوش من الفورم ده ولا رقم، لا الموجود ولا الجديد. */}
+      {salesUsers.length > 0 && (
+        <div className="panel p-3.5">
+          <div className="flex items-start justify-between gap-2 flex-wrap">
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-[var(--text)] flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-[var(--brand)]" /> التوزيع التلقائي
+                <span className="text-[9.5px] font-bold text-[var(--brand)] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] rounded-full px-1.5 py-0.5">جديد</span>
+              </p>
+              <p className="text-[11px] text-[var(--text-dim)] mt-1 leading-relaxed">
+                اختار السيلز اللي أرقام الفورم دي تتوزع عليهم بس، واضغط «تشغيل التوزيع التلقائي» — كل رقم جديد
+                من الفورم هيتوزع عليهم بالدور أوتوماتيك (كل واحد رقم)، واللي مش مختار مايصلهوش منها ولا رقم.
+              </p>
+            </div>
+            <span className={`st-chip ${(activeForm === 'all' ? activeRulesCount > 0 : ruleActive) ? 'st-closed' : 'st-negotiation'} shrink-0`}>
+              {activeForm === 'all' ? `${activeRulesCount} فورم مفعّل` : ruleActive ? 'مفعّل' : 'موقوف'}
+            </span>
+          </div>
+
+          {activeForm === 'all' ? (
+            // بدون تحديد فورم لا نعرف أرقام مين تتوزع — فنعرض الاختيار هنا مباشرة
+            // بدل سطر نص فقط، حتى لا تبدو اللوحة فاضية أو غير موجودة.
+            <div className="mt-3 rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3">
+              <label htmlFor="auto-form-select" className="block text-[11px] font-bold text-[var(--text)] mb-1.5">
+                اختار الفورم اللي أرقامه تتوزع أوتوماتيك
+              </label>
+              <select
+                id="auto-form-select"
+                value=""
+                onChange={(e) => e.target.value && setForm(e.target.value)}
+                className="w-full sm:w-80 bg-[var(--surface)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm text-[var(--text-strong)]"
+              >
+                <option value="" className="bg-gray-900">— اختر الفورم —</option>
+                {formOptions.map((option) => (
+                  <option key={option.name} value={option.name} className="bg-gray-900">
+                    {withManualTag(option.name, manualFormNames)} ({option.count} رقم)
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-[var(--text-dim)] mt-2 leading-relaxed">
+                التوزيع التلقائي يتظبط لكل فورم لوحده — بعد اختيار الفورم هتظهر أسماء السيلز تختار منهم.
+              </p>
+              {/* كل الفورمات وحالة التوزيع التلقائي لكل واحدة — تشغيل/إيقاف بضغطة */}
+              <div className="mt-3 divide-y divide-[var(--border)] rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--surface)]">
+                {formOptions.map((option) => {
+                  const on = isRuleOn(ruleOfForm(option.name));
+                  return (
+                    <div key={option.name} className="flex items-center gap-2 px-3 py-2">
+                      <span className="flex-1 min-w-0 text-xs font-bold text-[var(--text-strong)] break-words">{withManualTag(option.name, manualFormNames)} <span className="font-normal text-[var(--text-muted)]">({option.count} رقم)</span></span>
+                      <span className={`st-chip ${on ? 'st-closed' : 'st-negotiation'} shrink-0`}>{on ? 'مفعّل' : 'موقوف'}</span>
+                      <button type="button" onClick={() => toggleFormRule(option.name)}
+                        className={`shrink-0 text-xs font-bold px-3 py-1.5 rounded-[var(--r-sm)] border ${on ? 'text-amber-300 border-amber-400/40 bg-amber-500/10' : 'text-emerald-300 border-emerald-400/40 bg-emerald-500/10'}`}>
+                        {on ? 'إيقاف' : 'تشغيل'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* ===== كل السيلز (الافتراضي): توزيع بالدور على الجميع ===== */}
+              <label className="mt-3 flex items-start gap-2.5 rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] p-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoAll}
+                  onChange={(e) => setAutoAll(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 accent-[var(--brand)]"
+                />
+                <span className="min-w-0">
+                  <b className="block text-xs text-[var(--text-strong)]">كل السيلز (بالدور)</b>
+                  <span className="block text-[11px] text-[var(--text-dim)] mt-0.5 leading-relaxed">
+                    التوزيع على كل من يستقبل أرقاماً — {salesUsers.length} حساب، ومنهم أي حساب جديد —
+                    بالدور: كل واحد رقم بالترتيب، وأي حساب جديد بيدخل الدور على طول من غير ما يستنى يتساوى بالباقيين.
+                  </span>
+                </span>
+              </label>
+
+              {/* قائمة مسندلة: اختار اسم من هنا ينضم لقائمة المختارين (والضغط عليه تحت يشيله) */}
+              <div className="mt-3">
+                <label htmlFor="auto-sales-select" className="block text-[11px] font-bold text-[var(--text-dim)] mb-1">
+                  أضف سيلز للقائمة
+                </label>
+                <select
+                  id="auto-sales-select"
+                  value=""
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    if (id) setAutoIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+                  }}
+                  className="w-full sm:w-72 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm text-[var(--text-strong)]"
+                >
+                  <option value="" className="bg-gray-900">— اختر السيلز —</option>
+                  {salesUsers
+                    .filter((u: User) => !autoIds.includes(u.id))
+                    .map((u: User) => (
+                      <option key={u.id} value={u.id} className="bg-gray-900">
+                        {u.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {salesUsers.map((u: User) => {
+                  const on = autoIds.includes(u.id);
+                  const mine = formLeads.filter((l: AssignedLead) => l.salesId === u.id).length;
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => toggleAuto(u.id)}
+                      aria-pressed={on}
+                      title={on ? 'مختار — الأرقام الجديدة تتوزع عليه' : 'غير مختار — مايصلهوش من الفورم ده'}
+                      className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11.5px] font-bold transition-colors ${
+                        on
+                          ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
+                          : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
+                      }`}
+                    >
+                      <span className={`w-3.5 h-3.5 rounded-full grid place-items-center border ${on ? 'border-[var(--brand)] bg-[var(--brand)] text-black' : 'border-[var(--border-strong)]'}`}>
+                        {on ? <Check className="w-2.5 h-2.5" /> : null}
+                      </span>
+                      {u.name}
+                      <span className="text-[10px] text-[var(--text-dim)]">{mine}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  onClick={startAuto}
+                  disabled={!effectiveAutoIds.length}
+                  className="gradient-primary text-[var(--text-strong)] px-4 py-2 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                >
+                  <Zap className="w-3.5 h-3.5" /> {ruleActive ? 'تحديث التوزيع التلقائي' : 'تشغيل التوزيع التلقائي'}
+                </button>
+                <button
+                  onClick={() => { setAutoAll(false); setAutoIds(salesUsers.map((u: User) => u.id)); }}
+                  className="bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text-muted)] px-3 py-2 rounded-[var(--r-md)] font-bold text-xs hover:text-[var(--text)] transition-colors"
+                >
+                  تحديد الكل
+                </button>
+                <button
+                  onClick={() => { setAutoAll(false); setAutoIds([]); }}
+                  disabled={!autoIds.length}
+                  className="bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text-muted)] px-3 py-2 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-40 hover:text-[var(--text)] transition-colors"
+                >
+                  مسح الاختيار
+                </button>
+                {ruleActive && (
+                  <button
+                    onClick={stopAuto}
+                    className="bg-amber-500/10 border border-amber-400/40 text-amber-200 px-3 py-2 rounded-[var(--r-md)] font-bold text-xs hover:bg-amber-500/20 transition-colors"
+                  >
+                    إيقاف التلقائي
+                  </button>
+                )}
+              </div>
+
+              <p className="text-[11px] text-[var(--text-dim)] mt-2 leading-relaxed">
+                {!effectiveAutoIds.length
+                  ? 'مفيش سيلز مختار — اختار اسم واحد على الأقل من فوق.'
+                  : autoAll
+                  ? `كل السيلز (${effectiveAutoIds.length}) — الأرقام الجديدة بتتوزع عليهم بالدور، كل واحد رقم.`
+                  : `المختارون: ${autoIds.map((id) => nameOf(id)).join(' • ')} — عندهم ${autoIds.reduce((sum, id) => sum + formLeads.filter((l: AssignedLead) => l.salesId === id).length, 0)} رقم من هذا الفورم.`}
+                {autoNow > 0 && (
+                  <span className="block text-emerald-300 mt-1">
+                    {autoNow} رقم غير مخصص هيتوزع عليهم بالدور دلوقتي ({autoPending} غير مخصص في الفورم).
+                  </span>
+                )}
+                {ruleActive && (
+                  <span className="block text-[var(--brand)] mt-1">
+                    شغّال بالفعل على: {ruleOf!.allSales ? 'كل السيلز' : (ruleOf!.salesIds || []).map((id: string) => nameOf(id)).join(' • ')} — أي رقم جديد من «{activeForm}» يتوزع عليهم بالدور.
+                  </span>
+                )}
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* أدوات التوزيع: بحث + تصفية + توزيع جماعي */}
+      <div className="panel p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث بالاسم أو الرقم أو السيلز..."
-            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2 text-[var(--text-strong)] text-sm" />
+            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm" />
         </div>
-
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => setFilter('all')}
-            className={`text-xs font-bold px-3 py-2 rounded-[var(--r-md)] border transition-colors ${filter === 'all' ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
+            className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${filter === 'all' ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
             الكل ({formLeads.length})
           </button>
           <button onClick={() => setFilter('unassigned')}
-            className={`text-xs font-bold px-3 py-2 rounded-[var(--r-md)] border transition-colors ${filter === 'unassigned' ? 'bg-amber-500/20 border-amber-400/50 text-amber-200' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
+            className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${filter === 'unassigned' ? 'bg-amber-500/20 border-amber-400/50 text-amber-200' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
             غير مخصصة ({unassignedCount})
           </button>
         </div>
       </div>
 
-      {/* ٣) لوحتا التوزيع التلقائي وتوزيع دفعة جنباً إلى جنب بشكل منظم */}
-      {salesUsers.length > 0 && (
-        <div className="grid gap-3 lg:grid-cols-2">
-          {/* التوزيع التلقائي */}
-          <div className="panel p-3.5">
-            <div className="flex items-center justify-between gap-2 mb-2.5">
-              <p className="text-xs font-bold text-[var(--text)] flex items-center gap-1.5">
-                <Zap className="w-3.5 h-3.5 text-[var(--brand)]" /> التوزيع التلقائي للفورمات
-              </p>
-              <span className={`st-chip ${(activeForm === 'all' ? activeRulesCount > 0 : ruleActive) ? 'st-closed' : 'st-negotiation'} shrink-0`}>
-                {activeForm === 'all' ? `${activeRulesCount} فورم مفعّل` : ruleActive ? 'مفعّل' : 'موقوف'}
-              </span>
-            </div>
-
-            {activeForm === 'all' ? (
-              <div className="space-y-2">
-                <select
-                  id="auto-form-select"
-                  value=""
-                  onChange={(e) => e.target.value && setForm(e.target.value)}
-                  className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-xs text-[var(--text-strong)]"
-                >
-                  <option value="" className="bg-gray-900">— اختر فورم لتخصيص مندوبيه —</option>
-                  {formOptions.map((option) => (
-                    <option key={option.name} value={option.name} className="bg-gray-900">
-                      {withManualTag(option.name, manualFormNames)} ({option.count} رقم)
-                    </option>
-                  ))}
-                </select>
-                {formOptions.length > 0 && (
-                  <div className="max-h-40 overflow-y-auto divide-y divide-[var(--border)] rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--surface)]">
-                    {formOptions.map((option) => {
-                      const on = isRuleOn(ruleOfForm(option.name));
-                      return (
-                        <div key={option.name} className="flex items-center gap-2 px-3 py-1.5">
-                          <span className="flex-1 min-w-0 text-xs font-bold text-[var(--text-strong)] truncate">
-                            {withManualTag(option.name, manualFormNames)} <span className="font-normal text-[var(--text-muted)]">({option.count})</span>
-                          </span>
-                          <span className={`st-chip ${on ? 'st-closed' : 'st-negotiation'} shrink-0`}>{on ? 'مفعّل' : 'موقوف'}</span>
-                          <button type="button" onClick={() => toggleFormRule(option.name)}
-                            className={`shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-[var(--r-sm)] border ${on ? 'text-amber-300 border-amber-400/40 bg-amber-500/10' : 'text-emerald-300 border-emerald-400/40 bg-emerald-500/10'}`}>
-                            {on ? 'إيقاف' : 'تشغيل'}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="flex items-center gap-2 rounded-[var(--r-sm)] border border-[var(--border)] bg-[var(--tint-1)] px-2.5 py-1.5 cursor-pointer text-xs font-bold text-[var(--text-strong)]">
-                    <input
-                      type="checkbox"
-                      checked={autoAll}
-                      onChange={(e) => setAutoAll(e.target.checked)}
-                      className="w-3.5 h-3.5 accent-[var(--brand)]"
-                    />
-                    كل السيلز (بالدور) ({salesUsers.length})
-                  </label>
-                  <select
-                    id="auto-sales-select"
-                    value=""
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      if (id) {
-                        setAutoAll(false);
-                        setAutoIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
-                      }
-                    }}
-                    className="flex-1 min-w-[140px] bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-2.5 py-1.5 text-xs text-[var(--text-strong)]"
-                  >
-                    <option value="" className="bg-gray-900">+ تخصيص سيلز محدد</option>
-                    {salesUsers
-                      .filter((u: User) => !autoIds.includes(u.id))
-                      .map((u: User) => (
-                        <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
-                      ))}
-                  </select>
-                </div>
-
-                {!autoAll && (
-                  <div className="flex flex-wrap gap-1">
-                    {salesUsers.map((u: User) => {
-                      const on = autoIds.includes(u.id);
-                      const mine = formLeads.filter((l: AssignedLead) => l.salesId === u.id).length;
-                      return (
-                        <button
-                          key={u.id}
-                          type="button"
-                          onClick={() => toggleAuto(u.id)}
-                          aria-pressed={on}
-                          className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold transition-colors ${
-                            on
-                              ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]'
-                              : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
-                          }`}
-                        >
-                          {u.name} <span className="text-[10px] opacity-75">({mine})</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                  <button
-                    onClick={startAuto}
-                    disabled={!effectiveAutoIds.length}
-                    className="gradient-primary text-[var(--text-strong)] px-3 py-1.5 rounded-[var(--r-sm)] font-bold text-xs disabled:opacity-50 flex items-center gap-1"
-                  >
-                    <Zap className="w-3.5 h-3.5" /> {ruleActive ? 'تحديث التلقائي' : 'تشغيل التلقائي'}
-                  </button>
-                  {ruleActive && (
-                    <button
-                      onClick={stopAuto}
-                      className="bg-amber-500/10 border border-amber-400/40 text-amber-200 px-2.5 py-1.5 rounded-[var(--r-sm)] font-bold text-xs"
-                    >
-                      إيقاف
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* توزيع دفعة سريعة */}
-          <div className="panel p-3.5 flex flex-col justify-between gap-2.5">
-            <div>
-              <p className="text-xs font-bold text-[var(--text)] mb-2">
-                توزيع دفعة سريعة على سيلز ({unassignedCount} رقم غير مخصص متاح):
-              </p>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <select value={batchSalesId} onChange={(e) => setBatchSalesId(e.target.value)}
-                  className="flex-1 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-xs text-[var(--text-strong)]">
-                  <option value="" className="bg-gray-900">— اختر السيلز —</option>
-                  {salesUsers.map((u: User) => (
-                    <option key={u.id} value={u.id} className="bg-gray-900">
-                      {u.name} (عنده {formLeads.filter((l: AssignedLead) => l.salesId === u.id).length})
-                    </option>
-                  ))}
-                </select>
-                <input type="number" min={1} max={visible.length} value={batchCount} dir="ltr"
-                  onChange={(e) => setBatchCount(e.target.value)}
-                  placeholder="العدد"
-                  className="w-full sm:w-24 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-2.5 py-2 text-xs text-[var(--text-strong)] text-center font-bold" />
-                <button
-                  onClick={() => {
-                    const n = Math.floor(Number(batchCount) || 0);
-                    if (!batchSalesId || n < 1) return;
-                    const batch = visible.filter((l: AssignedLead) => !l.salesId).slice(0, n);
-                    if (!batch.length) { setFlash('مفيش أرقام غير مخصصة في المعروض'); return; }
-                    if (batch.length > 1 && !window.confirm(`هيتوزّع ${batch.length} رقم على ${nameOf(batchSalesId)}. متأكد؟`)) return;
-                    onAssign?.(batch.map((l: AssignedLead) => l.id), batchSalesId);
-                    setFlash(`تم توزيع ${batch.length} رقم على ${nameOf(batchSalesId)} ✓`);
-                    setBatchCount('');
-                  }}
-                  disabled={!batchSalesId || !(Number(batchCount) >= 1)}
-                  className="gradient-primary text-[var(--text-strong)] px-4 py-2 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-50 whitespace-nowrap">
-                  توزيع الدفعة
-                </button>
-              </div>
-            </div>
-
-            {/* شريط التحديد الجماعي مدمج داخل نفس الكارت */}
-            {visible.length > 0 && (
-              <div className="pt-2.5 border-t border-[var(--border)] flex flex-wrap items-center justify-between gap-2">
-                <label className="flex items-center gap-2 text-xs font-bold text-[var(--text)] cursor-pointer">
-                  <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} className="w-3.5 h-3.5" />
-                  تحديد كل المعروض ({visible.length})
-                  {selectedIds.length > 0 && <span className="text-[var(--brand)]">• محدد: {selectedIds.length}</span>}
-                </label>
-                {selectedIds.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <select value={selectedSalesId} onChange={(e) => setSelectedSalesId(e.target.value)} className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-2.5 py-1 text-xs text-[var(--text-strong)]">
-                      <option value="" className="bg-gray-900">— وزّع المحدد على —</option>
-                      {salesUsers.map((u: User) => (
-                        <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
-                      ))}
-                    </select>
-                    <button type="button" disabled={!selectedSalesId} onClick={() => assignSelected(selectedSalesId)}
-                      className="gradient-primary text-[var(--text-strong)] px-3 py-1 rounded-[var(--r-sm)] font-bold text-xs disabled:opacity-50">
-                      توزيع المحدد ({selectedIds.length})
-                    </button>
-                    <button type="button" onClick={() => assignSelected('')}
-                      className="text-[11px] font-bold text-amber-300 border border-amber-400/40 bg-amber-500/10 px-2.5 py-1 rounded-[var(--r-sm)]">
-                      إزالة المحدد من السيلز
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
+      {/* لا يوجد مندوبون بعد: نوضّح السبب بدل قائمة فارغة صامتة */}
       {salesUsers.length === 0 && (
-        <div className="rounded-[var(--r-md)] border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
-          لا يوجد أي حساب سيلز بعد — أنشئ حساب سيلز من تبويب «الحسابات» لتفعيل التوزيع.
+        <div className="rounded-[var(--r-md)] border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 leading-relaxed">
+           لا يوجد أي حساب سيلز (Sales Agent) بعد، ولهذا لا يمكن توزيع أي رقم على أحد.
+          أنشئ حساب سيلز من تبويب «فريق العمل» ← «إضافة حساب»، واربطه بالفريق إن أردت، ثم عُد إلى هنا.
         </div>
       )}
 
       {flash && (
-        <div className="rounded-[var(--r-md)] border border-emerald-400/40 bg-emerald-500/10 px-4 py-2.5 text-xs font-bold text-emerald-200">
+        <div className="rounded-[var(--r-md)] border border-emerald-400/40 bg-emerald-500/10 px-4 py-3 text-xs font-bold text-emerald-200">
           {flash}
         </div>
       )}
 
-      {/* ٤) قائمة الأرقام: صفوف مضغوطة ومنظمة */}
-      <div className="space-y-2">
+      {/* توزيع دفعة: اختر السيلز من القائمة ← اكتب عدد الأرقام ← توزيع فوري */}
+      {salesUsers.length > 0 && (
+        <div className="panel p-3.5">
+          <p className="text-xs font-bold text-[var(--text)] mb-2.5">توزيع دفعة على سيلز ({visible.length} رقم معروض):</p>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <select value={batchSalesId} onChange={(e) => setBatchSalesId(e.target.value)}
+              className="flex-1 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm text-[var(--text-strong)]">
+              <option value="" className="bg-gray-900">— اختر السيلز —</option>
+              {salesUsers.map((u: User) => (
+                <option key={u.id} value={u.id} className="bg-gray-900">
+                  {u.name} (عنده {formLeads.filter((l: AssignedLead) => l.salesId === u.id).length} من هذا الفورم)
+                </option>
+              ))}
+            </select>
+            <input type="number" min={1} max={visible.length} value={batchCount} dir="ltr"
+              onChange={(e) => setBatchCount(e.target.value)}
+              placeholder="عدد الأرقام"
+              className="w-full sm:w-32 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm text-[var(--text-strong)] text-center font-bold" />
+            <button
+              onClick={() => {
+                const n = Math.floor(Number(batchCount) || 0);
+                if (!batchSalesId || n < 1) return;
+                // الدفعة من الأرقام غير المخصصة بس — كانت بتاخد أرقام سيلز تاني (اتسحبت أرقام Salma لـ Hassan)
+                const batch = visible.filter((l: AssignedLead) => !l.salesId).slice(0, n);
+                if (!batch.length) { setFlash('مفيش أرقام غير مخصصة في المعروض'); return; }
+                if (batch.length > 1 && !window.confirm(`هيتوزّع ${batch.length} رقم على ${nameOf(batchSalesId)}. متأكد؟`)) return;
+                onAssign?.(batch.map((l: AssignedLead) => l.id), batchSalesId);
+                setFlash(`تم توزيع ${batch.length} رقم على ${nameOf(batchSalesId)} ✓`);
+                setBatchCount('');
+              }}
+              disabled={!batchSalesId || !(Number(batchCount) >= 1)}
+              className="gradient-primary text-[var(--text-strong)] px-6 py-2.5 rounded-[var(--r-md)] font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+              توزيع
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* شريط التحديد: تحديد الكل ← اختار السيلز ← توزيع المحدد */}
+      {visible.length > 0 && (
+        <div className="panel p-3 flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-xs font-bold text-[var(--text)] cursor-pointer">
+            <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} className="w-4 h-4" />
+            تحديد كل المعروض ({visible.length})
+          </label>
+          <span className="text-xs text-[var(--text-muted)]">محدد: <b className="text-[var(--text-strong)]">{selectedIds.length}</b></span>
+          {selectedIds.length > 0 && (
+            <>
+              <select value={selectedSalesId} onChange={(e) => setSelectedSalesId(e.target.value)} className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-sm text-[var(--text-strong)]">
+                <option value="" className="bg-gray-900">— وزّع المحدد على —</option>
+                {salesUsers.map((u: User) => (
+                  <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
+                ))}
+              </select>
+              <button type="button" disabled={!selectedSalesId} onClick={() => assignSelected(selectedSalesId)}
+                className="gradient-primary text-[var(--text-strong)] px-4 py-2 rounded-[var(--r-md)] font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                توزيع المحدد ({selectedIds.length})
+              </button>
+              <button type="button" onClick={() => assignSelected('')}
+                className="text-xs font-bold text-amber-300 border border-amber-400/40 bg-amber-500/10 px-3 py-2 rounded-[var(--r-sm)] hover:bg-amber-500/20">
+                إزالة المحدد من السيلز
+              </button>
+              <button type="button" onClick={() => setSelected(new Set())} className="text-xs text-[var(--text-muted)] underline">إلغاء التحديد</button>
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="space-y-3">
         {visible.map((lead: AssignedLead) => {
           const owner = salesUsers.find((u: User) => u.id === lead.salesId);
           return (
-            <div
-              key={lead.id}
-              className={`panel px-3.5 py-2.5 flex flex-col md:flex-row md:items-center justify-between gap-2.5 ${selected.has(lead.id) ? 'ring-2 ring-[var(--brand)]' : ''}`}
-            >
-              <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                <input type="checkbox" checked={selected.has(lead.id)} onChange={() => toggleSelected(lead.id)}
-                  className="w-4 h-4 mt-1 shrink-0 cursor-pointer" title="تحديد الرقم للتوزيع مع غيره" />
-                <div className="min-w-0 flex-1">
+            <motion.div key={lead.id} whileHover={{ scale: 1.005 }}
+              className={`panel p-4 ${selected.has(lead.id) ? 'ring-2 ring-[var(--brand)]' : ''}`}>
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h4 className="font-bold text-[var(--text-strong)] text-sm truncate">{lead.name}</h4>
-                    <span className="text-[var(--brand)] text-xs font-bold tabular-nums" dir="ltr">{lead.phone}</span>
+                    <input type="checkbox" checked={selected.has(lead.id)} onChange={() => toggleSelected(lead.id)}
+                      className="w-4 h-4 shrink-0 cursor-pointer" title="تحديد الرقم للتوزيع مع غيره" />
+                    <h4 className="font-bold text-[var(--text-strong)] text-base">{lead.name}</h4>
                     <span className={`st-chip ${lead.status === 'new' ? 'st-new' : lead.status === 'viewed' ? 'st-meeting' : lead.status === 'contacted' ? 'st-contacted' : 'st-closed'}`}>
-                      {lead.status === 'new' ? 'جديد' : lead.status === 'viewed' ? 'تم العرض' : lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
+                      {lead.status === 'new' ? 'رقم جديد' : lead.status === 'viewed' ? 'تم العرض' : lead.status === 'contacted' ? 'تم التواصل' : 'مغلق'}
                     </span>
+                    {!owner && <span className="st-chip st-negotiation">غير مخصص</span>}
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap mt-1">
+                    <p className="text-[var(--brand)]" dir="ltr">{lead.phone}</p>
                     <FormNameChip record={lead} />
                     <CampaignTimeChip at={campaignTimeOf(lead).at} kind={campaignTimeOf(lead).kind} />
                     <LeadRepeatBadge text={repeatTextOf(repeatMap, lead.phone)} />
                   </div>
-                  {lead.description && (
-                    <p className="text-[11px] text-[var(--text-muted)] mt-1 truncate">{formatLeadDescription(lead.description)}</p>
-                  )}
+                  {lead.description && <p className="text-[11.5px] text-[var(--text-muted)] mt-1.5">{formatLeadDescription(lead.description)}</p>}
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <a href={`tel:${lead.phone}`} className="icon-btn !w-9 !h-9 text-emerald-300" title="الاتصال بالعميل"><PhoneCall className="w-4 h-4" /></a>
+                  <button onClick={() => onDelete(lead.id)} className="icon-btn !w-9 !h-9 text-red-400" title="حذف الرقم نهائياً من النظام">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[var(--border)]">
+              {/* تخصيص الرقم لمندوب — هذا هو التوزيع المباشر */}
+              <div className="mt-3 pt-3 border-t border-[var(--border)] flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-[var(--text-muted)]">مخصص لـ:</span>
                 <select
                   value={lead.salesId || ''}
                   onChange={(e) => onAssign?.([lead.id], e.target.value)}
-                  className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-2.5 py-1.5 text-xs font-bold text-[var(--text-strong)] min-w-[130px]"
-                >
+                  className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-sm)] px-2.5 py-1.5 text-xs text-[var(--text-strong)]">
                   <option value="" className="bg-gray-900">— غير مخصص —</option>
                   {salesUsers.map((u: User) => (
                     <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>
                   ))}
                 </select>
                 {owner && (
-                  <button
-                    onClick={() => onAssign?.([lead.id], '')}
-                    className="text-[11px] font-bold text-amber-300 border border-amber-400/40 bg-amber-500/10 px-2 py-1 rounded-[var(--r-sm)] hover:bg-amber-500/20"
-                    title="سحب الرقم من السيلز"
-                  >
-                    سحب
-                  </button>
+                  <>
+                    <span className="st-chip st-closed">✓ مع {owner.name}</span>
+                    {/* سحب الرقم من السيلز بلا حذفه: يرجع «غير مخصص» ويظهر في التصفية */}
+                    <button
+                      onClick={() => onAssign?.([lead.id], '')}
+                      className="text-[11px] font-bold text-amber-300 border border-amber-400/40 bg-amber-500/10 px-2.5 py-1.5 rounded-[var(--r-sm)] hover:bg-amber-500/20 transition-colors"
+                      title="يسحب الرقم من عهدة السيلز ويرجعه لقائمة غير المخصصة"
+                    >
+                      إزالة من السيلز
+                    </button>
+                  </>
                 )}
-                <a href={`tel:${lead.phone}`} className="icon-btn !w-8 !h-8 text-emerald-300" title="الاتصال بالعميل">
-                  <PhoneCall className="w-3.5 h-3.5" />
-                </a>
-                <button onClick={() => onDelete(lead.id)} className="icon-btn !w-8 !h-8 text-red-400" title="حذف الرقم نهائياً من النظام">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
               </div>
-            </div>
+            </motion.div>
           );
         })}
       </div>
 
       {assignedLeads.length === 0 && (
-        <div className="text-center py-12">
-          <UserPlus className="w-12 h-12 text-[var(--text-dim)] mx-auto mb-3" />
-          <p className="text-sm text-[var(--text-muted)]">لا يوجد أرقام موزعة</p>
+        <div className="text-center py-16">
+          <UserPlus className="w-16 h-16 text-[var(--text-dim)] mx-auto mb-4" />
+          <p className="text-[var(--text-muted)]">لا يوجد أرقام موزعة</p>
         </div>
       )}
       {activeForm !== 'all' && formLeads.length === 0 && assignedLeads.length > 0 && (
-        <p className="text-center text-sm text-[var(--text-dim)] py-6">
-          لا توجد أرقام في هذا الفورم بعد
+        <p className="text-center text-sm text-[var(--text-dim)] py-8">
+          لا توجد أرقام في هذا الفورم بعد — أول ما يوصل منه رقم يظهر هنا تلقائياً
         </p>
       )}
       {formLeads.length > 0 && visible.length === 0 && (
-        <p className="text-center text-sm text-[var(--text-dim)] py-6">لا نتائج مطابقة للبحث أو التصفية</p>
+        <p className="text-center text-sm text-[var(--text-dim)] py-8">لا نتائج مطابقة للبحث أو التصفية</p>
       )}
 
+      {/* حصة كل سيلز: كل السيلز وعدد الأرقام لكل واحد، والضغط على الاسم يفتح أرقامه */}
       {showShare && <SalesShareModal leads={formLeads} users={users} onClose={() => setShowShare(false)} onDeleteMany={onDeleteMany} />}
     </div>
   );
@@ -12311,27 +12392,25 @@ function AdminAttendanceView({ users }: any) {
     ) : null;
 
   return (
-    <div className="space-y-4">
-      <div className="panel p-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2.5 text-xs">
-          <span className="font-bold text-[var(--text-strong)] flex items-center gap-1.5">
-            <Clock className="w-4 h-4 text-[var(--brand)]" /> {formatDayLabel(today)}
-          </span>
-          <span className="bg-emerald-500/10 border border-emerald-500/25 rounded-[var(--r-sm)] px-2.5 py-1 text-[var(--text-muted)]">
-            حضر اليوم: <b className="text-emerald-400">{checkedToday}</b> / {persons.length}
-          </span>
-          <span className="bg-amber-500/10 border border-amber-500/25 rounded-[var(--r-sm)] px-2.5 py-1 text-[var(--text-muted)]">
-            انصرف: <b className="text-amber-400">{outToday}</b>
-          </span>
+    <div className="space-y-6">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-bold gradient-text flex items-center gap-2">
+            <Clock className="w-5 h-5 text-[var(--brand)]" /> الحضور والانصراف
+          </h2>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            {formatDayLabel(today)} — حضر اليوم: <span className="text-emerald-400 font-bold">{checkedToday}</span> من {persons.length}
+            {' '}• انصرف: <span className="text-amber-400 font-bold">{outToday}</span>
+          </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2">
           <div className="relative">
             <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث باسم السيلز..."
-              className="w-full sm:w-52 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2 text-[var(--text-strong)] text-xs" />
+              className="w-full sm:w-56 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm" />
           </div>
           <select value={period} onChange={(e) => setPeriod(e.target.value as any)}
-            className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-[var(--text-strong)] text-xs font-bold">
+            className="bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-2.5 text-[var(--text-strong)] text-sm">
             <option value="today" className="bg-gray-900">اليوم</option>
             <option value="week" className="bg-gray-900">آخر ٧ أيام</option>
             <option value="month" className="bg-gray-900">آخر ٣٠ يوم</option>
@@ -12343,86 +12422,104 @@ function AdminAttendanceView({ users }: any) {
       <AttendanceMonthlyReport users={users} />
 
       {persons.length === 0 && (
-        <div className="panel p-8 text-center">
-          <Users className="w-12 h-12 text-[var(--text-dim)] mx-auto mb-2" />
-          <p className="text-sm text-[var(--text-muted)]">لا يوجد أعضاء مطابقون للبحث</p>
+        <div className="panel p-10 text-center">
+          <Users className="w-14 h-14 text-[var(--text-dim)] mx-auto mb-3" />
+          <p className="text-[var(--text-muted)]">لا يوجد أعضاء مطابقون للبحث</p>
         </div>
       )}
 
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="space-y-4">
         {persons.map(({ user, records, todayRecord, total }: any) => {
           const hasToday = !!todayRecord;
           const hasOut = !!todayRecord?.checkOutAt;
           const isOpen = expandedId === user.id;
           return (
-            <div key={user.id} className="panel p-4">
-              <div className="flex items-center justify-between gap-2.5">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-                    hasOut ? 'bg-[var(--warn)]' : hasToday ? 'gradient-success' : 'bg-[var(--tint-2)]'
-                  }`}>
-                    <span className={`font-bold text-sm ${hasToday ? 'text-[var(--text-strong)]' : 'text-[var(--text-muted)]'}`}>{user.name[0]}</span>
-                  </div>
-                  <div className="min-w-0">
-                    <h4 className="font-bold text-sm text-[var(--text-strong)] truncate">{user.name}</h4>
-                    <p className="text-[11px] text-[var(--text-muted)]">
-                      {user.role === 'supervisor' ? 'مشرف' : 'سيلز'} • {total} يوم حضور
-                    </p>
-                  </div>
+            <motion.div
+              key={user.id}
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="panel p-5"
+            >
+              <div className="flex flex-wrap items-center gap-3">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${
+                  hasOut ? 'bg-[var(--warn)]' : hasToday ? 'gradient-success' : 'bg-[var(--tint-2)]'
+                }`}>
+                  <span className={`font-bold ${hasToday ? 'text-[var(--text-strong)]' : 'text-[var(--text-muted)]'}`}>{user.name[0]}</span>
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  {(todayRecord?.flags?.length || 0) > 0 && (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-red-500/20 text-red-300 border border-red-500/40"
-                      title={todayRecord?.flags?.join(' • ')}>
-                      <ShieldAlert className="w-3 h-3 inline-block" /> مشكوك ({todayRecord?.flags?.length})
-                    </span>
-                  )}
-                  <span className={`text-[11px] px-2.5 py-1 rounded-full font-bold whitespace-nowrap ${
-                    hasOut ? 'bg-amber-500/20 text-amber-400' : hasToday ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-500/20 text-[var(--text-muted)]'
-                  }`}>
-                    {hasOut ? 'انصرف' : hasToday ? 'حاضر' : 'غائب'}
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-bold text-[var(--text-strong)] truncate">{user.name}</h4>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    {user.role === 'supervisor' ? 'مشرف' : 'سيلز'} • إجمالي أيام الحضور: {total}
+                  </p>
+                </div>
+                {/* تحذير التلاعب في الموقع — مؤشرات Fake GPS / VPN */}
+                {(todayRecord?.flags?.length || 0) > 0 && (
+                  <span className="text-[10.5px] px-2.5 py-1 rounded-full font-bold whitespace-nowrap bg-red-500/20 text-red-300 border border-red-500/40"
+                    title={todayRecord?.flags?.join(' • ')}>
+                    <ShieldAlert className="w-3 h-3 inline-block" /> مشكوك في الموقع ({todayRecord?.flags?.length})
                   </span>
-                </div>
+                )}
+                <span className={`text-xs px-3 py-1.5 rounded-full font-bold whitespace-nowrap ${
+                  hasOut ? 'bg-amber-500/20 text-amber-400' : hasToday ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-500/20 text-[var(--text-muted)]'
+                }`}>
+                  {hasOut ? '🚪 انصرف' : hasToday ? ' حاضر' : 'لم يسجل بعد'}
+                </span>
               </div>
 
               {(todayRecord?.flags?.length || 0) > 0 && (
-                <div className="mt-2.5 rounded-[var(--r-sm)] bg-red-500/10 border border-red-500/25 px-3 py-2 text-[11px] text-red-200/90">
-                  {todayRecord.flags.join(' • ')}
+                <div className="mt-3 rounded-[var(--r-md)] bg-red-500/10 border border-red-500/25 px-3.5 py-2.5">
+                  <p className="text-[11.5px] font-bold text-red-300 flex items-center gap-1.5">
+                    <ShieldAlert className="w-3.5 h-3.5" /> مؤشرات اشتباه في موقع الحضور:
+                  </p>
+                  <ul className="list-disc pr-5 mt-1 space-y-0.5">
+                    {todayRecord.flags.map((f: string) => (
+                      <li key={f} className="text-[11px] text-red-200/90">{f}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <div className={`rounded-[var(--r-sm)] px-3 py-2 border ${hasToday ? 'bg-emerald-500/10 border-emerald-500/25' : 'bg-[var(--tint-1)] border-[var(--border)]'}`}>
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-[10.5px] text-[var(--text-muted)]">الحضور</span>
-                    {todayRecord && locationButton(todayRecord.latitude, todayRecord.longitude, todayRecord.accuracy, 'الموقع')}
-                  </div>
-                  <p className="text-xs font-bold text-[var(--text-strong)] mt-1">
-                    {todayRecord ? formatTime(todayRecord.checkInAt) : '—'}
-                  </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className={`rounded-[var(--r-md)] px-4 py-3 border ${hasToday ? 'bg-emerald-500/10 border-emerald-500/25' : 'bg-[var(--tint-1)] border-[var(--border)]'}`}>
+                  <p className="text-xs text-[var(--text-muted)] mb-1">الحضور</p>
+                  {todayRecord ? (
+                    <>
+                      <p className="text-sm text-[var(--text-strong)] font-bold">حضر الساعة {formatTime(todayRecord.checkInAt)}</p>
+                      <div className="mt-2">{locationButton(todayRecord.latitude, todayRecord.longitude, todayRecord.accuracy)}</div>
+                    </>
+                  ) : (
+                    <p className="text-sm text-[var(--text-dim)]">لا يوجد حضور اليوم</p>
+                  )}
                 </div>
 
-                <div className={`rounded-[var(--r-sm)] px-3 py-2 border ${hasOut ? 'bg-amber-500/10 border-amber-500/25' : 'bg-[var(--tint-1)] border-[var(--border)]'}`}>
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-[10.5px] text-[var(--text-muted)]">الانصراف</span>
-                    {todayRecord?.checkOutAt && locationButton(todayRecord.checkOutLatitude, todayRecord.checkOutLongitude, todayRecord.checkOutAccuracy, 'الموقع')}
-                  </div>
-                  <p className="text-xs font-bold text-[var(--text-strong)] mt-1">
-                    {todayRecord?.checkOutAt
-                      ? `${formatTime(todayRecord.checkOutAt)}${workedMinutes(todayRecord) > 0 ? ` (${formatDuration(workedMinutes(todayRecord))})` : ''}`
-                      : '—'}
-                  </p>
+                <div className={`rounded-[var(--r-md)] px-4 py-3 border ${hasOut ? 'bg-amber-500/10 border-amber-500/25' : 'bg-[var(--tint-1)] border-[var(--border)]'}`}>
+                  <p className="text-xs text-[var(--text-muted)] mb-1">الانصراف</p>
+                  {todayRecord?.checkOutAt ? (
+                    <>
+                      <p className="text-sm text-[var(--text-strong)] font-bold">
+                        انصرف الساعة {formatTime(todayRecord.checkOutAt)}
+                        {workedMinutes(todayRecord) > 0 && (
+                          <span className="text-[var(--text-muted)] font-normal text-xs"> • {formatDuration(workedMinutes(todayRecord))}</span>
+                        )}
+                      </p>
+                      <div className="mt-2">
+                        {locationButton(todayRecord.checkOutLatitude, todayRecord.checkOutLongitude, todayRecord.checkOutAccuracy)}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-sm text-[var(--text-dim)]">{hasToday ? 'لم يسجل انصرافه بعد' : 'لا يوجد انصراف اليوم'}</p>
+                  )}
                 </div>
               </div>
 
               {records.length > 0 && (
-                <div className="mt-2.5 pt-2.5 border-t border-[var(--border)]">
+                <div className="mt-4 pt-4 border-t border-[var(--border)]">
                   <button
                     onClick={() => setExpandedId(isOpen ? null : user.id)}
-                    className="text-xs font-bold text-[var(--text-muted)] flex items-center gap-1.5 hover:text-[var(--text)] transition-colors"
+                    className="text-sm font-bold text-[var(--text)] flex items-center gap-2 hover:text-[var(--text)] transition-colors"
                   >
-                    <Calendar className="w-3.5 h-3.5" />
-                    {isOpen ? 'إخفاء السجل' : `السجل (${records.length})`}
+                    <Calendar className="w-4 h-4" />
+                    {isOpen ? 'إخفاء' : 'عرض'} سجل هذا الحساب ({records.length})
                   </button>
                   <AnimatePresence>
                     {isOpen && (
@@ -12432,20 +12529,25 @@ function AdminAttendanceView({ users }: any) {
                         exit={{ opacity: 0, height: 0 }}
                         className="overflow-hidden"
                       >
-                        <div className="space-y-1.5 mt-2 max-h-48 overflow-y-auto">
+                        <div className="space-y-2 mt-3">
                           {records.map((rec: Attendance) => (
-                            <div key={rec.id} className="flex flex-wrap items-center justify-between gap-2 bg-[var(--tint-1)] rounded-[var(--r-sm)] px-3 py-2 text-xs">
-                              <span className="text-[var(--text)] font-bold">{formatDayLabel(rec.date)}</span>
+                            <div key={rec.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[var(--tint-1)] rounded-[var(--r-md)] px-4 py-3">
+                              <span className="text-sm text-[var(--text)]">{formatDayLabel(rec.date)}</span>
                               <div className="flex flex-wrap items-center gap-2">
-                                <span className="text-emerald-400">حضور {formatTime(rec.checkInAt)}</span>
+                                <span className="text-sm font-bold text-emerald-400">حضور {formatTime(rec.checkInAt)}</span>
                                 {locationButton(rec.latitude, rec.longitude, rec.accuracy, '')}
+                                {(rec.flags?.length || 0) > 0 && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 font-bold" title={rec.flags?.join(' • ')}>
+                                    مشكوك ({rec.flags?.length})
+                                  </span>
+                                )}
                                 {rec.checkOutAt ? (
                                   <>
-                                    <span className="text-amber-400">انصراف {formatTime(rec.checkOutAt)}</span>
+                                    <span className="text-sm font-bold text-amber-400">انصراف {formatTime(rec.checkOutAt)}</span>
                                     {locationButton(rec.checkOutLatitude, rec.checkOutLongitude, rec.checkOutAccuracy, '')}
                                   </>
                                 ) : (
-                                  <span className="text-[11px] text-[var(--text-dim)]">بدون انصراف</span>
+                                  <span className="text-xs text-[var(--text-dim)]">لم يسجل انصرافاً</span>
                                 )}
                               </div>
                             </div>
@@ -12456,7 +12558,7 @@ function AdminAttendanceView({ users }: any) {
                   </AnimatePresence>
                 </div>
               )}
-            </div>
+            </motion.div>
           );
         })}
       </div>
@@ -12952,24 +13054,39 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
   const selectedCount = forms.filter((f) => selected[f.id]).length;
 
   return (
-    <div className="panel p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-        <div>
-          <h3 className="text-base font-bold text-[var(--text-strong)] flex items-center gap-2">
-            <Zap className="w-4 h-4 text-amber-400" /> سحب أرقام كامبين {meta.ar}
-          </h3>
-          <p className="text-[11px] text-[var(--text-dim)] mt-0.5">{meta.hint}</p>
-        </div>
+    <div className="glass-card rounded-[var(--r-md)] p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+        <h3 className="text-lg font-bold text-[var(--text-strong)] flex items-center gap-2">
+          <Zap className="w-5 h-5 text-amber-400" /> سحب أرقام كامبين {meta.ar}
+        </h3>
         <button
           onClick={() => save({ enabled: !view.enabled }, view.enabled ? 'تم إيقاف السحب التلقائي لهذه القناة' : 'تم تشغيل السحب التلقائي لهذه القناة ✓')}
           disabled={busy === 'save'}
-          className={`px-3.5 py-2 rounded-[var(--r-md)] font-bold text-xs border transition-colors ${
+          className={`px-4 py-2 rounded-[var(--r-md)] font-bold text-xs border transition-colors ${
             view.enabled ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
           }`}
         >
           {view.enabled ? '● مُشغّل — اضغط للإيقاف' : 'متوقف — اضغط للتشغيل'}
         </button>
       </div>
+      <p className="text-xs text-[var(--text-muted)] leading-relaxed mb-2">
+        يقرأ النظام الأرقام من مصدر هذه القناة من نفسه كل بضع دقائق، ينظّفها ويحذف المكرر ويحفظها «غير مخصصة» — والتوزيع على السيلز بيدك من تبويب «توزيع الأرقام».
+      </p>
+      <p className="text-[11px] text-[var(--text-dim)] leading-relaxed mb-4">{meta.hint}</p>
+
+      {remote === false && (
+        <p className="text-[11px] text-amber-300/90 leading-relaxed mb-4 bg-amber-500/10 border border-amber-400/20 rounded-[var(--r-md)] px-3 py-2">
+          على هذه الاستضافة لا توجد قاعدة بيانات مركزية: الإعدادات والأرقام تُحفظ في متصفح هذا الجهاز، والسحب التلقائي يعمل ما دام
+          الموقع مفتوحاً. على سيرفر الشركة يعمل السحب في الخلفية وتظهر الأرقام على كل الأجهزة.
+        </p>
+      )}
+      {remote === true && (
+        <p className="text-[11px] text-[var(--text-dim)] leading-relaxed mb-4 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2">
+          السحب التلقائي يحترم «كل كم دقيقة» (الحالي: {view.intervalMinutes || 5} دقيقة). على Vercel يعمل من متصفح الإدارة
+          ما دامت الصفحة مفتوحة؛ وللعمل 24/7 بدون متصفح أضف <span dir="ltr">CRON_SECRET</span> على Vercel
+          وجدول رابط <span dir="ltr">/api/cron?key=...</span> كل دقيقة.
+        </p>
+      )}
 
       <div className="flex flex-col sm:flex-row gap-2 mb-4">
         {[
@@ -12979,7 +13096,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
           <button
             key={option.id}
             onClick={() => save({ type: option.id }, '')}
-            className={`flex-1 py-2 rounded-[var(--r-md)] font-bold text-xs border transition-colors ${
+            className={`flex-1 py-2.5 rounded-[var(--r-md)] font-bold text-xs border transition-colors ${
               view.type === option.id ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--text)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'
             }`}
           >
@@ -12989,18 +13106,20 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       </div>
 
       {view.type === 'sheet' ? (
-        <div className="space-y-2">
-          <label className="block text-xs text-[var(--text)]">رابط الملف المنشور (CSV)</label>
-          <input
-            dir="ltr"
-            value={form.sheetUrl}
-            onChange={(e) => setForm({ ...form, sheetUrl: e.target.value })}
-            placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"
-            className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3.5 py-2.5 text-[var(--text-strong)] text-sm"
-          />
-          <p className="text-[11px] text-[var(--text-dim)]">
-            في Google Sheets: ملف ← مشاركة ← نشر على الويب ← CSV ← انسخ الرابط والصقه هنا.
-          </p>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs text-[var(--text)] mb-1">رابط الملف المنشور (CSV)</label>
+            <input
+              dir="ltr"
+              value={form.sheetUrl}
+              onChange={(e) => setForm({ ...form, sheetUrl: e.target.value })}
+              placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] text-sm"
+            />
+            <p className="text-[11px] text-[var(--text-dim)] mt-1">
+              في Google Sheets: ملف ← مشاركة ← نشر على الويب ← اختر (قيم مفصولة بفواصل .csv) ← انسخ الرابط والصقه هنا.
+            </p>
+          </div>
         </div>
       ) : (
         <div className="space-y-3">
@@ -13013,30 +13132,32 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
                 value={form.token}
                 onChange={(e) => setForm({ ...form, token: e.target.value })}
                 placeholder={view.hasToken ? 'توكن محفوظ ✓ — ألصق توكن جديداً لتغييره' : 'EAAG...'}
-                className="flex-1 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3.5 py-2.5 text-[var(--text-strong)] text-sm"
+                className="flex-1 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] text-sm"
               />
               <button
                 onClick={discover}
                 disabled={busy !== '' || (!form.token.trim() && !view.hasToken)}
-                className="gradient-primary text-[var(--text-strong)] px-4 py-2.5 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-50 whitespace-nowrap"
+                className="gradient-primary text-[var(--text-strong)] px-5 py-3 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-50 whitespace-nowrap"
               >
                 {busy === 'discover' ? 'جارٍ الاستكشاف...' : 'استكشف صفحاتي'}
               </button>
             </div>
-
-            <details className="mt-2 rounded-[var(--r-sm)] border border-[var(--border)] bg-[var(--tint-1)] px-3 py-2 text-[11px] text-[var(--text-dim)]">
-              <summary className="cursor-pointer font-bold text-[var(--text-muted)]">طريقة استخراج التوكن والصلاحيات المطلوبة</summary>
-              <div className="mt-2 space-y-1 leading-relaxed">
-                <p>
-                  ولّد <b>User Access Token</b> من Graph API Explorer بـ 5 صلاحيات:{' '}
-                  <span dir="ltr">leads_retrieval, pages_manage_ads, pages_show_list, pages_read_engagement, pages_manage_metadata</span>
-                  {' '}(وأضف <span dir="ltr">business_management</span> لصفحات الأعمال).
-                </p>
-                <p className="text-emerald-400/80">
-                  لتمديد الصلاحية لـ ٦٠ يوماً: افتح <span dir="ltr">Access Token Debugger</span> ثم اضغط <span dir="ltr">Extend Access Token</span>.
-                </p>
-              </div>
-            </details>
+            <p className="text-[11px] text-[var(--text-dim)] mt-1">
+              ولّد التوكن من Graph API Explorer على developers.facebook.com وامنحه هذه الصلاحيات الخمس معاً:{' '}
+              <span dir="ltr">leads_retrieval + pages_manage_ads + pages_show_list + pages_read_engagement + pages_manage_metadata</span>، ثم الصقه واضغط «استكشف صفحاتي».
+              <span className="block mt-1 text-amber-400/80">
+                لو ظهر خطأ <span dir="ltr">Requires pages_manage_ads permission (#200)</span> فمعناه أن التوكن ناقص هذه الصلاحية — أعد توليده وأضفها ثم أعد المحاولة.
+              </span>
+              <span className="block mt-1 text-emerald-400/80">
+                 توكن Graph API Explorer يعيش ساعتين فقط. لتجنّب انتهائه: بعد توليده اضغط <span dir="ltr">Open in Access Token Debugger</span> ثم <span dir="ltr">Extend Access Token</span> — فيصبح صالحاً ٦٠ يوماً.
+              </span>
+              <span className="block mt-1 text-amber-300/90">
+                صفحة داخل Business Manager مش بتظهر؟ أضف صلاحية <span dir="ltr">business_management</span> معاهم — صفحات الأعمال (owned + client) تُطلب بعد كده تلقائياً.
+              </span>
+              <span className="block mt-1 text-amber-300/90">
+                ولازم يكون <b>User Access Token</b> (من «Get User Access Token») مش توكن صفحة — توكن الصفحة بيشوف صفحة واحدة بس.
+              </span>
+            </p>
 
             {/* تنبيه صلاحية التوكن: ننبّه قبل الانتهاء بيومين — فلا يتوقف السحب فجأة */}
             {view.hasToken && Number(view.tokenExpiresAt) > 0 && (() => {
@@ -13421,25 +13542,37 @@ function AdminSettingsView({ currentUser }: { currentUser?: User }) {
   };
   
   return (
-    <div className="space-y-4">
-      {/* المظهر: الوضع الليلي / النهاري */}
+    <div className="space-y-6">
+      <div className="page-intro"><div><h2>الإعدادات</h2></div></div>
+
+      {/* سحب الأرقام من كامبينات فيسبوك وإنستجرام انتقل إلى «فريق العمل»:
+          تبويبان مستقلان لكل قناة (توكنها ونماذجها ومؤشرها) بجوار حسابات الفريق. */}
       <div className="panel p-5">
-        <h3 className="text-base font-bold text-[var(--text-strong)] mb-1 flex items-center gap-2">
-          <Moon className="w-4 h-4 text-[var(--text-muted)]" /> مظهر الموقع
+        <h3 className="text-sm font-bold text-[var(--text-strong)] mb-1 flex items-center gap-2">
+          <Zap className="w-4 h-4 text-amber-400" /> سحب أرقام الكامبينات
         </h3>
-        <p className="text-xs text-[var(--text-muted)] mb-3">
-          اختر الوضع واللون المفضل لك — التغيير فوري ويُحفظ على هذا الجهاز.
+        <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+          إعداد كامبينات فيسبوك وإنستجرام انتقل إلى تبويب «فريق العمل» ← تبويب «فيسبوك» أو «إنستجرام».
+          من هناك تضع التوكن، تختار النماذج، وتشغّل السحب التلقائي لكل قناة على حدة.
+        </p>
+      </div>
+
+      {/* المظهر: الوضع الليلي / النهاري */}
+      <div className="panel p-6">
+        <h3 className="text-lg font-bold text-[var(--text-strong)] mb-1 flex items-center gap-2">
+          <Moon className="w-5 h-5 text-[var(--text-muted)]" /> مظهر الموقع
+        </h3>
+        <p className="text-xs text-[var(--text-muted)] mb-4">
+          اختر الوضع الذي يريحك: ليلي هادئ للإضاءة المنخفضة، أو نهاري مريح للضوء القوي. التغيير فوري ويُحفظ على هذا الجهاز.
         </p>
         <AppearanceSettings userId={currentUser?.id} />
       </div>
 
-      <div className="panel p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h3 className="text-base font-bold text-[var(--text-strong)]">النسخ الاحتياطي</h3>
-          <p className="text-xs text-[var(--text-muted)] mt-0.5">تنزيل نسخة احتياطية كاملة من البيانات (عملاء، عقارات، حسابات، حضور).</p>
-        </div>
-        <button onClick={handleExportData} className="gradient-primary text-[var(--text-strong)] px-5 py-2.5 rounded-[var(--r-md)] text-xs font-bold shrink-0">
-          تصدير البيانات (JSON)
+      <div className="glass-card rounded-[var(--r-md)] p-6">
+        <h3 className="text-lg font-bold text-[var(--text-strong)] mb-2">النسخ الاحتياطي</h3>
+        <p className="text-xs text-[var(--text-muted)] mb-4">نزّل نسخة من كل البيانات (عملاء، عقارات، حسابات، حضور).</p>
+        <button onClick={handleExportData} className="w-full gradient-primary text-[var(--text-strong)] py-3 rounded-[var(--r-md)] font-bold">
+          تصدير البيانات
         </button>
       </div>
     </div>
