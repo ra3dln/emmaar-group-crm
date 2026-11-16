@@ -70,6 +70,8 @@ export interface Client {
   stage: 'new' | 'contacted' | 'meeting' | 'negotiation' | 'closed' | 'lost';
   feedback: string;
   assignedTo?: string;
+  transferredFrom?: string;
+  transferredAt?: string;
   priority: 'high' | 'medium' | 'low';
   source: string;
   // اسم فورم الكامبين الذي جاء منه الرقم (للعرض في «عملاء كامبين»)

@@ -173,6 +173,8 @@ export function buildLeadClients({
       ...(lead?.formName ? { formName: String(lead.formName) } : {}),
       // السيلز الشريك على الرقم بيفضل شريك على العميل (src/partners.ts)
       ...(Array.isArray(lead?.partnerIds) && lead.partnerIds.length ? { partnerIds: [...lead.partnerIds] } : {}),
+      ...(lead?.transferredAt ? { transferredAt: String(lead.transferredAt) } : {}),
+      ...(lead?.transferredFrom ? { transferredFrom: String(lead.transferredFrom) } : {}),
       // وقت التسجيل في الكامبين هو تاريخ العميل — وتحويله لعميل وقت منفصل (updatedAt)
       createdAt: registeredAt,
       campaignAt: registeredAt,

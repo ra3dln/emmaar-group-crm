@@ -2464,10 +2464,13 @@ function App() {
         if (owner !== String(l.salesId || '') && l.phone) setPhOwner(l.phone, owner);
         if (owner === String(l.salesId || '') && (via !== 'manual' || l.assignedVia === 'manual')) return l;
         const turnKey = turnOf?.get(l.id);
+        const meta = buildLeadTransferMeta(l, owner, movedAt, all, allRems, allLogs);
         return {
           ...l, salesId: owner, assignedAt: movedAt, assignedVia: via,
+          // الرقم المنقول ينزل في الفريش ليد (status: 'new')
+          ...(meta.transferredFrom || (owner && owner !== String(l.salesId || '')) ? { status: 'new' as const } : {}),
           ...(turnKey ? { autoTurnKey: turnKey } : {}),
-          ...buildLeadTransferMeta(l, owner, movedAt, all, allRems, allLogs),
+          ...meta,
         };
       })
     );
@@ -2498,6 +2501,8 @@ function App() {
         if (owner === undefined) return c;
         touched = true;
         const ownerName = owner ? (users.find((u: User) => u.id === owner)?.name || 'سيلز آخر') : '';
+        const prevOwner = String(c.assignedTo || c.userId || '').trim();
+        const isTransferred = Boolean(owner && prevOwner && prevOwner !== owner);
         const note = noteOfPhone(c.phone);
         const acts = (c.activities || []).map((a: any) => (isCommentActivity(a) && !a.by ? { ...a, by: commentAuthorName(a, users) } : a));
         const hasNote = !note || acts.some((a: any) => isCommentActivity(a) && cleanCommentText(a?.text) === note.text);
@@ -2506,6 +2511,11 @@ function App() {
           : [];
         return {
           ...c, userId: owner, assignedTo: owner, ownerVia: via, updatedAt: movedAt,
+          ...(isTransferred || (owner && owner !== prevOwner) ? {
+            stage: 'new',
+            transferredFrom: prevOwner,
+            transferredAt: movedAt,
+          } : {}),
           feedback: note?.text || c.feedback,
           activities: [
             { id: crypto.randomUUID(), type: 'assign', text: owner ? `تم تخصيص العميل إلى ${ownerName}` : 'سُحب الرقم من عهدة السيلز', at: movedAt, by: currentUser.name },

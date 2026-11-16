@@ -157,5 +157,59 @@ check(
   ).needsAction === true
 );
 
+// ===== ٩) لما رقم يتنقل لسيلز معين: ينزل في الفريش ليد مع بقاء الكومنت وحالته السابقة =====
+const transferredClient = {
+  id: 'c-transferred',
+  name: 'عميل منقول',
+  phone: '01099991111',
+  stage: 'new',
+  transferredAt: '2026-11-15T12:00:00.000Z',
+  transferredFrom: 'u-shimaa',
+  userId: 'u-hassan',
+  assignedTo: 'u-hassan',
+  activities: [
+    { id: 'as-2', type: 'assign', text: 'تم تخصيص العميل إلى Hassan', at: '2026-11-15T12:00:00.000Z' },
+    { id: 'f-prev', type: 'feedback', text: 'متابع الأسبوع الجاي', at: '2026-11-14T10:00:00.000Z', by: 'Shimaa', status: 'follow-up' },
+  ],
+};
+const transferredSnapshots = feedbackByPhone(
+  [{ clientPhone: '01099991111', feedback: 'متابع الأسبوع الجاي', date: '2026-11-14T10:00:00.000Z', userId: 'u-hassan', authorId: 'u-shimaa', authorName: 'Shimaa', status: 'follow-up' }],
+  [],
+  [{ id: 'u-shimaa', name: 'Shimaa' }, { id: 'u-hassan', name: 'Hassan' }]
+);
+
+const transferredWork = buildWorkNumbers(
+  [transferredClient],
+  [],
+  transferredSnapshots,
+  { includeUnassigned: false }
+);
+
+check('الرقم المنقول ينزل في الفريش ليد (fresh-stage)', transferredWork[0]?.bucket === 'fresh-stage', transferredWork[0]?.bucket);
+check('مرحلة الرقم المنقول تبدأ بـ new', transferredWork[0]?.stage === 'new', transferredWork[0]?.stage);
+check('الكومنت السابق معروض بالكامل', transferredWork[0]?.salesNote === 'متابع الأسبوع الجاي');
+check('اسم كاتب الكومنت السابق محفوظ كما هو', transferredWork[0]?.salesNoteBy === 'Shimaa');
+check('حالة الكومنت السابق في خط العميل فضلت follow-up كما هي', transferredClient.activities.find((a) => a.id === 'f-prev')?.status === 'follow-up');
+
+// إجراء جديد بعد النقل ينقله لحالته الجديدة
+const afterActionClient = {
+  ...transferredClient,
+  activities: [
+    { id: 'f-new', type: 'feedback', text: 'حددنا ميعاد معاينة', at: '2026-11-16T10:00:00.000Z', by: 'Hassan', status: 'meeting' },
+    ...transferredClient.activities,
+  ],
+};
+const afterActionWork = buildWorkNumbers(
+  [afterActionClient],
+  [],
+  feedbackByPhone(
+    [{ clientPhone: '01099991111', feedback: 'حددنا ميعاد معاينة', date: '2026-11-16T10:00:00.000Z', userId: 'u-hassan', status: 'meeting' }],
+    [],
+    [{ id: 'u-hassan', name: 'Hassan' }]
+  ),
+  { includeUnassigned: false }
+);
+check('إجراء جديد بعد النقل ينقل الرقم لحالته الجديدة (meeting)', afterActionWork[0]?.bucket === 'meeting', afterActionWork[0]?.bucket);
+
 console.log(`\n${failed ? '❌' : '✅'} نجحت ${passed} فحوصات${failed ? ` — فشل ${failed}` : ''}`);
 if (failed) process.exit(1);

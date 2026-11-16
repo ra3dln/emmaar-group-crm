@@ -84,7 +84,13 @@ const withNoAnswer = (bucket: string, noAnswerAt: string, freshAt: string): stri
   bucket === 'fresh-stage' && !!noAnswerAt && noAnswerAt > freshAt ? NO_ANSWER : bucket;
 
 export const feedbackBucketOf = (record: any): string => {
-  const status = bucketStatus(latestBucketActivityOf(record)?.status);
+  const transferAt = String(record?.transferredAt || '');
+  const latestAct = latestBucketActivityOf(record);
+  const actAt = String(latestAct?.at || '');
+  if (transferAt && (!actAt || actAt <= transferAt) && (!record?.stage || record?.stage === 'new')) {
+    return 'fresh-stage';
+  }
+  const status = bucketStatus(latestAct?.status);
   if (status) return status;
   const activities: any[] = Array.isArray(record?.activities) ? record.activities : [];
   return withNoAnswer(
@@ -448,30 +454,57 @@ export const buildWorkNumbers = (
     const onlyNoAnswerCalls = !!snapshot && !snapUsable && !actStatus;
     const stageBucket =
       onlyNoAnswerCalls && String(client?.stage || '') === 'contacted' ? 'fresh-stage' : stageBucketOf(client);
-    const baseBucket =
+    let baseBucket =
       snapUsable && (!actAt || snapAt >= actAt)
         ? snapStatus
         : actStatus || stageBucket;
+
+    const lead = leadByPhone.get(key);
+    // ===== الرقم المنقول ينزل في «Fresh Leads» =====
+    // لو الرقم اتنقل لمندوب جديد ولسه ما عملش عليه أي إجراء جديد (مكالمة أو فيدباك أو تغيير مرحلة)،
+    // الرقم ينزل في الفريش ليد (fresh-stage)، مع بقاء الكومنت السابق وحالته القديمة (زي follow up) كما هي.
+    const transferAt = String(client?.transferredAt || lead?.transferredAt || '');
+    const actAfterTransfer = Boolean(actAt && transferAt && actAt > transferAt);
+    const snapAfterTransfer = Boolean(snapAt && transferAt && snapAt > transferAt);
+    const stageAfterTransfer = Boolean(
+      String(client?.stage || '') !== 'new' &&
+      transferAt &&
+      String(client?.updatedAt || '') > transferAt
+    );
+    const isTransferredFresh = Boolean(
+      transferAt &&
+      !actAfterTransfer &&
+      !snapAfterTransfer &&
+      (!stageAfterTransfer || String(client?.stage || '') === 'new')
+    );
+
+    if (isTransferredFresh) {
+      baseBucket = 'fresh-stage';
+    }
+
     const actNaAt = latestAtOf(activities, (a) => statusOfAct(a) === NO_ANSWER);
     const snapNaAt = String(snapshot?.noAnswerAt || '');
     const actFreshAt = latestAtOf(activities, isFreshChoice);
     const snapFreshAt = snapUsable && snapStatus === 'fresh-stage' ? snapAt : '';
-    const bucket = withNoAnswer(
-      baseBucket,
-      actNaAt > snapNaAt ? actNaAt : snapNaAt,
-      actFreshAt > snapFreshAt ? actFreshAt : snapFreshAt
-    );
+    const bucket = isTransferredFresh
+      ? 'fresh-stage'
+      : withNoAnswer(
+          baseBucket,
+          actNaAt > snapNaAt ? actNaAt : snapNaAt,
+          actFreshAt > snapFreshAt ? actFreshAt : snapFreshAt
+        );
+
     // «مفتوح» = المندوب فتح الرقم من التوزيع (viewed) أو كتب عليه كلام.
     // وعميل مش من التوزيع (أضافه بنفسه) = مفتوح برضه.
-    const lead = leadByPhone.get(key);
     const openedBySales =
-      !!lead && (lead?.status === 'viewed' || lead?.status === 'contacted' || !!lead?.viewedAt);
+      !isTransferredFresh &&
+      (!!lead && (lead?.status === 'viewed' || lead?.status === 'contacted' || !!lead?.viewedAt));
     out.push({
       key,
       name: String(client?.name || 'بدون اسم'),
       phone,
       bucket,
-      stage: String(client?.stage || ''),
+      stage: isTransferredFresh ? 'new' : String(client?.stage || ''),
       cancelReason: String(
         client?.cancelReason ||
           activities.find((a: any) => !!String(a?.cancelReason || '').trim())?.cancelReason ||
@@ -482,7 +515,7 @@ export const buildWorkNumbers = (
       // اسم كاتب آخر كلام — محفوظ مع الكومنت أو مع بطاقة الفيدباك
       salesNoteBy: noteBy,
       client,
-      opened: openedBySales || commentActs.length > 0 || !lead,
+      opened: openedBySales || (!isTransferredFresh && (commentActs.length > 0 || !lead)),
       // وقت نزول الرقم: توزيعه على المندوب (وإلا وقت استيراده)
       arrivedAt: String(lead?.assignedAt || lead?.createdAt || client?.createdAt || ''),
     });
@@ -497,23 +530,35 @@ export const buildWorkNumbers = (
     const key = digitsOfPhone(phone) || `lead:${lead?.id}`;
     if (seen.has(key)) continue; // الرقم اتحوّل لعميل مسجّل — ما يتكررش
     const snapshot = snapshots.get(key);
+    const leadTransferAt = String(lead?.transferredAt || '');
+    const snapAt = String(snapshot?.statusAt || snapshot?.at || '');
+    const snapAfterTransfer = Boolean(snapAt && leadTransferAt && snapAt > leadTransferAt);
+    const isTransferredFresh = Boolean(leadTransferAt && !snapAfterTransfer);
+
     // أي مكالمة بتخلّي حالة الرقم في التوزيع «contacted» — فلو كل اللي عليه
     // «لم يرد»، الحالة دي مش خانة حقيقية: الرقم لسه Fresh.
     const leadStatus = String(lead?.status || '');
     const onlyNoAnswerCalls = !!snapshot && !snapshot.status && leadStatus === 'contacted';
-    const bucket = withNoAnswer(
+    let baseStatus =
       snapshot?.status ||
-        (onlyNoAnswerCalls ? 'fresh-stage' : LEAD_STATUS_TO_FEEDBACK_STATUS[leadStatus]) ||
-        'fresh-stage',
-      String(snapshot?.noAnswerAt || ''),
-      snapshot?.status === 'fresh-stage' ? String(snapshot?.statusAt || '') : ''
-    );
+      (onlyNoAnswerCalls ? 'fresh-stage' : LEAD_STATUS_TO_FEEDBACK_STATUS[leadStatus]) ||
+      'fresh-stage';
+    if (isTransferredFresh) {
+      baseStatus = 'fresh-stage';
+    }
+    const bucket = isTransferredFresh
+      ? 'fresh-stage'
+      : withNoAnswer(
+          baseStatus,
+          String(snapshot?.noAnswerAt || ''),
+          baseStatus === 'fresh-stage' ? String(snapshot?.statusAt || '') : ''
+        );
     out.push({
       key,
       name: String(lead?.name || 'بدون اسم'),
       phone,
       bucket,
-      stage: FEEDBACK_STATUS_TO_STAGE[bucket] || 'new',
+      stage: isTransferredFresh ? 'new' : (FEEDBACK_STATUS_TO_STAGE[bucket] || 'new'),
       cancelReason: String(snapshot?.cancelReason || ''),
       note: String(snapshot?.note || lead?.description || ''),
       salesNote: String(snapshot?.note || ''),
@@ -522,7 +567,8 @@ export const buildWorkNumbers = (
       leadId: String(lead?.id || ''),
       // الرقم الموزَّع اتفتح = المندوب فتحه من شاشة التوزيع (status = viewed)
       opened:
-        lead?.status === 'viewed' || lead?.status === 'contacted' || !!lead?.viewedAt,
+        !isTransferredFresh &&
+        (lead?.status === 'viewed' || lead?.status === 'contacted' || !!lead?.viewedAt),
       // وقت نزول الرقم: توزيعه على المندوب (وإلا وقت استيراده) — «الجديد» vs «القديم»
       arrivedAt: String(lead?.assignedAt || lead?.createdAt || ''),
     });
