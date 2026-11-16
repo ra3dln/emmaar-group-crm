@@ -187,4 +187,11 @@ check(
     app.includes('for (const l of (callLogs || []))')
 );
 
+check(
+  'شريط الحالات على أندرويد ما يقفلش لوحده بمجرد اللمس (pointerdown + حماية اللمسة الأولى وعدم قفله بالتمرير)',
+  app.includes("document.addEventListener('pointerdown', onDown)") &&
+    app.includes('Date.now() - openedAtRef.current < 260') &&
+    app.includes('menuRef.current?.contains(t)')
+);
+
 console.log(`\n✅ نجحت ${passed} فحوصات لواجهة الهاتف`);

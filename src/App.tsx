@@ -5835,7 +5835,7 @@ const commentAuthorName = (activity: any, users: any[] = []): string => {
   return 'مندوب سابق';
 };
 
-// قائمة الحالات المنسدلة: زر يعرض الحالة بلونها المضيء، ويفتح قائمة منسدلة بـ٩ حالات
+// قائمة الحالات المنسدلة: زر يعرض الحالة بلونها المضيء، ويفتح قائمة منسدلة بـ١٠ حالات
 // (بدل الشريط المسطّح الملاصق للاسم). القائمة تُرسم عبر Portal لتخرج من حدود الكارت/الجدول.
 function StatusMenu({ value, onPick, label = 'تسجيل فيدباك', className = '', stopPropagation = true }:
   { value?: string; onPick: (id: string) => void; label?: string; className?: string; stopPropagation?: boolean }) {
@@ -5843,6 +5843,8 @@ function StatusMenu({ value, onPick, label = 'تسجيل فيدباك', classNam
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const openedAtRef = useRef(0);
   const [up, setUp] = useState(false);
   const [style, setStyle] = useState<React.CSSProperties>({});
 
@@ -5873,20 +5875,29 @@ function StatusMenu({ value, onPick, label = 'تسجيل فيدباك', classNam
   useEffect(() => {
     if (!open) return;
     place();
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: Event) => {
+      // على أندرويد (أو متصفح واتساب) قد يتبع اللمسة حدث mousedown مصطنع بعد الفتح مباشرة
+      if (Date.now() - openedAtRef.current < 260) return;
       const t = e.target as Node;
       if (wrapRef.current?.contains(t)) return;
+      if (menuRef.current?.contains(t)) return;
       if (document.getElementById('fs-menu-portal')?.contains(t)) return;
       setOpen(false);
     };
     const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    const onScroll = () => setOpen(false);
-    document.addEventListener('mousedown', onDown);
+    // على الموبايل/أندرويد اللمسة قد تسبّب تمرير طفيف في النافذة (scroll capture)،
+    // أو عند السحب جوّه قائمة الحالات نفسها: بدلاً من قفل القائمة فوراً نُعيد تموضعها فقط.
+    const onScroll = (e: Event) => {
+      const t = e.target as Node | null;
+      if (t && (menuRef.current?.contains(t) || document.getElementById('fs-menu-portal')?.contains(t))) return;
+      place();
+    };
+    document.addEventListener('pointerdown', onDown);
     document.addEventListener('keydown', onEsc);
     window.addEventListener('resize', place);
     window.addEventListener('scroll', onScroll, true);
     return () => {
-      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('pointerdown', onDown);
       document.removeEventListener('keydown', onEsc);
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', onScroll, true);
@@ -5902,14 +5913,27 @@ function StatusMenu({ value, onPick, label = 'تسجيل فيدباك', classNam
         className={`fs-trigger ${meta ? meta.cls : ''} ${meta ? 'on' : ''}`.trim()}
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={(e) => {
+          if (stopPropagation) e.stopPropagation();
+          setOpen((v) => {
+            if (!v) openedAtRef.current = Date.now();
+            return !v;
+          });
+        }}
       >
         <span className="fs-trigger-dot" />
         <span className="fs-trigger-label">{meta ? meta.label : label}</span>
         <ChevronDown className={`w-3.5 h-3.5 fs-trigger-chev ${open ? 'open' : ''}`} />
       </button>
       {open && createPortal(
-        <div id="fs-menu-portal" className={`fs-menu ${up ? 'up' : ''}`} role="menu" style={style}>
+        <div
+          id="fs-menu-portal"
+          ref={menuRef}
+          className={`fs-menu ${up ? 'up' : ''}`}
+          role="menu"
+          style={style}
+          onClick={(e) => e.stopPropagation()}
+        >
           {FEEDBACK_STATUSES.map((status) => (
             <button
               key={status.id}
@@ -5917,7 +5941,7 @@ function StatusMenu({ value, onPick, label = 'تسجيل فيدباك', classNam
               role="menuitem"
               title={status.ar}
               className={`fs-item ${status.cls} ${value === status.id ? 'on' : ''}`}
-              onClick={() => { setOpen(false); onPick(status.id); }}
+              onClick={(e) => { e.stopPropagation(); setOpen(false); onPick(status.id); }}
             >
               <span className="fs-item-dot" />
               <span className="fs-item-en">{status.label}</span>
@@ -6024,6 +6048,7 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
   const [nextActionAt, setNextActionAt] = useState('');
   // مرجع حقل الموعد — عشان زر «حدّد الإجراء القادم» يفتح الصندوق ويركّز عليه
   const nextActionRef = useRef<HTMLInputElement | null>(null);
+  const commentInputRef = useRef<HTMLInputElement | null>(null);
   const src = SOURCE_KINDS[sourceKindOf(`${client?.source} ${client?.status}`)];
   const SrcIcon = src.Icon;
   const sourceText = sourceLabelOf(client);
@@ -6057,6 +6082,7 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
     setCommentText(
       picked === 'no-answer' ? NO_ANSWER_COMMENT : picked === 'cancellation' ? cancelReasonLabelOf(keptReason) : ''
     );
+    setTimeout(() => commentInputRef.current?.focus(), 60);
   };
   // فتح الصندوق مع التركيز على حقل «الإجراء القادم» (من زر «حدّد الإجراء القادم»)
   const openNextActionPicker = () => {
@@ -6237,7 +6263,7 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
           )}
           <div className="fc-row">
             <input
-              autoFocus
+              ref={commentInputRef}
               value={commentText}
               onChange={(e) => setCommentText(e.target.value)}
               placeholder={meta ? `اكتب كومنت «${meta.label}» — إلزامي ليُحفظ الفيدباك` : 'اختر حالة الفيدباك ثم اكتب الكومنت'}
@@ -7044,7 +7070,61 @@ function ClientsView({ currentUser, clients, users = [], leads = [], callLogs = 
                       )}
                     </span>
                   </div>
-                  {open && !isLead && <FeedbackComposer />}
+                  {open && !isLead && (
+                    <form
+                      className="feedback-composer"
+                      onClick={(e) => e.stopPropagation()}
+                      onSubmit={(e) => { e.preventDefault(); submitFeedback(); }}
+                    >
+                      <StatusMenu
+                        value={composer!.status}
+                        label="اختر حالة الفيدباك"
+                        className="fc-status-menu"
+                        stopPropagation={false}
+                        onPick={(optionId) => {
+                          setComposer({ ...composer!, status: optionId });
+                          if (optionId === 'cancellation') {
+                            setCancelReason('');
+                            setCommentText('');
+                            return;
+                          }
+                          setCancelReason('');
+                          if (optionId === 'no-answer' && !commentText.trim()) setCommentText(NO_ANSWER_COMMENT);
+                        }}
+                      />
+                      {composer!.status === 'cancellation' && (
+                        <CancelReasonPicker
+                          value={cancelReason}
+                          onChange={(reason) => {
+                            setCancelReason(reason);
+                            setCommentText(reason ? cancelReasonLabelOf(reason) : '');
+                          }}
+                        />
+                      )}
+                      <div className="fc-row">
+                        <input
+                          value={commentText}
+                          onChange={(e) => setCommentText(e.target.value)}
+                          placeholder={FEEDBACK_STATUS_BY_ID[composer!.status] ? `اكتب كومنت «${FEEDBACK_STATUS_BY_ID[composer!.status].label}» — إلزامي ليُحفظ الفيدباك` : 'اختر حالة الفيدباك ثم اكتب الكومنت'}
+                          className="quick-comment-input"
+                        />
+                        <button type="submit" disabled={savingFeedback || !commentText.trim() || (composer!.status === 'cancellation' && !cancelReason)}
+                          title={composer!.status === 'cancellation' && !cancelReason ? 'اختر سبب الإلغاء' : 'حفظ الفيدباك (الكومنت والحالة)'}>
+                          {savingFeedback ? '…' : 'حفظ'}
+                        </button>
+                        <button type="button" title="إلغاء" onClick={closeComposer}>✕</button>
+                      </div>
+                      <p className={syncError ? 'fc-hint fc-sync-error' : 'fc-hint'}>
+                        {syncError
+                          ? syncError
+                          : composer!.status === 'cancellation' && !cancelReason
+                          ? 'اختر سبب الإلغاء — والكومنت هيتكتب تلقائياً'
+                          : FEEDBACK_STATUS_BY_ID[composer!.status]
+                          ? `الحالة: ${FEEDBACK_STATUS_BY_ID[composer!.status].label} — ${FEEDBACK_STATUS_BY_ID[composer!.status].ar} (هتتحفظ زي ما هي لو ما غيّرتهاش)`
+                          : 'اكتب الكومنت — والحالة هتتحفظ زي آخر فيدباك على العميل'}
+                      </p>
+                    </form>
+                  )}
                   {!open && !isLead && last?.text && (
                     <div className="ct-lastnote" onClick={() => onSelect(client)}>
                       <FeedbackChip status={last.status} alert={!!alertMap?.get(digitsOfPhone(client?.phone))} />
