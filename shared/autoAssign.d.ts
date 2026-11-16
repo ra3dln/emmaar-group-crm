@@ -37,6 +37,7 @@ export declare function distributeLeads(params: {
   formOf?: (lead: any) => string;
   onlyUnassigned?: boolean;
   excludePhones?: string[];
+  repeats?: any;
   at?: string;
 }): DistributionResult;
 export declare function turnKeyOf(lead: any): string;
@@ -48,5 +49,6 @@ export declare function applyAutoRules(params: {
   activeSalesIds?: string[];
   formOf?: (lead: any) => string;
   excludePhones?: string[];
+  repeats?: any;
   at?: string;
 }): AutoRulesResult;

@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { Copy } from 'lucide-react';
 import { SYNC_EVENT } from './sync';
-import { LEAD_REPEATS_KEY, repeatLabel, repeatPhoneKey, repeatsByPhone, type LeadRepeat } from '../shared/leadRepeats.js';
+import { LEAD_REPEATS_KEY, allFormsOfPhone, repeatLabel, repeatLabelForForm, repeatPhoneKey, repeatsByPhone, type LeadRepeat } from '../shared/leadRepeats.js';
 
 const readRepeats = (): any[] => {
   try {
@@ -39,6 +39,8 @@ export const repeatTextOf = (map: Map<string, LeadRepeat[]>, ...phones: any[]): 
   }
   return repeatLabel(entries);
 };
+
+export { allFormsOfPhone, repeatLabelForForm };
 
 export function LeadRepeatBadge({ text }: { text: string }) {
   if (!text) return null;

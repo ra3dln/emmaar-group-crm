@@ -17,7 +17,19 @@ export const repeatPhoneKey = (value) => {
 };
 
 const formOfRow = (row) => String(row?.formName || row?.source || '').trim();
-const formOfRecord = (record) => String(record?.formName || '').trim();
+const formOfRecord = (record) => {
+  if (!record) return '';
+  if (record.formName && String(record.formName).trim()) return String(record.formName).trim();
+  const text = String(record.description || record.source || '');
+  if (!text) return '';
+  const labelled = text.match(
+    /(?:المصدر|Form|فورم|نموذج)\s*[:：-]?\s*(?:فيسبوك|إنستجرام|انستجرام|Facebook|Instagram)?\s*[-–—:]?\s*([^•]+)/i
+  );
+  if (labelled && labelled[1].replace(/[\s|·,،\-]+$/, '').trim()) return labelled[1].replace(/[\s|·,،\-]+$/, '').trim();
+  const dashed = text.match(/(?:فيسبوك|إنستجرام|انستجرام|Facebook|Instagram)\s*[-–—]\s*([^•]+)/i);
+  if (dashed && dashed[1].replace(/[\s|·,،\-]+$/, '').trim()) return dashed[1].replace(/[\s|·,،\-]+$/, '').trim();
+  return '';
+};
 
 // معرّف ثابت للتكرار الواحد: نفس الرقم + نفس الفورم + نفس وقت التسجيل = نفس التكرار
 // (إعادة السحب من البداية ما بتكررش التكرار)
@@ -99,4 +111,46 @@ export function repeatLabel(entries = []) {
   const forms = [...new Set(entries.map((e) => String(e?.formName || '').trim() || 'فورم غير معروف'))];
   if (entries.length === 1) return `متكرر في فورم ${forms[0]}`;
   return `متكرر ${entries.length} مرات: ${forms.join('، ')}`;
+}
+
+// كل الفورمات المرتبطة بالرقم (الفورم الأصلي + الفورمات المتكرر فيها)
+export function allFormsOfPhone(map, originForm = '', ...phones) {
+  const forms = new Set();
+  const orig = String(originForm || '').trim();
+  if (orig && orig !== 'بدون اسم فورم') forms.add(orig);
+  if (map && typeof map.get === 'function') {
+    for (const phone of phones.flat()) {
+      for (const entry of map.get(repeatPhoneKey(phone)) || []) {
+        const f = String(entry?.formName || '').trim();
+        if (f && f !== 'بدون اسم فورم') forms.add(f);
+      }
+    }
+  }
+  return [...forms];
+}
+
+// نص التكرار بالنسبة للفورم المفتوحة حالياً:
+// لو الرقم متكرر بين jazeel و anabyia:
+//   • جوه anabyia يكتب «متكرر في فورم jazeel»
+//   • جوه jazeel يكتب «متكرر في فورم anabyia»
+export function repeatLabelForForm(map, currentForm = '', originForm = '', ...phones) {
+  const entries = [];
+  const seen = new Set();
+  if (map && typeof map.get === 'function') {
+    for (const phone of phones.flat()) {
+      for (const entry of map.get(repeatPhoneKey(phone)) || []) {
+        if (!entry || seen.has(entry.id)) continue;
+        seen.add(entry.id);
+        entries.push(entry);
+      }
+    }
+  }
+  if (!entries.length) return '';
+  const active = String(currentForm || '').trim();
+  if (!active || active === 'all') return repeatLabel(entries);
+  const allForms = allFormsOfPhone(map, originForm, ...phones);
+  const others = allForms.filter((f) => f !== active);
+  if (!others.length) return repeatLabel(entries);
+  if (others.length === 1) return `متكرر في فورم ${others[0]}`;
+  return `متكرر في فورم ${others.join('، ')}`;
 }

@@ -1566,6 +1566,7 @@ html[data-mode="light"] .fs-btn.on { color: color-mix(in srgb, var(--fs) 85%, #0
 .fs-noanswer { --fs: #c96a4a; }
 .fs-done { --fs: var(--success); }
 .fs-reservation { --fs: #22b392; }
+.fs-hot { --fs: #ff5722; }
 .fs-fresh { --fs: var(--info); }
 
 /* ================================================================

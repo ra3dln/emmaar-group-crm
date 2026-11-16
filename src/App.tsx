@@ -82,10 +82,10 @@ import { installBackGuard } from './backNav';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
 import { PartnerPanel } from './PartnerPanel';
 import { ManualFormsView, knownFormNames, useManualFormNames } from './ManualFormsView';
-import { LeadRepeatBadge, repeatTextOf, useLeadRepeats } from './LeadRepeatBadge';
+import { LeadRepeatBadge, allFormsOfPhone, repeatLabelForForm, repeatTextOf, useLeadRepeats } from './LeadRepeatBadge';
 import { LeadFormAnswers } from './LeadFormAnswers';
 import { reconcileOwners } from '../shared/ownerSync.js';
-import { repeatPhoneKey } from '../shared/leadRepeats.js';
+import { LEAD_REPEATS_KEY, buildRepeats, repeatPhoneKey } from '../shared/leadRepeats.js';
 import { SalesExportView } from './SalesExportView';
 import { AdminDashboardView } from './AdminDashboardView';
 import { MANUAL_FORMS_KEY, addToManualFormCount, formNameTaken, parseManualForms, withManualTag } from './manualForms';
@@ -473,11 +473,15 @@ const normalizeDigits = (value: string): string =>
     .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
     .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
 
-// أرقام كل العملاء المسجّلين (أرقامهم الأساسية وأي أرقام إضافية).
+// أرقام كل العملاء المسجّلين عند مندوبين (أرقامهم الأساسية وأي أرقام إضافية).
 // تُستخدم كـ«استثناء» في التوزيع: رقم عند حدّ سلفاً ما يتوزّعش على حدّ تاني،
-// عشان الرقم الواحد ما يبقاش عند أكتر من شخص.
+// عشان الرقم الواحد ما يبقاش عند أكتر من شخص. أما العميل غير المخصص (بلا سيلز) فلا يمنع التوزيع التلقائي.
 const phonesOfClients = (list: Client[] = []): string[] =>
   (list || [])
+    .filter((c: Client) => {
+      const owner = String(c?.assignedTo || c?.userId || '').trim();
+      return !!owner && owner !== 'admin-001';
+    })
     .flatMap((c: Client) => [c?.phone, ...(c?.phones || [])])
     .map((p: unknown) => normalizeDigits(String(p || '')).replace(/\D/g, ''))
     .filter(Boolean);
@@ -2635,6 +2639,7 @@ function App() {
       formName: name,
       formOf: formKeyOf,
       onlyUnassigned: true,
+      repeats: readStoreArr(LEAD_REPEATS_KEY, []),
       // رقم عند حدّ سلفاً (عميل مسجّل) ما يتوزّعش على حدّ تاني
       excludePhones: phonesOfClients(fullClients),
       // بالدور: كل واحد رقم، من بعد آخر واحد خد رقم من الفورم دي
@@ -2665,6 +2670,7 @@ function App() {
       rules: autoAssignRules,
       activeSalesIds,
       formOf: formKeyOf,
+      repeats: readStoreArr(LEAD_REPEATS_KEY, []),
       // رقم عند حدّ سلفاً (عميل مسجّل) ما يتوزّعش على حدّ تاني
       excludePhones: phonesOfClients(fullClients),
     });
@@ -5786,6 +5792,7 @@ const FEEDBACK_STATUSES: Array<{ id: string; label: string; ar: string; cls: str
   { id: 'no-answer', label: 'no answer', ar: 'لا يوجد رد (لا يرد على الهاتف)', cls: 'fs-noanswer', stage: 'contacted' },
   { id: 'done-deal', label: 'done deal', ar: 'تم البيع', cls: 'fs-done', stage: 'closed' },
   { id: 'reservation', label: 'reservation', ar: 'حجز', cls: 'fs-reservation', stage: 'negotiation' },
+  { id: 'hot-case', label: 'hot case', ar: 'عميل مهتم جداً (Hot Case)', cls: 'fs-hot', stage: 'negotiation' },
 ];
 const FEEDBACK_STATUS_BY_ID: Record<string, { id: string; label: string; ar: string; cls: string; stage: Client['stage'] }> =
   Object.fromEntries(FEEDBACK_STATUSES.map((status) => [status.id, status]));
@@ -7499,10 +7506,11 @@ const LEAD_STATUS_LABELS: Record<string, string> = {
   'no-answer': 'No Answer',
   'done-deal': 'Done Deal',
   reservation: 'Reservation',
+  'hot-case': 'Hot Case',
 };
 const LEAD_STATUS_ORDER = [
   'fresh-stage', COLD_CALL_ID, DELAY_ID, SHARED_ID, 'not-answered', 'follow-up', 'meeting', 'after-meeting',
-  'reschedule', 'cancellation', 'no-answer', 'done-deal', 'reservation',
+  'reschedule', 'cancellation', 'no-answer', 'done-deal', 'reservation', 'hot-case',
 ];
 
 // ===== عدّادات لوحة الأرقام (ترتيب ENGAZ — أسماء إنجليزي) =====
@@ -7524,6 +7532,7 @@ const DASH_CARDS: Array<{ id: string; label: string; cls: string }> = [
   { id: 'no-answer', label: 'No Answer', cls: 'fs-noanswer' },
   { id: 'done-deal', label: 'Done Deal', cls: 'fs-done' },
   { id: 'reservation', label: 'Reservation', cls: 'fs-reservation' },
+  { id: 'hot-case', label: 'Hot Case', cls: 'fs-hot' },
 ];
 
 // ملاحظة الرقم: نص الوصف بدون جزء «التاريخ: …» (الوقت معروض في مكانه)
@@ -7674,6 +7683,7 @@ function LeadsView({
 }: any) {
   const [query, setQuery] = useState('');
   const [field, setField] = useState<'all' | 'name' | 'phone' | 'form'>('all');
+  const [formFilter, setFormFilter] = useState('');
   const repeatMap = useLeadRepeats();
 
   // كل الأرقام مرة واحدة: العميل بحالته، والرقم الموزَّع بحالة آخر فيدباك عليه
@@ -7754,8 +7764,29 @@ function LeadsView({
     return map;
   }, [rows]);
 
+  // الفورمات (الكامبينات) الموجودة فعلياً عند السيلز فقط — عشان يفلتر بيها أرقامه
+  const salesForms = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of rows) {
+      const forms = allFormsOfPhone(repeatMap, row.formName, row.phone, row.client?.phones || []);
+      for (const f of forms) {
+        map.set(f, (map.get(f) || 0) + 1);
+      }
+    }
+    return [...map.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ar'));
+  }, [rows, repeatMap]);
+
+  const activeFormFilter = formFilter && salesForms.some((f) => f.name === formFilter) ? formFilter : '';
+
   const visible = useMemo(() => {
     let list = rows;
+    if (activeFormFilter) {
+      list = list.filter((row) =>
+        allFormsOfPhone(repeatMap, row.formName, row.phone, row.client?.phones || []).includes(activeFormFilter)
+      );
+    }
     // «Cold Calls» فلتر خاص: الأرقام القديمة اللي ما اتصلناش فيها
     // «Fresh Leads» فلتر تاني: الأرقام الجديدة اللي نازلة حالاً
     if (filter === COLD_CALL_ID) list = list.filter((row) => row.cold);
@@ -7766,7 +7797,7 @@ function LeadsView({
     // المقارنة في دالة مستقلة ومختبَرة: البحث بالحروف للاسم/الفورم وبالأرقام للتليفون
     // الأحدث فوق (وقت التسجيل في الكامبين، وإلا وقت الإضافة)
     return newestFirst(list.filter((row) => matchLeadSearch(row, query, field)), (row) => row.client || row.lead);
-  }, [rows, filter, query, field]);
+  }, [rows, filter, query, field, activeFormFilter, repeatMap]);
 
   return (
     <div className="eg-leads">
@@ -7794,6 +7825,37 @@ function LeadsView({
           <Search className="w-4.5 h-4.5" />
         </button>
       </div>
+
+      {/* ===== فلتر الكامبين (الفورم) الموجودة فقط لدى السيلز ===== */}
+      {salesForms.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 bg-[var(--surface)] border border-[var(--border)] rounded-[var(--r-lg)] p-2.5">
+          <label htmlFor="sales-form-filter" className="text-xs font-bold text-[var(--text-muted)] flex items-center gap-1.5 shrink-0">
+            <Filter className="w-3.5 h-3.5 text-[var(--brand)]" /> فلتر الكامبين (الفورم):
+          </label>
+          <select
+            id="sales-form-filter"
+            value={activeFormFilter}
+            onChange={(e) => setFormFilter(e.target.value)}
+            className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-xs font-bold text-[var(--text-strong)]"
+          >
+            <option value="">كل الفورمات المتاحة لديك ({rows.length})</option>
+            {salesForms.map((item) => (
+              <option key={item.name} value={item.name}>
+                {item.name} ({item.count})
+              </option>
+            ))}
+          </select>
+          {activeFormFilter && (
+            <button
+              type="button"
+              onClick={() => setFormFilter('')}
+              className="text-xs font-bold text-[var(--brand)] px-2.5 py-1.5 rounded-[var(--r-sm)] bg-[var(--brand-primary-softer)] border border-[var(--brand-primary-soft)] shrink-0"
+            >
+              إلغاء الفلتر ✕
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ===== فلاتر الحالة (نفس ترتيب ENGAZ) ===== */}
       <div className="eg-filters nav-scroll">
@@ -10940,6 +11002,8 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
     const now = new Date().toISOString();
     const finalForm = formName.trim();
     const existing: Client[] = JSON.parse(localStorage.getItem('crm_clients') || '[]');
+    const existingLeads: AssignedLead[] = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
+    const existingRepeats: any[] = JSON.parse(localStorage.getItem(LEAD_REPEATS_KEY) || '[]');
     const known = new Set(existing.map((c: Client) => phoneKeyOf(c.phone)).filter(Boolean));
     const added: Client[] = [];
     for (const row of preview.rows) {
@@ -10971,7 +11035,18 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
         ],
       } as Client);
     }
-    if (!added.length) {
+    const dupRows = finalForm
+      ? preview.rows
+          .filter((row) => !row.invalid && row.duplicate && row.phone)
+          .map((row) => ({ phone: row.phone, name: row.name, formName: finalForm, dateIso: row.date || now }))
+      : [];
+    const newRepeats = buildRepeats({
+      rows: dupRows,
+      records: [...existingLeads, ...existing, ...added],
+      existing: existingRepeats,
+      at: now,
+    });
+    if (!added.length && !newRepeats.length) {
       setError('كل أرقام الملف موجودة بالفعل — مش في جديد');
       return;
     }
@@ -10986,6 +11061,10 @@ function ImportClientsModal({ users, clients = [], assignedLeads = [], currentUs
         setError('تعذّر حفظ الفورم في إعدادات السحب — لم يُسجّل أي عميل. اتأكد من الاتصال وجرّب تاني.');
         return;
       }
+    }
+    if (newRepeats.length) {
+      localStorage.setItem(LEAD_REPEATS_KEY, JSON.stringify([...newRepeats, ...existingRepeats]));
+      void pushKey(LEAD_REPEATS_KEY);
     }
     // ===== ٢) العملاء =====
     localStorage.setItem('crm_clients', JSON.stringify([...added, ...existing]));
@@ -11363,6 +11442,12 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
   };
   visible.forEach((c: Client) => groupOf(formNameOf(c)).clients.push(c));
   visibleLeads.forEach((l: AssignedLead) => groupOf(formNameOf(l)).leads.push(l));
+  for (const entries of repeatMap.values()) {
+    for (const entry of entries) {
+      const fName = String(entry?.formName || '').trim();
+      if (fName) groupOf(fName);
+    }
+  }
   const formGroups = [...groupMap.values()].sort(
     (a, b) => b.clients.length + b.leads.length - (a.clients.length + a.leads.length)
   );
@@ -11379,8 +11464,15 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
   };
   campaignClients.filter(matches).forEach((c: Client) => bump(formNameOf(c), 'clients'));
   campaignLeads.filter(matchesLead).forEach((l: AssignedLead) => bump(formNameOf(l), 'leads'));
+  for (const entries of repeatMap.values()) {
+    for (const entry of entries) {
+      const fName = String(entry?.formName || '').trim();
+      if (fName && !formCounts.has(fName)) formCounts.set(fName, { clients: 0, leads: 0 });
+    }
+  }
   const formOptions = [...new Set([
     ...(activeForms || []).map((name: string) => String(name || '').trim()).filter(Boolean),
+    ...manualFormNames.map((name: string) => String(name || '').trim()).filter(Boolean),
     ...formCounts.keys(),
   ])]
     .map((name) => ({ name, ...(formCounts.get(name) || { clients: 0, leads: 0 }) }))
@@ -11420,7 +11512,7 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
       : [formGroups.find((g) => g.name === activeForm) || { name: activeForm, clients: [], leads: [] }];
   // عدد الأرقام المعروضة فعّلاً بعد الفلاتر (للعدّاد جوه لوحة الفلتر)
   const shownCount = shownGroups.reduce(
-    (sum, group) => sum + group.clients.length + group.leads.length,
+    (sum, group) => sum + group.clients.length + group.leads.length + repeatRowsOf(group.name).length,
     0
   );
 
@@ -11453,21 +11545,23 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
         if (String(entry.formName || '').trim() !== formName) continue;
         const key = repeatPhoneKey(entry.phone);
         const client = (clients || []).find((c: Client) => [c.phone, ...(c.phones || [])].some((ph) => repeatPhoneKey(ph) === key)) || null;
-        const lead = client ? null : (leads || []).find((l: AssignedLead) => repeatPhoneKey(l.phone) === key) || null;
+        const lead = (leads || []).find((l: AssignedLead) => repeatPhoneKey(l.phone) === key) || null;
         const original: any = client || lead;
+        const origForm = formNameOf(client) || formNameOf(lead) || (original ? formNameOf(original) : '');
         // الأصل في نفس الفورم = الرقم ظاهر أصلاً (ولافتة «متكرر» عليه)
-        if (original && formNameOf(original) === formName) continue;
+        if (origForm === formName) continue;
         const ownerId = client ? ownerIdOf(client) : lead ? leadOwnerIdOf(lead) : '';
         if (!inSales(ownerId)) continue;
+        if (client ? !clientInStage(client, stage) : lead ? !leadInStage(lead, stage) : stage !== 'all') continue;
         const name = String(entry.name || original?.name || 'بدون اسم');
-        if (q && !normalizeArabicText(`${name} ${entry.phone}`).includes(q)) continue;
+        if (q && !normalizeArabicText(`${name} ${entry.phone} ${origForm} ${formName}`).includes(q)) continue;
         out.push({
           id: entry.id,
           name,
           phone: String(entry.phone || ''),
           at: String(entry.campaignAt || entry.createdAt || ''),
           client,
-          originForm: original ? formNameOf(original) : '',
+          originForm: origForm,
           owner: client ? ownerName(client) : lead ? userName(lead.salesId) : '',
           ownerId,
         });
@@ -11897,16 +11991,26 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
   // ===== الفورمات: القائمة المسندلة تحدد نطاق التوزيع =====
   // اختيار فورم يحصر الأرقام المعروضة في هذا الفورم فقط، وكل توزيع من هذا التبويب
   // (فردي أو دفعة أو جماعي) يقع على أرقام الفورم المختار وحده.
+  // الرقم المكرر في فورمين (مثلاً jazeel و anabyia) يظهر في الفورمين الاتنين ويتعدّ فيهم.
   const [form, setForm] = useState('all');
+  const leadFormsOf = (lead: AssignedLead) => {
+    const primary = formKeyOf(lead);
+    const all = allFormsOfPhone(repeatMap, primary, lead.phone, lead.phones || []);
+    return all.length ? all : [primary];
+  };
+  const leadInForm = (lead: AssignedLead, targetForm: string) =>
+    targetForm === 'all' || formKeyOf(lead) === targetForm || leadFormsOf(lead).includes(targetForm);
   // العدّاد للفورمات المحدّدة فقط — الفورم غير المحدّد لا يظهر في القائمة ولا في العدّ
   const formCounts = new Map<string, number>();
   for (const lead of assignedLeads) {
     if (!isSelectedFormRecord(activeForms, lead)) continue;
-    const key = formKeyOf(lead);
-    formCounts.set(key, (formCounts.get(key) || 0) + 1);
+    for (const key of leadFormsOf(lead)) {
+      formCounts.set(key, (formCounts.get(key) || 0) + 1);
+    }
   }
   const formOptions = [...new Set([
     ...(activeForms || []).map((name: string) => String(name || '').trim()).filter(Boolean),
+    ...manualFormNames.map((name: string) => String(name || '').trim()).filter(Boolean),
     ...formCounts.keys(),
   ])]
     .map((name) => ({ name, count: formCounts.get(name) || 0 }))
@@ -11920,7 +12024,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
   );
   const formLeads = activeForm === 'all'
     ? openLeads
-    : openLeads.filter((lead: AssignedLead) => formKeyOf(lead) === activeForm);
+    : openLeads.filter((lead: AssignedLead) => leadInForm(lead, activeForm));
 
   const nameOf = (id?: string) => users.find((u: User) => u.id === id)?.name || 'غير مخصص';
   const q = normalizeArabicText(query).trim();
@@ -12028,6 +12132,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
         formName: activeForm,
         formOf: formKeyOf,
         onlyUnassigned: true,
+        repeats: repeatMap,
       }).assignments.length
     : 0;
 
@@ -12057,7 +12162,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
     }
     // التشغيل: على كل السيلز بالدور، والأرقام غير المخصصة دلوقتي هتتوزّع برضه
     const waiting = (assignedLeads as AssignedLead[]).filter(
-      (l) => formKeyOf(l) === name && !l.salesId && l.assignedVia !== 'manual' && l.status !== 'closed'
+      (l) => leadInForm(l, name) && !l.salesId && l.assignedVia !== 'manual' && l.status !== 'closed'
     ).length;
     if (!window.confirm(`تشغيل التوزيع التلقائي لفورم «${name}» على كل السيلز بالدور؟
 هيتوزّع دلوقتي ${waiting} رقم غير مخصص، وأي رقم جديد يوصل بعد كده.`)) return;
@@ -12457,9 +12562,13 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
                   </div>
                   <div className="flex items-center gap-2 flex-wrap mt-1">
                     <p className="text-[var(--brand)]" dir="ltr">{lead.phone}</p>
-                    <FormNameChip record={lead} />
+                    <FormNameChip record={activeForm !== 'all' && formNameOf(lead) !== activeForm ? { ...lead, formName: activeForm } : lead} />
                     <CampaignTimeChip at={campaignTimeOf(lead).at} kind={campaignTimeOf(lead).kind} />
-                    <LeadRepeatBadge text={repeatTextOf(repeatMap, lead.phone)} />
+                    {activeForm !== 'all' && repeatLabelForForm(repeatMap, activeForm, formNameOf(lead), lead.phone) ? (
+                      <LeadRepeatBadge text={repeatLabelForForm(repeatMap, activeForm, formNameOf(lead), lead.phone)} />
+                    ) : (
+                      <LeadRepeatBadge text={repeatTextOf(repeatMap, lead.phone)} />
+                    )}
                   </div>
                   {lead.description && <p className="text-[11.5px] text-[var(--text-muted)] mt-1.5">{formatLeadDescription(lead.description)}</p>}
                 </div>
@@ -15535,7 +15644,7 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
       setError('الرقم التاني هو نفس الرقم الأساسي');
       return;
     }
-    // رقم واحد = صاحب واحد: الرقم الموجود بالفعل ما يتضافش تاني
+    // رقم واحد = صاحب واحد: الرقم الموجود بالفعل ما يتضافش تاني (بس لو على فورم تانية يتسجّل تكراره في الفورم)
     const key = phoneKeyOf(form.phone);
     const leads = JSON.parse(localStorage.getItem('crm_assigned_leads') || '[]');
     const clientsNow = JSON.parse(localStorage.getItem('crm_clients') || '[]');
@@ -15543,6 +15652,26 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
       leads.some((l: AssignedLead) => phoneKeyOf(l.phone) === key) ||
       clientsNow.some((c: Client) => [c.phone, ...(c.phones || [])].some((p) => phoneKeyOf(p) === key));
     if (key && taken) {
+      if (chosenForm) {
+        const now = new Date().toISOString();
+        const currentRepeats: any[] = JSON.parse(localStorage.getItem(LEAD_REPEATS_KEY) || '[]');
+        const newRepeats = buildRepeats({
+          rows: [{ phone: form.phone, name: form.name, formName: chosenForm, dateIso: now }],
+          records: [...leads, ...clientsNow],
+          existing: currentRepeats,
+          at: now,
+        });
+        if (newRepeats.length) {
+          setSaving(true);
+          await saveExtraFormName(chosenForm);
+          localStorage.setItem(LEAD_REPEATS_KEY, JSON.stringify([...newRepeats, ...currentRepeats]));
+          await pushKey(LEAD_REPEATS_KEY);
+          setSaving(false);
+          onSuccess();
+          onClose();
+          return;
+        }
+      }
       setError('الرقم ده موجود بالفعل في النظام');
       return;
     }

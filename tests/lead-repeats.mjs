@@ -13,8 +13,9 @@ const check = (label, condition, extra = '') => {
   console.log(`✓ ${label}`);
 };
 
-const { buildRepeats, repeatsByPhone, repeatLabel, repeatPhoneKey } = await import('../shared/leadRepeats.js');
+const { buildRepeats, repeatsByPhone, repeatLabel, repeatPhoneKey, allFormsOfPhone, repeatLabelForForm } = await import('../shared/leadRepeats.js');
 const { runAutoImportCore, normalizeConfig } = await import('../server/leadSource.js');
+const { applyAutoRules } = await import('../shared/autoAssign.js');
 
 // ===== ١) المنطق =====
 {
@@ -53,6 +54,26 @@ const { runAutoImportCore, normalizeConfig } = await import('../server/leadSourc
   const map = repeatsByPhone([...fromOther, ...sameForm]);
   check('اللافتة لتكرار واحد', repeatLabel([fromOther[0]]) === 'متكرر في فورم OBOUR GKAF');
   check('اللافتة لأكتر من تكرار فيها الفورمات', /متكرر 2 مرات: .*GO ADS \| CAVA.*OBOUR GKAF|متكرر 2 مرات: .*OBOUR GKAF.*GO ADS \| CAVA/.test(repeatLabel(map.get(repeatPhoneKey('01000000077')))));
+
+  // مثال المستخدم: رقم متكرر في فورم jazeel و anabyia
+  const jazeelRecord = { id: 'l-jaz', phone: '01012345678', formName: 'jazeel', salesId: '' };
+  const anabyiaRepeat = buildRepeats({
+    rows: [{ phone: '01012345678', name: 'عميل مكرر', formName: 'anabyia', dateIso: '2026-11-15T10:00:00.000Z' }],
+    records: [jazeelRecord],
+  });
+  const biMap = repeatsByPhone(anabyiaRepeat);
+  check('الرقم المتكرر منتمي للفورمين (jazeel و anabyia)', allFormsOfPhone(biMap, 'jazeel', '01012345678').length === 2);
+  check('لما أدخل فورم jazeel يكتب: متكرر في فورم anabyia', repeatLabelForForm(biMap, 'jazeel', 'jazeel', '01012345678') === 'متكرر في فورم anabyia');
+  check('لما أدخل فورم anabyia يكتب: متكرر في فورم jazeel', repeatLabelForForm(biMap, 'anabyia', 'jazeel', '01012345678') === 'متكرر في فورم jazeel');
+
+  // لو الرقم مش متوزع والتوزيع التلقائي شغال في أحد الفورمين (مثلاً anabyia) يتوزع تلقائي
+  const autoRes = applyAutoRules({
+    leads: [jazeelRecord],
+    rules: [{ id: 'anabyia', formName: 'anabyia', salesIds: ['u-salma'], active: true }],
+    activeSalesIds: ['u-salma'],
+    repeats: anabyiaRepeat,
+  });
+  check('الرقم غير الموزع المتكرر يتوزع تلقائي لو التوزيع التلقائي شغال في الفورم التانية', autoRes.assignments.length === 1 && autoRes.assignments[0].salesId === 'u-salma');
 }
 
 // ===== ٢) السحب الحقيقي: التكرار يتسجّل والسيلز ما يتغيّرش =====
@@ -137,6 +158,8 @@ const { runAutoImportCore, normalizeConfig } = await import('../server/leadSourc
       app.includes('(ما اتغيّرش)')
   );
   check('الرقم المتكرر بيتعدّ في الفورم', /repeatRowsOf\(option\.name\)\.length/.test(app));
+  check('حالة Hot Case موجودة في السيستم', app.includes("id: 'hot-case'") && app.includes("'hot-case': 'Hot Case'"));
+  check('فلتر الكامبين (الفورم) لحسابات السيلز في الأرقام', app.includes('id="sales-form-filter"') && app.includes('salesForms'));
 }
 
 console.log(`\n✅ نجحت ${passed} فحوصات (الأرقام المتكررة من الكامبين)`);

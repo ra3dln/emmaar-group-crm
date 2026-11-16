@@ -16,6 +16,7 @@ import {
   type ManualForm,
 } from './manualForms';
 import { isDeveloperAccount } from '../shared/roles.js';
+import { buildRepeats, LEAD_REPEATS_KEY } from '../shared/leadRepeats.js';
 
 const readList = (key: string): any[] => {
   try {
@@ -117,8 +118,12 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
   const columns = Array.from({ length: columnWidth }, (_, i) => preview?.header?.[i] || `العمود ${i + 1}`);
 
   const pushAdded = async () => {
-    const [leadsOk, formsOk] = await Promise.all([pushKey('crm_assigned_leads'), pushKey(MANUAL_FORMS_KEY)]);
-    return leadsOk && formsOk;
+    const [leadsOk, formsOk, repeatsOk] = await Promise.all([
+      pushKey('crm_assigned_leads'),
+      pushKey(MANUAL_FORMS_KEY),
+      pushKey(LEAD_REPEATS_KEY),
+    ]);
+    return leadsOk && formsOk && repeatsOk;
   };
 
   const handleSave = async () => {
@@ -135,18 +140,31 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
       setError('في فورم بالاسم ده بالفعل — اختار اسم تاني، أو اختار «فورم موجودة» عشان تضيف عليها.');
       return;
     }
+    const now = new Date().toISOString();
     const params = {
       name,
       fileName,
       rows: preview.rows,
       adminId: String(currentUser?.id || ''),
       adminName: String(currentUser?.name || ''),
-      now: new Date().toISOString(),
+      now,
       newId: () => crypto.randomUUID(),
     };
     const built = toExisting ? { form: null, leads: buildManualLeads(params) } : buildManualForm(params);
     const leads = built.leads;
-    if (!leads.length) {
+    const currentLeads = readList('crm_assigned_leads');
+    const currentClients = readList('crm_clients');
+    const currentRepeats = readList(LEAD_REPEATS_KEY);
+    const dupRows = preview.rows
+      .filter((row) => !row.invalid && row.duplicate && row.phone)
+      .map((row) => ({ phone: row.phone, name: row.name, formName: name, dateIso: row.date || now }));
+    const newRepeats = buildRepeats({
+      rows: dupRows,
+      records: [...currentLeads, ...currentClients, ...leads],
+      existing: currentRepeats,
+      at: now,
+    });
+    if (!leads.length && !newRepeats.length) {
       setError('مفيش أرقام جديدة في الملف — كلها مكررة أو غير صالحة.');
       return;
     }
@@ -157,11 +175,20 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
       setError('تعذّر حفظ الفورم — ما اتضافش أي رقم. اتأكد من الاتصال وجرّب تاني.');
       return;
     }
-    localStorage.setItem('crm_assigned_leads', JSON.stringify([...leads, ...readList('crm_assigned_leads')]));
+    if (leads.length) {
+      localStorage.setItem('crm_assigned_leads', JSON.stringify([...leads, ...currentLeads]));
+    }
+    if (newRepeats.length) {
+      localStorage.setItem(LEAD_REPEATS_KEY, JSON.stringify([...newRepeats, ...currentRepeats]));
+    }
     const registry = parseManualForms(localStorage.getItem(MANUAL_FORMS_KEY));
     localStorage.setItem(
       MANUAL_FORMS_KEY,
-      JSON.stringify(built.form ? [built.form, ...registry] : addToManualFormCount(registry, name, leads.length))
+      JSON.stringify(
+        built.form
+          ? [{ ...built.form, count: leads.length + newRepeats.length }, ...registry]
+          : addToManualFormCount(registry, name, leads.length + newRepeats.length)
+      )
     );
     window.dispatchEvent(new Event(ACTIVE_FORMS_EVENT));
     const ok = await pushAdded();
@@ -171,7 +198,8 @@ export function ManualFormsView({ currentUser, activeForms = [], onChanged }: an
       setPendingPush(true);
       setError('الفورم اتسجّل على الجهاز ده بس ماوصلش للسيرفر — اضغط «إعادة الرفع».');
     } else {
-      setNotice(`تمت إضافة «${name}» — ${leads.length} رقم في «توزيع الأرقام».`);
+      const repNote = newRepeats.length ? ` (و ${newRepeats.length} متكرر)` : '';
+      setNotice(`تمت إضافة «${name}» — ${leads.length} رقم في «توزيع الأرقام»${repNote}.`);
     }
     reset();
   };

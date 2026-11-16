@@ -30,6 +30,7 @@ export const FEEDBACK_STATUS_TO_STAGE: Record<string, string> = {
   'after-meeting': 'meeting',
   reschedule: 'meeting',
   reservation: 'negotiation',
+  'hot-case': 'negotiation',
   'done-deal': 'closed',
   cancellation: 'lost',
 };

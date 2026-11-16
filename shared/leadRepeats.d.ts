@@ -12,3 +12,5 @@ export function repeatIdOf(phoneKey: string, formName: string, when: string): st
 export function buildRepeats(params: { rows?: any[]; records?: any[]; existing?: any[]; at?: string }): LeadRepeat[];
 export function repeatsByPhone(list?: any[]): Map<string, LeadRepeat[]>;
 export function repeatLabel(entries?: LeadRepeat[]): string;
+export function allFormsOfPhone(map: any, originForm?: string, ...phones: any[]): string[];
+export function repeatLabelForForm(map: any, currentForm?: string, originForm?: string, ...phones: any[]): string;

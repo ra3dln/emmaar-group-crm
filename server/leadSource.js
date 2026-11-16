@@ -939,20 +939,28 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
     // ===== التوزيع التلقائي: فورم اختارت له الإدارة مندوبين بعينهم =====
     // القاعدة تُطبَّق هنا لحظة الوصول، فالأرقام تُسحب وتُوزَّع ٢٤/٧ بلا متصفح مفتوح،
     // ومن ليس في قائمة الفورم لا يصله منه رقم (كل رقم يُوزَّع على مختاريه وحدهم).
+    // ولو الرقم المكرر مش متوزع أصلاً والتوزيع التلقائي شغال في أحد الفورمين، يتوزع تلقائي.
     const rules = parseRules(data[AUTO_ASSIGN_KEY]);
+    const allRepeats = [
+      ...newRepeats,
+      ...(Array.isArray(data[LEAD_REPEATS_KEY]) ? data[LEAD_REPEATS_KEY] : []),
+    ];
+    const unassignedExisting = assigned.filter(
+      (l) => l && !String(l.salesId || '').trim() && l.assignedVia !== 'manual' && l.status !== 'closed'
+    );
     // نفس دالة الواجهة: سيلز/قائد فريق + حساب «مطوّر» الإداري الذي يعمل سيلزاً أيضاً
     const activeSalesIds = (Array.isArray(data.crm_users) ? data.crm_users : [])
       .filter(isAssignableSales)
       .map((user) => String(user.id));
     const auto = rules.length
       ? applyAutoRules({
-          // التوزيع على الأرقام الجديدة وحدها، لكن حساب الحصص على **كل** أرقام
-          // كل مندوب (assigned + الجديدة). بدون ذلك كان كل سحب يبدأ من صفر فيروح
-          // الرقم لنفس المندوب الأول دائمًا — والنتيجة ٢٠ رقم مقابل ٤ عند غيره.
-          leads: built.added,
+          // التوزيع على الأرقام الجديدة + الأرقام غير الموزعة المكررة في الفورم،
+          // وحساب الحصص على **كل** أرقام كل مندوب (assigned + الجديدة).
+          leads: [...unassignedExisting, ...built.added],
           loadLeads: [...assigned, ...built.added],
           rules,
           activeSalesIds,
+          repeats: allRepeats,
           // الأرقام الجديدة تحمل formName صريحاً، وهو مفتاح القاعدة نفسه
           formOf: (lead) => String(lead?.formName || ''),
           // وقت الدور = وقت السحب (autoTurnKey على كل رقم بيحدد مين عليه الدور بعده)
@@ -968,6 +976,10 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       for (const lead of auto.leads) {
         if (assignedNow.has(String(lead.id)) && lead.salesId) lead.assignedAt = at;
       }
+      const addedIdSet = new Set(built.added.map((l) => String(l.id)));
+      const savedLeads = auto.leads.filter(
+        (l) => addedIdSet.has(String(l.id)) || assignedNow.has(String(l.id))
+      );
 
       // ===== الحفظ: نعيد القراءة قبل الكتابة =====
       // السحب بياخد وقت، وأي رقم أو عميل أُضيف من جهاز مندوب أثناء السحب ما ينفعش
@@ -977,9 +989,9 @@ export async function runAutoImportCore({ storage, config, saveConfig: persist, 
       const freshData = freshDb.data || {};
       const freshLeads = Array.isArray(freshData.crm_assigned_leads) ? freshData.crm_assigned_leads : [];
       const freshClients = Array.isArray(freshData.crm_clients) ? freshData.crm_clients : [];
-      const newIds = new Set(auto.leads.map((l) => String(l.id)));
+      const newIds = new Set(savedLeads.map((l) => String(l.id)));
       freshData.crm_assigned_leads = [
-        ...auto.leads,
+        ...savedLeads,
         ...freshLeads.filter((l) => !newIds.has(String(l?.id))),
       ];
 

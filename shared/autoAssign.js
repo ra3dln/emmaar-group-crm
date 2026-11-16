@@ -26,6 +26,46 @@ export const phoneKeyOf = (value) =>
     .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
     .replace(/\D/g, '');
 
+const shortPhoneKey = (value) => {
+  const digits = phoneKeyOf(value);
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+};
+
+// فهرس الفورمات المتكررة لكل رقم (من crm_lead_repeats أو خريطة التكرارات)
+const repeatFormsByPhone = (repeats) => {
+  const map = new Map();
+  if (!repeats) return map;
+  const items =
+    typeof repeats.values === 'function' && !Array.isArray(repeats)
+      ? [...repeats.values()].flat()
+      : asList(repeats);
+  for (const entry of items) {
+    const k = shortPhoneKey(entry?.phone);
+    const f = String(entry?.formName || '').trim();
+    if (!k || !f) continue;
+    let set = map.get(k);
+    if (!set) {
+      set = new Set();
+      map.set(k, set);
+    }
+    set.add(f);
+  }
+  return map;
+};
+
+const leadMatchesForm = (lead, target, nameOf, repMap) => {
+  if (!target) return true;
+  if (String(nameOf(lead) || '').trim() === target) return true;
+  if (repMap && repMap.size) {
+    const phones = [lead?.phone, ...(Array.isArray(lead?.phones) ? lead.phones : [])];
+    for (const p of phones) {
+      const k = shortPhoneKey(p);
+      if (k && repMap.get(k)?.has(target)) return true;
+    }
+  }
+  return false;
+};
+
 // من يستقبل أرقاماً؟
 //   • سيلز أو قائد فريق (وظيفته الأصلية)
 //   • أو حساب إداري اختار صراحةً أن يستقبل أرقاماً (receivesLeads).
@@ -131,7 +171,7 @@ export function lastTurnOwner({ loadLeads = [], salesIds = [], formName = '', fo
 }
 
 // كل التوزيع بالدور — مفيش وضع «بالتساوي» خلاص.
-export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName = '', formOf, onlyUnassigned = true, excludePhones = [], at = new Date().toISOString() }) {
+export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName = '', formOf, onlyUnassigned = true, excludePhones = [], repeats = [], at = new Date().toISOString() }) {
   const eligible = cleanIds(salesIds);
   if (!eligible.length) return { assignments: [], loads: {} };
   // حمل كل مندوب يُحسب على **كل** أرقامه في النظام (loadLeads)، لا على دفعة
@@ -141,7 +181,12 @@ export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName
   const nameOf = typeof formOf === 'function' ? formOf : formNameOfLead;
 
   const target = String(formName || '').trim();
-  const excluded = new Set(asList(excludePhones).map((value) => phoneKeyOf(value)).filter(Boolean));
+  const excluded = new Set(
+    asList(excludePhones)
+      .flatMap((value) => [phoneKeyOf(value), shortPhoneKey(value)])
+      .filter(Boolean)
+  );
+  const repMap = repeatFormsByPhone(repeats);
 
   // عدد أرقام كل مندوب (للتقرير بس — التوزيع نفسه بالدور مش بالعدد)
   const loads = new Map(eligible.map((id) => [id, 0]));
@@ -156,7 +201,8 @@ export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName
       if (!lead) return false;
       // الرقم موجود عند حدّ سلفاً (عميل مسجّل) => ما يتوزّعش على حدّ تاني
       const phone = phoneKeyOf(lead.phone);
-      if (phone && excluded.has(phone)) return false;
+      const short = shortPhoneKey(lead.phone);
+      if ((phone && excluded.has(phone)) || (short && excluded.has(short))) return false;
       const owner = String(lead.salesId || '');
       // رقم الإدارة سحبته بنفسها (يدوي) يفضل غير مخصص — التلقائي ما يرجّعهوش
       if (onlyUnassigned) return !owner && lead.assignedVia !== 'manual';
@@ -164,7 +210,7 @@ export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName
       // ومش بنلمس رقم حدّ خارج القائمة.
       return !owner || loads.has(owner) || eligible.includes(owner);
     })
-    .filter((lead) => !target || String(nameOf(lead) || '').trim() === target)
+    .filter((lead) => leadMatchesForm(lead, target, nameOf, repMap))
     .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
 
   const assignments = [];
@@ -183,7 +229,7 @@ export function distributeLeads({ leads = [], loadLeads, salesIds = [], formName
 // تطبيق كل القواعد المفعّلة على قائمة الأرقام كاملة (ترجع نسخة جديدة)
 //   activeSalesIds: الحسابات النشطة فعلاً — قاعدة تشير لحساب محذوف/موقوف لا تعمل
 //   excludePhones: أرقام عند أحد بالفعل (عملاء مسجّلون) — ما تتوزّع تاني
-export function applyAutoRules({ leads = [], loadLeads, rules = [], activeSalesIds = [], formOf, excludePhones = [], at = new Date().toISOString() } = {}) {
+export function applyAutoRules({ leads = [], loadLeads, rules = [], activeSalesIds = [], formOf, excludePhones = [], repeats = [], at = new Date().toISOString() } = {}) {
   const active = new Set(cleanIds(activeSalesIds));
   const list = asList(leads).map((lead) => ({ ...lead }));
   const loadSource = asList(loadLeads === undefined ? leads : loadLeads);
@@ -200,7 +246,7 @@ export function applyAutoRules({ leads = [], loadLeads, rules = [], activeSalesI
     if (!salesIds.length) continue;
     const formName = String(rule.formName || rule.id || '').trim();
     if (!formName) continue;
-    const result = distributeLeads({ leads: list, loadLeads: loadSource, salesIds, formName, formOf, onlyUnassigned: true, excludePhones, at });
+    const result = distributeLeads({ leads: list, loadLeads: loadSource, salesIds, formName, formOf, onlyUnassigned: true, excludePhones, repeats, at });
     if (!result.assignments.length) continue;
     const byId = new Map(result.assignments.map((item) => [item.id, item]));
     for (const lead of list) {
