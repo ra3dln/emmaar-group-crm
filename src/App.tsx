@@ -11510,6 +11510,44 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
     })),
   ];
 
+
+  // ===== الأرقام المتكررة جوه الفورم =====
+  // رقم اتسجّل في الفورم دي بس كان موجود أصلاً من فورم تانية — ما اتضافش تاني،
+  // بس بيظهر هنا (عشان عدد الفورم يطابق فيسبوك) ومكتوب عليه مكرر وأصله فين ومع مين.
+  // الرقم الأصلي وسيلزه زي ما هما — فلو فيه فلتر سيلز، الصف المكرر يظهر مع
+  // صاحبه الأصلي بس (مفلتر سيلز يعني أرقام السيلز ده لوحده).
+  const repeatRowsOf = (formName: string) => {
+    const out: { id: string; name: string; phone: string; at: string; client: Client | null; originForm: string; owner: string; ownerId: string }[] = [];
+    for (const entries of repeatMap.values()) {
+      for (const entry of entries) {
+        if (String(entry.formName || '').trim() !== formName) continue;
+        const key = repeatPhoneKey(entry.phone);
+        const client = (clients || []).find((c: Client) => [c.phone, ...(c.phones || [])].some((ph) => repeatPhoneKey(ph) === key)) || null;
+        const lead = (leads || []).find((l: AssignedLead) => repeatPhoneKey(l.phone) === key) || null;
+        const original: any = client || lead;
+        const origForm = formNameOf(client) || formNameOf(lead) || (original ? formNameOf(original) : '');
+        // الأصل في نفس الفورم = الرقم ظاهر أصلاً (ولافتة «متكرر» عليه)
+        if (origForm === formName) continue;
+        const ownerId = client ? ownerIdOf(client) : lead ? leadOwnerIdOf(lead) : '';
+        if (!inSales(ownerId)) continue;
+        if (client ? !clientInStage(client, stage) : lead ? !leadInStage(lead, stage) : stage !== 'all') continue;
+        const name = String(entry.name || original?.name || 'بدون اسم');
+        if (q && !normalizeArabicText(`${name} ${entry.phone} ${origForm} ${formName}`).includes(q)) continue;
+        out.push({
+          id: entry.id,
+          name,
+          phone: String(entry.phone || ''),
+          at: String(entry.campaignAt || entry.createdAt || ''),
+          client,
+          originForm: origForm,
+          owner: client ? ownerName(client) : lead ? userName(lead.salesId) : '',
+          ownerId,
+        });
+      }
+    }
+    return out;
+  };
+
   // ===== كل فورم لوحده =====
   // الفورم هو اللي الفريق بيتابع عليه فعلاً (فورم أكتوبر، فورم التجمع…)؛ فبنقسّم
   // الأرقام الظاهرة بقسم لكل فورم بعدده وحالته. الشيت نفسه في تبويب «شيت الفورمات».
@@ -11613,42 +11651,6 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ar'));
   };
 
-  // ===== الأرقام المتكررة جوه الفورم =====
-  // رقم اتسجّل في الفورم دي بس كان موجود أصلاً من فورم تانية — ما اتضافش تاني،
-  // بس بيظهر هنا (عشان عدد الفورم يطابق فيسبوك) ومكتوب عليه مكرر وأصله فين ومع مين.
-  // الرقم الأصلي وسيلزه زي ما هما — فلو فيه فلتر سيلز، الصف المكرر يظهر مع
-  // صاحبه الأصلي بس (مفلتر سيلز يعني أرقام السيلز ده لوحده).
-  const repeatRowsOf = (formName: string) => {
-    const out: { id: string; name: string; phone: string; at: string; client: Client | null; originForm: string; owner: string; ownerId: string }[] = [];
-    for (const entries of repeatMap.values()) {
-      for (const entry of entries) {
-        if (String(entry.formName || '').trim() !== formName) continue;
-        const key = repeatPhoneKey(entry.phone);
-        const client = (clients || []).find((c: Client) => [c.phone, ...(c.phones || [])].some((ph) => repeatPhoneKey(ph) === key)) || null;
-        const lead = (leads || []).find((l: AssignedLead) => repeatPhoneKey(l.phone) === key) || null;
-        const original: any = client || lead;
-        const origForm = formNameOf(client) || formNameOf(lead) || (original ? formNameOf(original) : '');
-        // الأصل في نفس الفورم = الرقم ظاهر أصلاً (ولافتة «متكرر» عليه)
-        if (origForm === formName) continue;
-        const ownerId = client ? ownerIdOf(client) : lead ? leadOwnerIdOf(lead) : '';
-        if (!inSales(ownerId)) continue;
-        if (client ? !clientInStage(client, stage) : lead ? !leadInStage(lead, stage) : stage !== 'all') continue;
-        const name = String(entry.name || original?.name || 'بدون اسم');
-        if (q && !normalizeArabicText(`${name} ${entry.phone} ${origForm} ${formName}`).includes(q)) continue;
-        out.push({
-          id: entry.id,
-          name,
-          phone: String(entry.phone || ''),
-          at: String(entry.campaignAt || entry.createdAt || ''),
-          client,
-          originForm: origForm,
-          owner: client ? ownerName(client) : lead ? userName(lead.salesId) : '',
-          ownerId,
-        });
-      }
-    }
-    return out;
-  };
 
   return (
     <div className="space-y-4">
