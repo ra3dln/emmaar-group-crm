@@ -12081,7 +12081,7 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
   // لم يُكتب له الحقل أصلاً، فلا يظهر في توزيع الأرقام ولا يقبل رقمأ.
   const salesUsers = users.filter((u: User) => isAssignableSales(u));
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<'all' | 'unassigned'>('all');
+  const [salesFilter, setSalesFilter] = useState('all');
 
   // ===== الفورمات: القائمة المسندلة تحدد نطاق التوزيع =====
   // اختيار فورم يحصر الأرقام المعروضة في هذا الفورم فقط، وكل توزيع من هذا التبويب
@@ -12122,14 +12122,21 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
     : openLeads.filter((lead: AssignedLead) => leadInForm(lead, activeForm));
 
   const nameOf = (id?: string) => users.find((u: User) => u.id === id)?.name || 'غير مخصص';
+  const unassignedCount = formLeads.filter((l: AssignedLead) => !salesUsers.some((u: User) => u.id === l.salesId)).length;
+  const leadMatchesSales = (l: AssignedLead) => {
+    if (salesFilter === 'all') return true;
+    if (salesFilter === 'unassigned') return !salesUsers.some((u: User) => u.id === l.salesId);
+    return String(l.salesId || '') === salesFilter;
+  };
+  const salesLeads = formLeads.filter(leadMatchesSales);
+
   const q = normalizeArabicText(query).trim();
   // الأحدث فوق
   const visible = newestFirst(formLeads
-    .filter((l: AssignedLead) => (filter === 'unassigned' ? !salesUsers.some((u: User) => u.id === l.salesId) : true))
+    .filter(leadMatchesSales)
     .filter((l: AssignedLead) =>
       !q || normalizeArabicText(`${l.name} ${l.phone} ${nameOf(l.salesId)} ${l.description || ''} ${formNameOf(l)}`).includes(q)
     ));
-  const unassignedCount = formLeads.filter((l: AssignedLead) => !salesUsers.some((u: User) => u.id === l.salesId)).length;
 
   // حصة كل سيلز: نافذة تعرض كل السيلز وعدد الأرقام لكل واحد
   const [showShare, setShowShare] = useState(false);
@@ -12277,12 +12284,16 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
         <div>
           <div className="page-intro"><div><h2>توزيع الأرقام</h2></div></div>
           <p className="text-xs text-[var(--text-muted)] mt-1">
-            إجمالي الأرقام: <span className="text-[var(--brand)] font-bold">{formLeads.length}</span>
+            إجمالي الأرقام: <span className="text-[var(--brand)] font-bold">{openLeads.length}</span>
+            {activeForm !== 'all' && (
+              <> {' '}• الفورم: <span className="text-[var(--text)] font-bold">{activeForm}</span> (<span className="text-[var(--brand)] font-bold">{formLeads.length}</span>)</>
+            )}
+            {salesFilter !== 'all' && (
+              <> {' '}• السيلز: <span className="text-[var(--text)] font-bold">{salesFilter === 'unassigned' ? 'غير مخصصة' : nameOf(salesFilter)}</span></>
+            )}
+            {' '}• المعروض: <span className="text-emerald-300 font-bold">{visible.length}</span>
             {' '}• غير مخصصة: <span className="text-amber-300 font-bold">{unassignedCount}</span>
             {' '}• عدد السيلز: {salesUsers.length}
-            {activeForm !== 'all' && (
-              <> {' '}• الفورم: <span className="text-[var(--text)] font-bold">{activeForm}</span></>
-            )}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -12325,32 +12336,67 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
         </div>
       </div>
 
-      {/* ===== الفورم: قائمة مسندلة تعرض كل فورم مفعّل وعدد أرقامه =====
-          اختيار فورم يفتح أرقامه وحدها، والتوزيع بعدها يقع على أرقام هذا الفورم فقط. */}
-      <div className="panel p-3.5">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
-          <label htmlFor="lead-form-select" className="text-[11px] font-bold text-[var(--text-dim)] shrink-0">
-            الفورم
-          </label>
-          <select
-            id="lead-form-select"
-            value={activeForm}
-            onChange={(e) => setForm(e.target.value)}
-            className="flex-1 min-w-0 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
-          >
-            <option value="all" className="bg-gray-900">كل الفورمات ({openLeads.length})</option>
-            {formOptions.map((option) => (
-              <option key={option.name} value={option.name} className="bg-gray-900">
-                {withManualTag(option.name, manualFormNames)} ({option.count} رقم)
-              </option>
-            ))}
-          </select>
+      {/* ===== الفورم والسيلز: فلتر يحدد نطاق العرض والتوزيع ===== */}
+      <div className="panel p-3.5 space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="lead-form-select" className="block text-[11px] font-bold text-[var(--text-dim)] mb-1.5">
+              فلتر الفورم (عملاء كامبين)
+            </label>
+            <select
+              id="lead-form-select"
+              value={activeForm}
+              onChange={(e) => setForm(e.target.value)}
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
+            >
+              <option value="all" className="bg-gray-900">كل الفورمات ({openLeads.length} رقم)</option>
+              {formOptions.map((option) => (
+                <option key={option.name} value={option.name} className="bg-gray-900">
+                  {withManualTag(option.name, manualFormNames)} ({option.count} رقم)
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="lead-sales-select" className="block text-[11px] font-bold text-[var(--text-dim)] mb-1.5">
+              فلتر السيلز
+            </label>
+            <select
+              id="lead-sales-select"
+              value={salesFilter}
+              onChange={(e) => setSalesFilter(e.target.value)}
+              className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm font-bold text-[var(--text-strong)]"
+            >
+              <option value="all" className="bg-gray-900">كل السيلز ({formLeads.length} رقم)</option>
+              <option value="unassigned" className="bg-gray-900">غير مخصصة ({unassignedCount} رقم)</option>
+              {salesUsers.map((u: User) => {
+                const count = formLeads.filter((l: AssignedLead) => l.salesId === u.id).length;
+                return (
+                  <option key={u.id} value={u.id} className="bg-gray-900">
+                    {u.name} ({count} رقم)
+                  </option>
+                );
+              })}
+            </select>
+          </div>
         </div>
-        <p className="text-[11px] text-[var(--text-dim)] mt-2">
-          {activeForm === 'all'
-            ? 'اختر فورم لتوزيع أرقامه وحدها على السيلز. الفورمات المفعّلة في إعدادات السحب تظهر هنا تلقائياً.'
-            : `كل توزيع من هذه الشاشة يقع على أرقام «${activeForm}» فقط — ${formLeads.length} رقم.`}
-        </p>
+
+        <div className="flex items-center justify-between text-[11px] text-[var(--text-dim)] pt-0.5 flex-wrap gap-2">
+          <p>
+            {activeForm === 'all' && salesFilter === 'all'
+              ? 'اختر فورم أو سيلز أو الاثنين معاً لحصر الأرقام والتوزيع.'
+              : `تصفية نشطة: ${activeForm !== 'all' ? `فورم «${activeForm}»` : 'كل الفورمات'} • ${salesFilter === 'all' ? 'كل السيلز' : salesFilter === 'unassigned' ? 'غير مخصصة' : `سيلز «${nameOf(salesFilter)}»`} (المعروض ${salesLeads.length} رقم)`}
+          </p>
+          {(activeForm !== 'all' || salesFilter !== 'all') && (
+            <button
+              type="button"
+              onClick={() => { setForm('all'); setSalesFilter('all'); }}
+              className="text-xs font-bold text-[var(--brand)] hover:underline flex items-center gap-1"
+            >
+              إلغاء الفلاتر (عرض الكل)
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ===== التوزيع التلقائي: اختار الفورم ← اختار السيلز ← أرقامه تتوزع عليهم بس =====
@@ -12537,22 +12583,30 @@ function AdminLeadsView({ assignedLeads, users, currentUser, onAdd, onDelete, on
         </div>
       )}
 
-      {/* أدوات التوزيع: بحث + تصفية + توزيع جماعي */}
+      {/* أدوات التوزيع: بحث + تصفية */}
       <div className="panel p-3.5 flex flex-col lg:flex-row gap-2.5 lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث بالاسم أو الرقم أو السيلز..."
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث بالاسم أو الرقم أو السيلز أو الفورم..."
             className="w-full bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] pr-9 pl-3 py-2.5 text-[var(--text-strong)] text-sm" />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={() => setFilter('all')}
-            className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${filter === 'all' ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
-            الكل ({formLeads.length})
+          <button onClick={() => setSalesFilter('all')}
+            className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${salesFilter === 'all' ? 'bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)]' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
+            كل السيلز ({formLeads.length})
           </button>
-          <button onClick={() => setFilter('unassigned')}
-            className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${filter === 'unassigned' ? 'bg-amber-500/20 border-amber-400/50 text-amber-200' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
+          <button onClick={() => setSalesFilter('unassigned')}
+            className={`text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border transition-colors ${salesFilter === 'unassigned' ? 'bg-amber-500/20 border-amber-400/50 text-amber-200' : 'bg-[var(--tint-1)] border-[var(--border)] text-[var(--text-muted)]'}`}>
             غير مخصصة ({unassignedCount})
           </button>
+          {salesFilter !== 'all' && salesFilter !== 'unassigned' && (
+            <button onClick={() => setSalesFilter('all')}
+              className="text-xs font-bold px-3 py-2.5 rounded-[var(--r-md)] border bg-[var(--brand-primary-softer)] border-[var(--brand-primary-soft)] text-[var(--brand)] flex items-center gap-1.5"
+              title="إلغاء فلتر السيلز">
+              <span>{nameOf(salesFilter)}</span>
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
