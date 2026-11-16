@@ -22,6 +22,7 @@
 // وفيها النظام يظل يعمل بالكامل من localStorage.
 
 import { keepManualOwner } from '../shared/ownerGuard.js';
+import { mergeClientActivities } from '../shared/comments.js';
 
 export const SYNC_EVENT = 'crm-sync';
 // يُطلَق عندما يرفض السيرفر الطلب (401/403): لا جلسة أو كلمة مرور ضعيفة
@@ -303,12 +304,23 @@ const mergeUnion = (remote: any[], local: any[], key = ''): any[] => {
     if (!item || !item.id) continue;
     const id = String(item.id);
     const mine = byId.get(id);
-    // التوزيع اليدوي يكسب التلقائي مهما كان وقت الحفظ (shared/ownerGuard.js)
-    if (mine && changeStamp(mine) > changeStamp(item)) {
-      byId.set(id, keepManualOwner(key, mine, item)); // نسختنا أحدث ⇒ هي الأصح
+    if (!mine) {
+      byId.set(id, item);
       continue;
     }
-    byId.set(id, mine ? keepManualOwner(key, item, mine) : item);
+    // التوزيع اليدوي يكسب التلقائي مهما كان وقت الحفظ (shared/ownerGuard.js)
+    const winner = changeStamp(mine) > changeStamp(item)
+      ? keepManualOwner(key, mine, item) // نسختنا أحدث ⇒ هي الأصح
+      : keepManualOwner(key, item, mine);
+    // دمج الخط الزمني للعميل (الكومنتات) حتى لا يمسح تعديل مرحلة كومنتات كُتبت على جهاز آخر
+    if (key === 'crm_clients') {
+      byId.set(id, {
+        ...winner,
+        activities: mergeClientActivities(mine?.activities, item?.activities),
+      });
+    } else {
+      byId.set(id, winner);
+    }
   }
   return Array.from(byId.values());
 };
@@ -336,6 +348,20 @@ const pushOne = async (key: string): Promise<void> => {
   if (!res.ok) throw new Error(`push failed: ${res.status}`);
   const payload = await res.json();
   serverVersion = payload.version;
+};
+
+const pushOneWithRetry = async (key: string): Promise<void> => {
+  let lastErr: any = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await pushOne(key);
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 350));
+    }
+  }
+  throw lastErr;
 };
 
 // كل ثانيتين: نرفع تغييرات هذا الجهاز ثم نجلب تغييرات الأجهزة الأخرى
@@ -491,6 +517,56 @@ const recordDeletions = async (key: string, removedIds: string[]): Promise<void>
   await pushOne(TOMBSTONE_KEY); // الشواهد أولاً حتى لا تُحيي القائمة الجديدة السجل المحذوف
 };
 
+// دفع دفعة من المفاتيح في طلب واحد مؤمَّن (ذرّي) بدل طلبات منفصلة تتسابق
+export async function pushKeys(keys: string[]): Promise<boolean> {
+  const uniqueKeys = [...new Set(keys.filter(Boolean))];
+  if (!uniqueKeys.length) return true;
+  if (uniqueKeys.length === 1) return pushKey(uniqueKeys[0]);
+
+  try {
+    const dataToSend: Record<string, any[]> = {};
+    for (const key of uniqueKeys) {
+      const raw = localStorage.getItem(key);
+      if (raw === null) continue;
+      const before = idSet(snapshot[key]);
+      const currentList = safeParse(raw);
+      const removed = [...before].filter((id) => !idSet(raw).has(id));
+      await recordDeletions(key, removed);
+      dataToSend[key] = currentList;
+    }
+
+    if (!Object.keys(dataToSend).length) return true;
+
+    // محاولة الإرسال مع محاولة ثانية سريعة لو حدث خطأ شبكي عابر
+    let lastErr: any = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await apiFetch(API, {
+          method: 'POST',
+          headers: apiHeaders(true),
+          body: JSON.stringify({ data: dataToSend }),
+        });
+        if (res.ok) {
+          const payload = await res.json();
+          serverVersion = payload.version;
+          for (const key of Object.keys(dataToSend)) {
+            snapshot[key] = localStorage.getItem(key) || '[]';
+          }
+          return true;
+        }
+        lastErr = new Error(`push failed: ${res.status}`);
+      } catch (err) {
+        lastErr = err;
+      }
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 350));
+    }
+    throw lastErr;
+  } catch (err) {
+    console.warn('[sync] pushKeys failed:', err);
+    return false;
+  }
+}
+
 // القيمة الراجعة: true لو وصل التغيير لقاعدة البيانات فعلاً.
 // الشاشات التي تُنشئ حساباً أو عميلاً تحتاج هذه الإجابة، لأن الحفظ المحلي وحده
 // يجعل السجل موجوداً على هذا الجهاز فقط — فيبدو لمن يجرّب الدخول من جهازه «مش شغّال».
@@ -502,10 +578,7 @@ export async function pushKey(key: string): Promise<boolean> {
     const before = idSet(snapshot[key]);
     const removed = [...before].filter((id) => !idSet(raw).has(id));
     await recordDeletions(key, removed);
-    await pushOne(key);
-    // تُسجَّل "مرفوعة" فقط بعد نجاح الرفع: لو فشل (انقطاع الشبكة أو خطأ في القاعدة)
-    // يظل المفتاح "مُعدَّلاً" في العين التالية للمزامنة فيُعاد رفعه تلقائياً،
-    // بدل أن يضيع التغيير (وهو ما يجعل حساباً منشأً لا يصل للقاعدة أبداً).
+    await pushOneWithRetry(key);
     snapshot[key] = raw;
     return true;
   } catch {

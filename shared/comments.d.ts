@@ -38,6 +38,7 @@ export declare function isCommentActivity(activity: any): boolean;
 export declare function commentSignature(text: any, at: any): string;
 export declare function dedupeComments(items: any[]): any[];
 export declare function commentActivitiesOf(client: any): any[];
+export declare function mergeClientActivities(actsA?: any[], actsB?: any[]): any[];
 
 // فهرس آخر كلام على كل رقم (مع صاحبه ووقته وحالته)
 export declare type PhoneComment = {

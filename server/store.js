@@ -22,7 +22,7 @@ import {
   signSession,
   stripUserSecrets,
 } from './auth.js';
-import { sanitizeClientRecord, sanitizeDailyFeedbackCards } from '../shared/comments.js';
+import { mergeClientActivities, sanitizeClientRecord, sanitizeDailyFeedbackCards } from '../shared/comments.js';
 // حكم «مين حساب المطوّر» — نفس الملف في الواجهة (shared/roles.js)
 import { isDeveloperAccount } from '../shared/roles.js';
 import { keepManualOwner } from '../shared/ownerGuard.js';
@@ -170,8 +170,18 @@ export function mergeKeepingRecords(key, incoming, stored, tombstones = []) {
       continue;
     }
     // التوزيع اليدوي يكسب التلقائي مهما كان وقت الحفظ (shared/ownerGuard.js)
-    if (changeStamp(prev) > changeStamp(row)) byId.set(id, keepManualOwner(key, prev, row));
-    else byId.set(id, keepManualOwner(key, row, prev));
+    const winner = changeStamp(prev) > changeStamp(row)
+      ? keepManualOwner(key, prev, row)
+      : keepManualOwner(key, row, prev);
+    // دمج الخط الزمني للعميل (الكومنتات) حتى لا يمسح تعديل مرحلة كومنتات كُتبت على جهاز آخر
+    if (key === 'crm_clients') {
+      byId.set(id, {
+        ...winner,
+        activities: mergeClientActivities(row?.activities, prev?.activities),
+      });
+    } else {
+      byId.set(id, winner);
+    }
   }
 
   const deletedAt = new Map();

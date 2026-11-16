@@ -95,6 +95,25 @@ export const commentActivitiesOf = (client) => {
     out.push({ ...a, text });
   }
   return dedupeComments(out);
+};
+
+// دمج الخط الزمني للعميل بين نسختين (جهاز وسيرفر) حتى لا يضيع أي كومنت كُتب على أي جهاز
+export function mergeClientActivities(actsA = [], actsB = []) {
+  const seen = new Set();
+  const out = [];
+  const listA = Array.isArray(actsA) ? actsA : [];
+  const listB = Array.isArray(actsB) ? actsB : [];
+  for (const act of [...listA, ...listB]) {
+    if (!act || typeof act !== 'object') continue;
+    const text = cleanCommentText(act.text);
+    if (!text || isPureLogText(act.text)) continue;
+    const id = String(act.id || '').trim();
+    const sig = id ? `id:${id}` : `sig:${act.type || ''}|${text}|${String(act.at || '').slice(0, 16)}`;
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    out.push({ ...act, text });
+  }
+  return out.sort((x, y) => String(y.at || '').localeCompare(String(x.at || ''))).slice(0, 60);
 }
 
 // ===== تنظيف سجل عميل (للسيرفر: يمنع رجوع اللوجات من جهاز قديم) =====

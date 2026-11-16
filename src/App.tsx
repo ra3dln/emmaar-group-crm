@@ -18,7 +18,7 @@ import {
   CalendarClock
 } from 'lucide-react';
 import { Client, ClientActivity, Reminder, Property, DailyFeedback, User, Team, AssignedLead, Attendance, ChatMessage, CallLog, CallTarget, TabType } from './types';
-import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, syncNow, ownerOfPhoneOnServer, leadOwnerOfPhoneOnServer, clientPhonesOnServer } from './sync';
+import { isOnline, SYNC_EVENT, AUTH_EVENT, AUTH_API, markAuthorized, pushKey, pushKeys, syncNow, ownerOfPhoneOnServer, leadOwnerOfPhoneOnServer, clientPhonesOnServer } from './sync';
 import { buildPreview, buildSampleCsv, buildFakeCampaignCsv, decodeText, parseTable, readSheetTable, type ImportPreview } from './leadImport';
 import { alarm, loadAlarmSettings, saveAlarmSettings, DEFAULT_ALARM_SETTINGS, type AlarmSettings } from './alarm';
 import { enablePush, disablePush, pushState, sendTestPush, pushSupported, registerWorker, resyncPush, localNotification, flushPush, pushHealth, type PushState, type PushHealth } from './push';
@@ -693,7 +693,7 @@ const addClientActivity = (
   type: string,
   text: string,
   by?: string,
-  opts?: { authorId?: string; callStatus?: DailyFeedback['callStatus']; cardId?: string; skipCard?: boolean; status?: string; cancelReason?: string; nextActionAt?: string; nextActionNote?: string }
+  opts?: { authorId?: string; callStatus?: DailyFeedback['callStatus']; cardId?: string; skipCard?: boolean; skipPush?: boolean; status?: string; cancelReason?: string; nextActionAt?: string; nextActionNote?: string }
 ): void => {
   if (!clientId) return;
   try {
@@ -753,7 +753,7 @@ const addClientActivity = (
         };
         // upsert: لو البطاقة موجودة بنفس المعرّف تُحدَّث بدل أن تتكرر
         localStorage.setItem('crm_daily_feedback', JSON.stringify([fb, ...feedbacks.filter((f) => f.id !== cardId)]));
-        void pushKey('crm_daily_feedback');
+        if (!opts?.skipPush) void pushKey('crm_daily_feedback');
       }
     }
   } catch {
@@ -3458,6 +3458,7 @@ function App() {
       // والكومنتات بتعرض كلام السيلز فقط.
       if (callComment) {
         addClientActivity(target.id, 'feedback', callComment, currentUser.name, {
+          skipPush: true,
           authorId: currentUser.id,
           callStatus: payload.result === 'answered' ? 'called' : 'no-answer',
           cardId: log.id,
@@ -6109,6 +6110,7 @@ function ClientFeedbackCard({ client, currentUser, users = [], onSelect, onOpenC
     setSyncError('');
     // نفس مسار تبويب العملاء: كومنت + حالة في الخط الزمني، والمصدر واحد
     addClientActivity(client.id, 'feedback', text, currentUser?.name || '', {
+      skipPush: true,
       authorId: currentUser?.id,
       ...(statusId ? { status: statusId } : {}),
       ...(statusId === 'cancellation' && cancelReason ? { cancelReason } : {}),
@@ -6686,6 +6688,7 @@ function ClientsView({ currentUser, clients, users = [], leads = [], callLogs = 
     if (statusId === 'cancellation' && !cancelReason) return;
     // الفيدباك = كومنت + حالة، وينزل في الخط الزمني فيظهر في خانة الكومنتات (الفيدباك)
     addClientActivity(composer.clientId, 'feedback', text, currentUser?.name || '', {
+      skipPush: true,
       authorId: currentUser?.id,
       ...(statusId ? { status: statusId } : {}),
       // سبب الإلغاء يُسجَّل مع الحدث وعلى العميل — فلتر القائمة يقرأه
@@ -14120,6 +14123,7 @@ function AddClientModal({ currentUser, users, onClose, onSuccess, preset }: any)
         // فالعميل الجديد يظهر في تبويب الفيدباك مباشرة بلا خطوة يدوية.
         if (comment) {
           addClientActivity(newClient.id, 'feedback', comment, currentUser?.name || '', {
+            skipPush: true,
             authorId: currentUser.id,
             status: feedbackStatus,
             ...(feedbackStatus === 'cancellation' && cancelReason ? { cancelReason } : {}),
@@ -14607,6 +14611,7 @@ function AddFeedbackModal({ clients, currentUser, onClose, onSuccess, preset }: 
       if (!savedId && form.clientId) {
         // البطاقة سُجّلت أعلاه بنفس المعرّف، فلا ننشئ بطاقة ثانية مكرّرة
         addClientActivity(form.clientId, 'feedback', `فيدباك: ${form.feedback || 'بدون تفاصيل'}${form.nextAction ? ` — الخطوة القادمة: ${form.nextAction}` : ''}`, currentUser?.name, {
+          skipPush: true,
           authorId: currentUser?.id,
           skipCard: true,
           status: form.status,
