@@ -164,7 +164,7 @@ export const commentsByPhone = (cards = [], logs = [], users = []) => {
       card?.clientPhone,
       card?.feedback,
       card?.date || card?.createdAt,
-      card?.authorName || card?.by || nameOf(card?.userId),
+      card?.authorName || card?.by || nameOf(card?.authorId) || nameOf(card?.userId),
       card?.status
     );
   }

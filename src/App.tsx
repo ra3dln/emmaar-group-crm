@@ -222,7 +222,7 @@ const commentsOfTarget = (
     if (!keepText(text)) continue;
     out.push({
       id: String(f?.id || ''),
-      by: nameOf(f?.userId),
+      by: String(f?.authorName || f?.by || nameOf(f?.authorId || f?.userId)),
       at: String(f?.createdAt || f?.date || ''),
       text,
       status: String(f?.status || ''),
@@ -238,7 +238,7 @@ const commentsOfTarget = (
     if (!keepText(text)) continue;
     out.push({
       id: String(l?.id || ''),
-      by: nameOf(l?.salesId),
+      by: String(l?.salesName || l?.by || nameOf(l?.salesId)),
       at: String(l?.createdAt || ''),
       text,
       result: l?.result === 'no-answer' ? 'no-answer' : 'answered',
@@ -737,6 +737,8 @@ const addClientActivity = (
         const fb: DailyFeedback = {
           id: cardId,
           userId: opts?.authorId || target.userId,
+          ...(opts?.authorId ? { authorId: opts.authorId } : {}),
+          ...(by ? { authorName: by, by } : {}),
           clientPhone: target.phone,
           clientName: target.name,
           date: nowIso,
@@ -2408,117 +2410,118 @@ function App() {
   //   • توزيع دفعة على مندوب واحد (كل القيم نفس المعرّف)
   //   • التوزيع التلقائي بالدور على عدة مندوبين (كل رقم يأخذ مندوبه)
   // via: «manual» = الإدارة اختارت بنفسها — بيكسب أي توزيع تلقائي (shared/ownerGuard.js)
+  const skOfPhone = (v: string) => { const d = normalizeDigits(String(v || '')).replace(/\D/g, ''); return d.length >= 10 ? d.slice(-10) : d; };
+  const samePhoneNum = (a: string, b: string) => {
+    const da = normalizeDigits(String(a || '')).replace(/\D/g, '');
+    const db = normalizeDigits(String(b || '')).replace(/\D/g, '');
+    return !!da && (da === db || (!!skOfPhone(a) && skOfPhone(a) === skOfPhone(b)));
+  };
+  const readStoreArr = (k: string, fb: any[]) => {
+    try { const p = JSON.parse(localStorage.getItem(k) || '[]'); return Array.isArray(p) && p.length ? p : fb; } catch { return fb; }
+  };
+  const buildLeadTransferMeta = (l: AssignedLead, owner: string, movedAt: string, all: Client[], allRems: Reminder[], allLogs: CallLog[]) => {
+    const cm = l.phone ? all.find((c: Client) => [c.phone, ...(c.phones || [])].some((p) => samePhoneNum(p, l.phone))) : undefined;
+    const prevClientOwner = String(cm?.assignedTo || cm?.userId || '').trim();
+    const prevOwner = String(l.salesId || l.transferredFrom || '').trim() || (prevClientOwner !== 'admin-001' ? prevClientOwner : '');
+    const isTransferred = Boolean(owner && prevOwner && prevOwner !== owner);
+    const isDelayed = Boolean(
+      owner && l.phone && (
+        (cm && clientActionState(cm, allRems, allLogs).needsAction) ||
+        leadAlertState(l, allRems, allLogs).needsAction ||
+        (cm?.nextActionAt && Date.parse(String(cm.nextActionAt)) <= Date.now()) ||
+        allRems.some((r) => !r.isCompleted && samePhoneNum(r.clientPhone, l.phone) && (r.isDelayed || Date.parse(String(r.dateTime || '')) <= Date.now()))
+      )
+    );
+    if (owner === '' && prevOwner) return { transferredFrom: prevOwner };
+    if (isTransferred) return { transferredFrom: prevOwner, transferredAt: movedAt, transferredDelayed: isDelayed };
+    if (isDelayed) return { transferredAt: movedAt, transferredDelayed: true };
+    return owner ? { transferredDelayed: false } : {};
+  };
+
   const applyLeadOwners = (ownerOf: Map<string, string>, via: 'manual' | 'auto' = 'auto', turnOf?: Map<string, string>) => {
     if (!currentUser || !ownerOf.size) return null;
     const movedAt = new Date().toISOString();
-    // `assignedAt` = وقت آخر تغيير في التوزيع (توزيع أو سحب رقم من السيلز):
-    // إشعار المندوب يُحسب منه لا من تاريخ وصول الرقم، فرقم قديم اتوزّع النهاردة
-    // يوصل صاحبه إشعار برضه. وهو أيضاً وقت المقارنة عند المزامنة: هو اللي بيحدد
-    // أي نسخة من السجل هي الأحدث (نسخة الجهاز ولا نسخة السيرفر القديمة).
-    const synced = writeAssignedLeads((all) =>
-      all.map((l: AssignedLead) => {
+    const digits = (v: string) => normalizeDigits(String(v || '')).replace(/\D/g, '');
+    const all: Client[] = readStoreArr('crm_clients', []);
+    const allRems: Reminder[] = readReminders();
+    const allLogs: CallLog[] = getCallLogs().length ? getCallLogs() : (fullCallLogs.length ? fullCallLogs : callLogs);
+    const allCards: DailyFeedback[] = readStoreArr('crm_daily_feedback', fullFeedbacks.length ? fullFeedbacks : dailyFeedbacks);
+    const ownerByPhone = new Map<string, string>();
+    const setPhOwner = (ph: string, owner: string) => {
+      if (digits(ph)) ownerByPhone.set(digits(ph), owner);
+      if (skOfPhone(ph)) ownerByPhone.set(skOfPhone(ph), owner);
+    };
+    const lookupOwner = (ph: string) => ownerByPhone.get(digits(ph)) ?? ownerByPhone.get(skOfPhone(ph));
+
+    const synced = writeAssignedLeads((allLeads) =>
+      allLeads.map((l: AssignedLead) => {
         if (!ownerOf.has(l.id)) return l;
         const owner = ownerOf.get(l.id) || '';
+        if (owner !== String(l.salesId || '') && l.phone) setPhOwner(l.phone, owner);
         if (owner === String(l.salesId || '') && (via !== 'manual' || l.assignedVia === 'manual')) return l;
-        // autoTurnKey: مكان الرقم في الدور — التوزيع الجاي بيكمّل من بعده (shared/autoAssign.js)
         const turnKey = turnOf?.get(l.id);
-        return { ...l, salesId: owner, assignedAt: movedAt, assignedVia: via, ...(turnKey ? { autoTurnKey: turnKey } : {}) };
+        return {
+          ...l, salesId: owner, assignedAt: movedAt, assignedVia: via,
+          ...(turnKey ? { autoTurnKey: turnKey } : {}),
+          ...buildLeadTransferMeta(l, owner, movedAt, all, allRems, allLogs),
+        };
       })
     );
 
-    // لو أي رقم من الموزَّعين تحوَّل لعميل بالفعل، ينتقل العميل نفسه لمندوبه الجديد (مع حدث في خطه الزمني)
-    const digits = (v: string) => normalizeDigits(String(v || '')).replace(/\D/g, '');
-    const ownerByPhone = new Map<string, string>();
     for (const lead of fullLeads) {
       const owner = ownerOf.get(lead.id);
-      // `owner === undefined`: الرقم ده مش من الأرقام المتغيّرة في الحركة دي.
-      // `owner` فارغ: سحب الرقم من عهدة السيلز ⇒ لازم يخرج العميل من عنده كمان
-      // (كان يفضل مع المندوب في «عملائي» بعد ما الإدارة تسحبه منه).
       if (owner === undefined || owner === (lead.salesId || '') || !lead.phone) continue;
-      const key = digits(lead.phone);
-      if (key) ownerByPhone.set(key, owner);
+      setPhOwner(lead.phone, owner);
     }
 
-    // ===== الكومنت ينزل مع الرقم على المندوب =====
-    // الرقم ممكن يكون اتكتب عليه كلام قبل ما ينزل (مندوب تاني، أو مندوب اتمسح
-    // حسابه فبطاقته ما ظهرتش لحدّ). بنجمع آخر كلام على كل رقم من بطاقات الفيدباك
-    // وسجلات المكالمات (كل الحسابات) وبنضيفه في خط العميل لو ناقص — فالرقم
-    // بيوصل صاحبه الجديد بكلامه.
-    const phoneComments = commentsByPhone(dailyFeedbacks, callLogs, users);
-    const noteOfPhone = (phone: string) => {
-      const key = digits(phone);
-      return key ? phoneComments.get(key) || null : null;
+    void commentsByPhone(dailyFeedbacks, callLogs, users);
+    const phoneComments = commentsByPhone(allCards, allLogs, users);
+    const noteOfPhone = (phone: string) => phoneComments.get(digits(phone)) || phoneComments.get(skOfPhone(phone)) || null;
+    const extraActsOf = (id: string, phone: string, baseActs: any[]) => {
+      const seen = new Set(baseActs.filter(isCommentActivity).map((a: any) => cleanCommentText(a?.text)).filter(Boolean));
+      return commentsOfTarget({ id, phone }, all, allCards, allLogs, users)
+        .filter((it) => { const cl = cleanCommentText(it.text); if (!cl || seen.has(cl)) return false; seen.add(cl); return true; })
+        .map((it) => ({ id: crypto.randomUUID(), type: 'feedback', text: it.text, at: it.at || movedAt, by: it.by, ...(it.status ? { status: it.status } : {}) }));
     };
 
-    let all: Client[] = [];
-    try {
-      const parsed = JSON.parse(localStorage.getItem('crm_clients') || '[]');
-      all = Array.isArray(parsed) ? parsed : [];
-    } catch {
-      all = [];
-    }
     let next = all;
     let touched = false;
 
     if (ownerByPhone.size) {
       next = all.map((c) => {
-        const own = [c.phone, ...(c.phones || [])].map((p) => digits(p));
-        // البحث بـ«معرّف» مش «قيمة»: صاحب فارغ (سحب الرقم من السيلز) لازم يتلقط كمان.
-        const owner = own.map((p) => (p ? ownerByPhone.get(p) : undefined)).find((v) => v !== undefined);
+        const own = [c.phone, ...(c.phones || [])];
+        const owner = own.map((p) => (p ? lookupOwner(p) : undefined)).find((v) => v !== undefined);
         if (owner === undefined) return c;
         touched = true;
         const ownerName = owner ? (users.find((u: User) => u.id === owner)?.name || 'سيلز آخر') : '';
-        // الكومنت المكتوب على الرقم: لو مش في خط العميل بنضيفه (مرة واحدة)
         const note = noteOfPhone(c.phone);
-        const acts = c.activities || [];
+        const acts = (c.activities || []).map((a: any) => (isCommentActivity(a) && !a.by ? { ...a, by: commentAuthorName(a, users) } : a));
         const hasNote = !note || acts.some((a: any) => isCommentActivity(a) && cleanCommentText(a?.text) === note.text);
         const noteActivity = note && !hasNote
-          ? [{
-              id: crypto.randomUUID(),
-              type: 'feedback',
-              text: note.text,
-              at: note.at || movedAt,
-              by: note.by,
-              ...(note.status ? { status: note.status } : {}),
-            }]
+          ? [{ id: crypto.randomUUID(), type: 'feedback', text: note.text, at: note.at || movedAt, by: note.by, ...(note.status ? { status: note.status } : {}) }]
           : [];
         return {
-          ...c,
-          userId: owner,
-          assignedTo: owner,
-          ownerVia: via,
-          updatedAt: movedAt,
-          // «الفيدباك» = آخر كلام على العميل — يبان في الكارت من أول نظرة
+          ...c, userId: owner, assignedTo: owner, ownerVia: via, updatedAt: movedAt,
           feedback: note?.text || c.feedback,
           activities: [
-            {
-              id: crypto.randomUUID(),
-              type: 'assign',
-              text: owner ? `تم تخصيص العميل إلى ${ownerName}` : 'سُحب الرقم من عهدة السيلز',
-              at: movedAt,
-              by: currentUser.name,
-            },
+            { id: crypto.randomUUID(), type: 'assign', text: owner ? `تم تخصيص العميل إلى ${ownerName}` : 'سُحب الرقم من عهدة السيلز', at: movedAt, by: currentUser.name },
             ...noteActivity,
+            ...extraActsOf(c.id, c.phone, [...noteActivity, ...acts]),
             ...acts,
           ],
         };
       });
     }
 
-    // ===== الرقم الموزَّع يصير عميل مندوبه من أول لحظة =====
-    // ما فيش زر «أضف إلى عملائي» بعد اليوم: أي رقم ينزل على مندوب يتحوّل لعميله
-    // تلقائياً (بمعرّف مشتق من الرقم نفسه فيتدمج على كل الأجهزة ولا يتكرر).
     const assigned = fullLeads
       .filter((l: AssignedLead) => ownerOf.get(l.id))
       .map((l: AssignedLead) => ({ ...l, salesId: ownerOf.get(l.id) as string }));
     const fresh = buildLeadClients({
-      leads: assigned,
-      clients: next,
-      at: movedAt,
-      by: currentUser.name,
-      // الكومنت المكتوب على الرقم قبل ما ينزل — ينزل معاه (من مندوب تاني أو
-      // من مندوب اتمسح حسابه، فبطاقته ما هيبانش لحدّ)
-      comments: phoneComments,
+      leads: assigned, clients: next, at: movedAt, by: currentUser.name, comments: phoneComments,
+    }).map((c: any) => {
+      const acts = Array.isArray(c.activities) ? c.activities : [];
+      const extra = extraActsOf(c.id, c.phone, acts);
+      return extra.length ? { ...c, activities: [...acts, ...extra] } : c;
     });
     if (fresh.length) {
       next = [...fresh, ...next];
@@ -2527,30 +2530,47 @@ function App() {
 
     if (touched) {
       setClients(next);
+      if (currentUser?.role !== 'sales') setFullClients(next);
       localStorage.setItem('crm_clients', JSON.stringify(next));
       void pushKey('crm_clients');
     }
 
-    // ===== بطاقة الفيدباك بتنتقل مع الرقم =====
-    // بطاقة صاحبها حساب محذوف ما بيظهرش لحدّ (مش في قائمة حدّ). فلما الرقم ينزل
-    // على مندوب، البطاقة بتنتقل ليه — فيشوف الكومنت في «الفيدباك اليومي» بتاعه.
-    // بطاقة صاحبها لسه موجود بتفضل عنده (تاريخه هو).
+    if (ownerByPhone.size && allRems.length) {
+      let remsChanged = false;
+      const nextRems = allRems.map((r: Reminder) => {
+        if (r.isCompleted) return r;
+        const owner = lookupOwner(r.clientPhone);
+        if (owner === undefined || String(r.userId || '') === String(owner)) return r;
+        remsChanged = true;
+        return { ...r, userId: owner };
+      });
+      if (remsChanged) {
+        setReminders(nextRems);
+        localStorage.setItem('crm_reminders', JSON.stringify(nextRems));
+        void pushKey('crm_reminders');
+      }
+    }
+
     if (ownerByPhone.size) {
       let cardsChanged = false;
-      const nextCards = dailyFeedbacks.map((card: any) => {
-        const key = digits(card?.clientPhone);
-        const owner = key ? ownerByPhone.get(key) : undefined;
-        if (!owner || !key) return card;
-        if (users.some((u: User) => String(u.id) === String(card?.userId || ''))) return card;
+      const nextCards = allCards.map((rawCard: any) => {
+        const owner = lookupOwner(rawCard?.clientPhone);
+        if (owner === undefined) return rawCard;
+        const prevUserId = String(rawCard?.authorId || rawCard?.userId || '').trim();
+        const prevUserName = String(rawCard?.authorName || rawCard?.by || users.find((u: User) => String(u.id) === prevUserId)?.name || '').trim();
+        if (String(rawCard?.userId || '') === String(owner) && (!prevUserName || rawCard?.authorName === prevUserName)) return rawCard;
+        const card = { ...rawCard, ...(prevUserId ? { authorId: prevUserId } : {}), ...(prevUserName ? { authorName: prevUserName, by: prevUserName } : {}) };
         cardsChanged = true;
         return { ...card, userId: owner };
       });
       if (cardsChanged) {
         setDailyFeedbacks(nextCards);
+        if (currentUser?.role !== 'sales') setFullFeedbacks(nextCards);
         localStorage.setItem('crm_daily_feedback', JSON.stringify(nextCards));
         void pushKey('crm_daily_feedback');
       }
     }
+    loadData();
     return synced;
   };
 
@@ -2800,6 +2820,78 @@ function App() {
     setInAppNotification({ title: ` رسالة من ${latest.fromName}`, body: latest.text.slice(0, 120) });
     setTimeout(() => setInAppNotification(null), 10000);
   }, [messages, currentUser, soundEnabled]);
+
+  // ===== إشعار نقل رقم للسيلز (ولو الرقم ديلاي يظهر إنه ديلاي) =====
+  useEffect(() => {
+    if (!currentUser) return;
+    const myTransfers = (assignedLeads || []).filter(
+      (l: AssignedLead) =>
+        String(l.salesId || '') === String(currentUser.id) &&
+        Boolean(l.transferredFrom || l.transferredAt || l.transferredDelayed)
+    );
+    if (!myTransfers.length) return;
+    const storageKey = `crm_transfer_seen_${currentUser.id}`;
+    let seen: Record<string, string> = {};
+    try {
+      seen = JSON.parse(localStorage.getItem(storageKey) || '{}') || {};
+    } catch {
+      seen = {};
+    }
+    const now = Date.now();
+    const freshTransfers = myTransfers.filter((l: AssignedLead) => {
+      const stamp = String(l.transferredAt || l.assignedAt || '');
+      const at = Date.parse(stamp);
+      if (!Number.isFinite(at) || now - at > 24 * 60 * 60 * 1000) return false;
+      const sig = `${l.id}|${stamp}`;
+      return !seen[sig];
+    });
+    if (!freshTransfers.length) return;
+    for (const l of freshTransfers) {
+      const stamp = String(l.transferredAt || l.assignedAt || '');
+      seen[`${l.id}|${stamp}`] = new Date().toISOString();
+    }
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(seen));
+    } catch {
+      /* لا شيء */
+    }
+    const allRems = readReminders();
+    const delayedList = freshTransfers.filter((l: AssignedLead) => {
+      if (l.transferredDelayed) return true;
+      const p = digitsOfPhone(l.phone);
+      if (!p) return false;
+      return allRems.some(
+        (r: Reminder) =>
+          !r.isCompleted &&
+          digitsOfPhone(r.clientPhone) === p &&
+          (r.isDelayed || Date.parse(String(r.dateTime || '')) <= now)
+      );
+    });
+    const one = delayedList[0] || freshTransfers[0];
+    const form = one?.formName ? ` • ${one.formName}` : '';
+    const title = delayedList.length
+      ? freshTransfers.length === 1
+        ? '⚠️ رقم ديلاي اتنقل ليك'
+        : `⚠️ ${freshTransfers.length} أرقام اتنقلت ليك (${delayedList.length} ديلاي)`
+      : freshTransfers.length === 1
+      ? '🔄 في رقم اتنقل ليك'
+      : `🔄 ${freshTransfers.length} أرقام اتنقلت ليك`;
+    const body =
+      freshTransfers.length === 1
+        ? delayedList.length
+          ? `الرقم ${one?.name || 'عميل'} (${one?.phone || ''}) اتنقل ليك وهو ديلاي (متأخر)${form}`
+          : `تم نقل رقم ${one?.name || 'عميل'} (${one?.phone || ''}) ليك${form}`
+        : freshTransfers
+            .slice(0, 3)
+            .map((l) => `${l.name || 'عميل'} ${l.phone || ''}`.trim())
+            .join(' • ') + (freshTransfers.length > 3 ? ` +${freshTransfers.length - 3}` : '');
+    if (soundEnabled) playNotificationSound();
+    vibrateDevice();
+    sendNotification(title, body, `transfer-${one?.id || Date.now()}`);
+    setInAppNotification({ title, body });
+    const timer = window.setTimeout(() => setInAppNotification(null), 9000);
+    return () => window.clearTimeout(timer);
+  }, [assignedLeads, currentUser?.id, soundEnabled]);
 
   // طلب صلاحية الإشعارات من ضغطة المستخدم (المتصفحات ترفض الطلب التلقائي).
   // بعد السماح: نسجّل العامل ونشترك في Web Push حتى تصل التذكيرات والموقع مقفول.
@@ -3381,6 +3473,9 @@ function App() {
       const card: DailyFeedback = {
         id: log.id,
         userId: currentUser.id,
+        authorId: currentUser.id,
+        authorName: currentUser.name,
+        by: currentUser.name,
         clientPhone: target.phone,
         clientName: target.name,
         date: log.createdAt,
@@ -6341,8 +6436,10 @@ function ClientCommentsModal({ client, users = [], callLogs = [], feedbacks = []
     const name = normalizeArabicText(String(client?.name || ''));
     // اسم كاتب كل سطر: من الاسم المحفوظ، ولا من الحسابات (بطاقة الفيدباك ما بتخزّنش الاسم)
     const nameOfUser = (id: any) => {
-      const found = (users || []).find((u: any) => String(u?.id) === String(id || ''));
-      return found?.name ? String(found.name) : 'مندوب سابق';
+      const raw = String(id || '').trim();
+      if (!raw) return 'مندوب سابق';
+      const found = (users || []).find((u: any) => String(u?.id) === raw || String(u?.name) === raw);
+      return found?.name ? String(found.name) : raw !== String(client?.userId || '') ? raw : 'مندوب سابق';
     };
 
     const list: Array<{ id: string; at: string; text: string; by?: string; status?: string; kind: string; result?: string }> = [];
@@ -6359,7 +6456,11 @@ function ClientCommentsModal({ client, users = [], callLogs = [], feedbacks = []
       });
     }
 
-    for (const feedback of feedbacks || []) {
+    for (const rawFeedback of feedbacks || []) {
+      const feedback = {
+        ...rawFeedback,
+        userId: rawFeedback.authorName || rawFeedback.by || rawFeedback.authorId || rawFeedback.userId,
+      };
       const samePhone = digits && normalizeDigits(String(feedback.clientPhone || '')).replace(/\D/g, '') === digits;
       const sameName = name && normalizeArabicText(String(feedback.clientName || '')) === name;
       if (!samePhone && !sameName) continue;
@@ -9325,11 +9426,36 @@ function DailyFeedbackView({ feedbacks, clients, currentUser, users = [], callLo
       clientName: l?.clientName,
       status: '',
       feedback: text,
+      by: String(l?.salesName || ''),
+      authorName: String(l?.salesName || ''),
       date: String(l?.createdAt || ''),
       createdAt: String(l?.createdAt || ''),
       userId: currentUser?.id,
     };
     byPhone.set(key, [...(byPhone.get(key) || []), entry]);
+  }
+  // كومنتات الخط الزمني للعميل (بما فيها كومنتات السيلز الأول على الرقم المنقول)
+  for (const c of clients || []) {
+    const key = norm(c?.phone) || `name:${normalizeArabicText(c?.name || '')}`;
+    for (const a of c?.activities || []) {
+      if (!isCommentActivity(a)) continue;
+      const text = cleanCommentText(a?.text);
+      if (!text || (isSystemOnlyText(text) && !isCallResultText(text))) continue;
+      const author = commentAuthorName(a, users);
+      const entry: any = {
+        id: `act-${a?.id}`,
+        clientPhone: c?.phone,
+        clientName: c?.name,
+        status: a?.status || '',
+        feedback: text,
+        by: author,
+        authorName: author,
+        date: String(a?.at || ''),
+        createdAt: String(a?.at || ''),
+        userId: currentUser?.id,
+      };
+      byPhone.set(key, [...(byPhone.get(key) || []), entry]);
+    }
   }
   // نفس الكومنت اتكتب في كارت الفيدباك اليومي وكمان في سجل المكالمات = نسخة واحدة
   for (const [key, list] of byPhone) {
@@ -15538,10 +15664,55 @@ function AddAssignedLeadModal({ users, currentUser, onClose, onSuccess }: any) {
     </motion.div>
   );
 }
+// خريطة المالك الحالي لكل رقم (سيلز/مشرف) — الرقم المنقول لسيلز تاني يظهر عند التاني بس
+function buildPhoneOwnerMap(clients: any[] = [], leads: any[] = []): Map<string, string> {
+  const map = new Map<string, { owner: string; at: number }>();
+  const put = (rawPhone: any, owner: string, atStr: any) => {
+    const cleanOwner = String(owner || '').trim();
+    if (!cleanOwner || cleanOwner === 'admin-001') return;
+    const full = normPhone(rawPhone);
+    if (!full) return;
+    const short = full.length >= 10 ? full.slice(-10) : full;
+    const at = Date.parse(String(atStr || '')) || 0;
+    for (const k of [full, short]) {
+      const prev = map.get(k);
+      if (!prev || at >= prev.at) {
+        map.set(k, { owner: cleanOwner, at });
+      }
+    }
+  };
+  for (const c of clients || []) {
+    const cOwner = String(c?.assignedTo || c?.userId || '').trim();
+    const cAt = c?.updatedAt || c?.createdAt || '';
+    for (const p of [c?.phone, ...(Array.isArray(c?.phones) ? c.phones : [])]) {
+      put(p, cOwner, cAt);
+    }
+  }
+  for (const l of leads || []) {
+    const lOwner = String(l?.salesId || '').trim();
+    const lAt = l?.transferredAt || l?.assignedAt || l?.createdAt || '';
+    for (const p of [l?.phone, ...(Array.isArray(l?.phones) ? l.phones : [])]) {
+      put(p, lOwner, lAt);
+    }
+  }
+  const out = new Map<string, string>();
+  for (const [k, v] of map.entries()) out.set(k, v.owner);
+  return out;
+}
+
+const ownerOfPhoneKey = (ownerMap: Map<string, string>, rawPhone: any): string | undefined => {
+  const full = normPhone(rawPhone);
+  if (!full) return undefined;
+  if (ownerMap.has(full)) return ownerMap.get(full);
+  const short = full.length >= 10 ? full.slice(-10) : full;
+  return ownerMap.get(short);
+};
+
 function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = [], callLogs: any[] = [], userName = '') {
-  type Item = { id: string; text: string; at: string; kind: string; status: string };
+  type Item = { id: string; text: string; at: string; kind: string; status: string; by?: string };
   const map = new Map<string, { key: string; name: string; phone: string; source: string; stage: string; incoming: boolean; items: Item[] }>();
   const norm = normPhone;
+  const ownerMap = buildPhoneOwnerMap(clients, leads);
 
   const ensure = (key: string, base: any) => {
     if (!map.has(key)) {
@@ -15561,12 +15732,14 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
   // عملاؤه — وفيدباكه المكتوب على عميل مسجَّل باسم حساب تاني.
   // الفيدباك يُنسب لكاتبه (activity.by) لا لصاحب العميل: كان كومنت المندوب على
   // عميل مسجَّل باسم الإدارة يظهر كأن الإدارة كتبته ولا يظهر في كارت المندوب إطلاقاً.
-  // مطابقة اسم الكاتب بعد توحيد الحروف والمسافات (كانت المقارنة الحرفية تُضيّع
-  // كومنتات السيلز لو الاسم مكتوب بشكل مختلف بمسافة أو همزة)
+  // أما لو الرقم اتنقل لسيلز تاني، الفيدباك والرقم يبقوا عند السيلز التاني بس (مش الأول والتاني)،
+  // وكومنتات السيلز الأول تظهر عند السيلز التاني بنفس اسم السيلز الأول.
   const normName = (v: any) => normalizeArabicText(String(v || '')).replace(/\s+/g, ' ').trim();
   const myName = normName(userName);
   for (const c of clients || []) {
-    const isOwner = c.userId === userId || c.assignedTo === userId;
+    const currentOwner = ownerOfPhoneKey(ownerMap, c.phone);
+    if (currentOwner && currentOwner !== String(userId)) continue;
+    const isOwner = currentOwner === String(userId) || c.userId === userId || c.assignedTo === userId;
     // كلام المندوب فقط: لا لوجات (اتصال/واتساب/تذكير) ولا كومنت مكرر.
     // النسبة: صاحب العميل، أو معرّف الكاتب، أو اسمه (بعد التوحيد).
     const acts = (Array.isArray(c.activities) ? c.activities : []).filter((a: any) => {
@@ -15581,21 +15754,27 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
       const text = cleanCommentText(a.text);
       // نص نتيجة الاتصال (No answer / تم الرد) كومنت حقيقي — ما يتشالش
       if (!text || (isSystemOnlyText(text) && !isCallResultText(text))) continue;
-      entry.items.push({ id: a.id, text, at: a.at, kind: 'كومنت', status: a.status || '' });
+      entry.items.push({ id: a.id, text, at: a.at, kind: 'كومنت', status: a.status || '', by: String(a.by || '') });
     }
   }
 
   // أرقام واردة من الإدارة ولم تُحوَّل لعميل بعد
   for (const l of leads || []) {
     if (l.salesId !== userId) continue;
+    const currentOwner = ownerOfPhoneKey(ownerMap, l.phone);
+    if (currentOwner && currentOwner !== String(userId)) continue;
     const key = norm(l.phone) || `lead:${l.id}`;
     if (!map.has(key)) ensure(key, { name: l.name, phone: l.phone, source: 'رقم وارد من الإدارة', incoming: true });
   }
 
   // سجل المكالمات: فيه كلام المندوب بنفسه (نص المكالمة) — وده مصدر الكومنتات
   // القديمة. لوج بس (من غير كلام) ما بيظهرش؛ ونفس الكومنت بيتدمج مرة واحدة.
+  // لو الرقم اتنقل لسيلز تاني، كومنتات المكالمات تروح مع الرقم لصاحبه الحالي باسم كاتبها الأصلي.
   for (const l of callLogs || []) {
+    const currentOwner = ownerOfPhoneKey(ownerMap, l?.clientPhone);
+    if (currentOwner && currentOwner !== String(userId)) continue;
     const mine =
+      currentOwner === String(userId) ||
       String(l?.salesId || '') === String(userId || '') ||
       (!!userName && String(l?.salesName || '').trim() === String(userName).trim());
     if (!mine) continue;
@@ -15614,6 +15793,7 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
       at: String(l?.createdAt || ''),
       kind: 'مكالمة',
       status: l?.result === 'answered' ? 'follow-up' : 'no-answer',
+      by: String(l?.salesName || ''),
     });
   }
 
@@ -15625,14 +15805,15 @@ function salesFeedbackByNumber(userId: string, clients: any[], leads: any[] = []
   // **كل** أرقام المندوب تتعرض — حتى اللي عليها كلام ولا لسه. الحساب اللي عنده
   // أرقام كثيرة وما كتبش عليها فيدباك كان يظهر «0 رقم» في لوحة الإدارة، فيبدو
   // كأنه بلا شغل أصلاً. الأرقام اللي عليها كومنت تفضل الأول (الأحدث)، والباقي بعدها.
-  const all = Array.from(map.values());
-  return all.sort((a, b) => {
+  const all = Array.from(map.values()).sort((a, b) => {
     if (!!a.items.length !== !!b.items.length) return a.items.length ? -1 : 1;
     const ta = Date.parse(a.items[0]?.at || '') || 0;
     const tb = Date.parse(b.items[0]?.at || '') || 0;
     if (ta !== tb) return tb - ta;
     return String(a.name || '').localeCompare(String(b.name || ''), 'ar');
   });
+  Object.defineProperty(all, '_ownerMap', { value: ownerMap, enumerable: false, configurable: true });
+  return all;
 }
 
 // ===== بطاقات «الفيدباك اليومي» تُضاف لأرقام السيلز =====
@@ -15645,7 +15826,7 @@ type FeedbackNumber = {
   source: string;
   stage: string;
   incoming: boolean;
-  items: Array<{ id: string; text: string; at: string; kind: string; status: string }>;
+  items: Array<{ id: string; text: string; at: string; kind: string; status: string; by?: string }>;
 };
 
 function mergeDailyFeedbackCards(
@@ -15653,8 +15834,13 @@ function mergeDailyFeedbackCards(
   userId: string,
   dailyFeedbacks: any[] = []
 ): FeedbackNumber[] {
+  const ownerMap: Map<string, string> = (nums as any)?._ownerMap || new Map<string, string>();
   for (const card of dailyFeedbacks || []) {
-    if (!card || card.userId !== userId || !String(card.feedback || '').trim()) continue;
+    if (!card || !String(card.feedback || '').trim()) continue;
+    const currentOwner = ownerOfPhoneKey(ownerMap, card.clientPhone);
+    // لو الرقم اتنقل لسيلز تاني، البطاقة ما تبقاش عند السيلز الأول — تبقى عند التاني بس
+    if (currentOwner && currentOwner !== String(userId)) continue;
+    if (currentOwner !== String(userId) && card.userId !== userId) continue;
     // نص النظام الآلي (لوج) ما بيظهرش — كلام السيلز بس
     const cardText = cleanCommentText(card.feedback);
     if (!cardText || (isSystemOnlyText(cardText) && !isCallResultText(cardText))) continue;
@@ -15673,11 +15859,16 @@ function mergeDailyFeedbackCards(
       nums.push(target);
     }
     const at = card.date || card.createdAt;
-    const dup = target.items.some(
+    const cardBy = String(card.authorName || card.by || '');
+    const dupItem = target.items.find(
       (item: FeedbackNumber['items'][number]) =>
         cleanCommentText(item.text) === cardText && String(item.at).slice(0, 16) === String(at).slice(0, 16)
     );
-    if (!dup) target.items.push({ id: card.id, text: cardText, at, kind: 'فيدباك', status: card.status || '' });
+    if (dupItem) {
+      if (!dupItem.by && cardBy) dupItem.by = cardBy;
+    } else {
+      target.items.push({ id: card.id, text: cardText, at, kind: 'فيدباك', status: card.status || '', ...(cardBy ? { by: cardBy } : {}) });
+    }
   }
   for (const number of nums)
     number.items.sort((a: FeedbackNumber['items'][number], b: FeedbackNumber['items'][number]) =>
@@ -15789,7 +15980,7 @@ function UserFeedbackModal({ user, clients, leads = [], callLogs = [], dailyFeed
                   <span className="block text-[11.5px] text-[var(--text-muted)] mt-0.5" dir="ltr">{n.phone || '—'}</span>
                   {n.items[0] && (
                     <span className="block text-[11px] text-[var(--text-muted)] mt-1 truncate">
-                      آخر فيدباك: {String(n.items[0].text).replace(/^(فيدباك:|من المكالمة:)\s*/, '')}
+                      آخر فيدباك{n.items[0].by ? ` — ${n.items[0].by}` : ''}: {String(n.items[0].text).replace(/^(فيدباك:|من المكالمة:)\s*/, '')}
                     </span>
                   )}
                 </span>
@@ -15830,7 +16021,7 @@ function UserFeedbackModal({ user, clients, leads = [], callLogs = [], dailyFeed
                       <div className="min-w-0 flex-1">
                         <p className="fb-text">{String(item.text).replace(/^(فيدباك:|من المكالمة:)\s*/, '')}</p>
                         <p className="fb-meta">
-                          {item.kind} • {formatDateTime(item.at)}{item.status ? ` • ${item.status}` : ''}
+                          {item.by ? `${item.by} • ` : ''}{item.kind} • {formatDateTime(item.at)}{item.status ? ` • ${item.status}` : ''}
                         </p>
                       </div>
                     </div>

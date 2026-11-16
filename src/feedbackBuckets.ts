@@ -237,7 +237,12 @@ export const feedbackByPhone = (
       note: '',
       at,
     });
-    putNote(feedback?.clientPhone, feedback?.feedback, at, nameOf(feedback?.userId));
+    putNote(
+      feedback?.clientPhone,
+      feedback?.feedback,
+      at,
+      String(feedback?.authorName || feedback?.by || nameOf(feedback?.authorId) || nameOf(feedback?.userId))
+    );
   }
 
   // ===== الحالة اللي اختارها المندوب تكسب نتيجة المكالمة الضمنية =====
@@ -422,7 +427,7 @@ export const buildWorkNumbers = (
     // ممكن يكون وصل البطاقة وما وصلش خط العميل (جهاز تاني أو رفع متأخر)
     const cardIsNewer = !!snapshot?.note && String(snapshot?.noteAt || '') > String(lastActivity?.at || '');
     const noteText = String(cardIsNewer ? snapshot?.note : lastActivity?.text || '');
-    const noteBy = String(cardIsNewer ? snapshot?.noteBy || '' : lastActivity?.by || '');
+    const noteBy = String(cardIsNewer ? snapshot?.noteBy || '' : lastActivity?.by || snapshot?.noteBy || '');
     // حالة العميل: الصريحة في خطّه الزمني، وإلا آخر فيدباك/مكالمة على نفس الرقم
     // (مكالمة من جهاز تاني أو رقم اتحوّل لعميل بعد ما اتصلنا بيه).
     // («لم يرد» مش خانة — بيتعدّى عليها في الاتنين)

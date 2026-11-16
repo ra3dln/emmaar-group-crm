@@ -279,6 +279,13 @@ try {
     'الإشعار الخارجي يقول «رقم فريش جديد نزل ليك»',
     serverPushSrc.includes('رقم فريش جديد نزل ليك') && serverPushSrc.includes('أرقام فريش جديدة نزلت ليك')
   );
+  check(
+    'إشعار نقل الرقم وإشعار الرقم الديلاي المنقول موجودان في السيرفر والواجهة',
+    serverPushSrc.includes('في رقم اتنقل ليك') &&
+      serverPushSrc.includes('رقم ديلاي اتنقل ليك') &&
+      app.includes('في رقم اتنقل ليك') &&
+      app.includes('رقم ديلاي اتنقل ليك')
+  );
   const centerSrc = app.slice(app.indexOf('function NotificationsCenter'), app.indexOf('function NotificationsPanel'));
   check(
     'مفيش إشعار داخلي «أرقام جديدة» في مركز الإشعارات',

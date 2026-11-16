@@ -534,11 +534,53 @@ async function processPushTick({
   //       رقم وصل امبارح واتوزّع النهاردة لازم يوصل صاحبه إشعار، والعكس صحيح.
   let leadCount = 0;
   const pendingLeads = [];
+  const digitsOnly = (v) =>
+    String(v ?? '')
+      .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+      .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+      .replace(/\D/g, '');
+  const isLeadDelayed = (lead) => {
+    if (lead?.transferredDelayed) return true;
+    const phone = digitsOnly(lead?.phone);
+    if (!phone) return false;
+    const client = (data.crm_clients || []).find((c) => digitsOnly(c?.phone) === phone);
+    if (client?.nextActionAt && Date.parse(String(client.nextActionAt)) <= now) return true;
+    const openRems = (data.crm_reminders || []).filter(
+      (r) => r && !r.isCompleted && digitsOnly(r.clientPhone) === phone
+    );
+    for (const r of openRems) {
+      const dueMs = Date.parse(String(r.dateTime || ''));
+      if (r.isDelayed || (Number.isFinite(dueMs) && dueMs <= now)) {
+        const since = Date.parse(String(r.createdAt || '')) || dueMs;
+        const hasCallAfter = (data.crm_call_logs || []).some(
+          (l) => digitsOnly(l?.clientPhone) === phone && Date.parse(String(l?.createdAt || '')) > since
+        );
+        const hasCommentAfter =
+          Array.isArray(client?.activities) &&
+          client.activities.some((a) => {
+            const t = String(a?.type || '').toLowerCase();
+            if (t === 'assign' || t === 'created') return false;
+            return Date.parse(String(a?.at || a?.createdAt || '')) > since;
+          });
+        if (!hasCallAfter && !hasCommentAfter) return true;
+      }
+    }
+    return false;
+  };
+  const isLeadTransferred = (lead, target) => {
+    if (lead?.transferredFrom && String(lead.transferredFrom) !== String(target)) return true;
+    if (lead?.transferredAt) return true;
+    return Object.keys(state.leads || {}).some(
+      (k) => k.startsWith(`${lead.id}|`) && k !== `${lead.id}|${target}`
+    );
+  };
   for (const lead of data.crm_assigned_leads || []) {
     if (!lead?.id) continue;
     const owner = String(lead.salesId || '').trim();
     if (!owner) continue; // غير موزّع: مفيش إشعار (الإدارة بتشوف الأرقام في «توزيع الأرقام»)
-    if (state.leads[`${lead.id}|${owner}`]) continue;
+    const prevSent = Number(state.leads[`${lead.id}|${owner}`]) || 0;
+    const reAssignedAt = Date.parse(lead.transferredAt || lead.assignedAt || '');
+    if (prevSent && (!lead.transferredAt || !Number.isFinite(reAssignedAt) || reAssignedAt <= prevSent)) continue;
     const stamp = lead.assignedAt || lead.createdAt;
     const at = Date.parse(stamp || '');
     if (!Number.isFinite(at) || now - at > RECENT_MS) continue;
@@ -553,24 +595,39 @@ async function processPushTick({
     for (const [target, leads] of byTarget) {
       const one = leads[0];
       const form = one?.formName ? ` • ${one.formName}` : '';
+      const delayedLeads = leads.filter((l) => isLeadDelayed(l));
+      const transferredLeads = leads.filter((l) => isLeadTransferred(l, target) || isLeadDelayed(l));
+      const title = delayedLeads.length
+        ? leads.length === 1
+          ? '⚠️ رقم ديلاي اتنقل ليك'
+          : `⚠️ ${leads.length} أرقام اتنقلت ليك (${delayedLeads.length} ديلاي)`
+        : transferredLeads.length
+        ? leads.length === 1
+          ? '🔄 في رقم اتنقل ليك'
+          : `🔄 ${leads.length} أرقام اتنقلت ليك`
+        : leads.length === 1
+        ? '🆕 رقم فريش جديد نزل ليك'
+        : `🆕 ${leads.length} أرقام فريش جديدة نزلت ليك`;
+      const body =
+        leads.length === 1
+          ? delayedLeads.length
+            ? `رقم ديلاي (متأخر) اتنقل ليك: ${one?.name || 'عميل'} — ${one?.phone || ''}${form}`
+            : transferredLeads.length
+            ? `تم نقل رقم ليك: ${one?.name || 'عميل'} — ${one?.phone || ''}${form}`
+            : `${one?.name || 'عميل'} — ${one?.phone || ''}${form}`
+          : `${leads
+              .slice(0, 3)
+              .map((l) => `${l?.name || 'عميل'} ${l?.phone || ''}`.trim())
+              .join(' • ')}${leads.length > 3 ? ` +${leads.length - 3}` : ''}${
+              form ||
+              (leads.find((l) => l?.formName)
+                ? ` • ${leads.find((l) => l?.formName).formName}`
+                : '')
+            }`;
       const payload = {
         kind: 'lead',
-        title:
-          leads.length === 1
-            ? '🆕 رقم فريش جديد نزل ليك'
-            : `🆕 ${leads.length} أرقام فريش جديدة نزلت ليك`,
-        body:
-          leads.length === 1
-            ? `${one?.name || 'عميل'} — ${one?.phone || ''}${form}`
-            : `${leads
-                .slice(0, 3)
-                .map((l) => `${l?.name || 'عميل'} ${l?.phone || ''}`.trim())
-                .join(' • ')}${leads.length > 3 ? ` +${leads.length - 3}` : ''}${
-                form ||
-                (leads.find((l) => l?.formName)
-                  ? ` • ${leads.find((l) => l?.formName).formName}`
-                  : '')
-              }`,
+        title,
+        body,
         tag: `lead-${one?.id || Date.now()}`,
         url: '/',
       };

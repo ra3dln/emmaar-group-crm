@@ -122,5 +122,40 @@ check('نافذة الإجراء بتدوّر على العميل بالرقم �
 check('نافذة الإجراء بتاخد الكومنتات من خط العميل', /const clientActs = Array\.isArray\(\(client as any\)\?\.activities\)/.test(app));
 check('اسم الكاتب في آخر التعليقات', /by: String\(a\?\.by \|\| nameOf\(a\?\.authorId\)\)/.test(app));
 
+// ===== ٨) نقل الرقم لسيلز تاني: الفيدباك عند التاني بس وباسم السيلز الأول =====
+check(
+  'تبويب الفيدباك يستبعد الرقم المنقول من حساب السيلز الأول ويعرضه عند السيلز التاني بس',
+  /function buildPhoneOwnerMap/.test(app) &&
+    /if \(currentOwner && currentOwner !== String\(userId\)\) continue;/.test(app)
+);
+check(
+  'بطاقة الفيدباك المنقولة تحتفظ باسم ومعرّف السيلز الأول (authorId / authorName)',
+  /authorId: prevUserId/.test(app) && /authorName: prevUserName/.test(app)
+);
+const movedSnapshots = feedbackByPhone(
+  [{ clientPhone: '01011112222', feedback: 'كومنت السيلز الأول', date: '2026-10-24T12:25', userId: 'u-hassan', authorId: 'u-shimaa', authorName: 'Shimaa' }],
+  [],
+  [{ id: 'u-shimaa', name: 'Shimaa' }, { id: 'u-hassan', name: 'Hassan' }]
+);
+check(
+  'بطاقة الفيدباك بعد نقل userId للسيلز التاني لسه بتعرض اسم السيلز الأول',
+  movedSnapshots.get('01011112222')?.noteBy === 'Shimaa',
+  JSON.stringify(movedSnapshots.get('01011112222'))
+);
+const { clientActionState } = await import('../src/reminders.ts');
+check(
+  'نقل رقم ديلاي (حدث assign) لا يلغي حالة الديلاي عند السيلز التاني',
+  clientActionState(
+    {
+      id: 'c-delay',
+      phone: '01011112222',
+      activities: [{ id: 'as-1', type: 'assign', text: 'تم تخصيص العميل إلى Hassan', at: '2026-10-25T13:00:00.000Z' }],
+    },
+    [{ id: 'r-delay', clientPhone: '01011112222', dateTime: '2026-10-25T10:00:00.000Z', createdAt: '2026-10-25T08:00:00.000Z', isCompleted: false }],
+    [],
+    Date.parse('2026-10-25T14:00:00.000Z')
+  ).needsAction === true
+);
+
 console.log(`\n${failed ? '❌' : '✅'} نجحت ${passed} فحوصات${failed ? ` — فشل ${failed}` : ''}`);
 if (failed) process.exit(1);

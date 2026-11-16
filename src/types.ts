@@ -123,6 +123,10 @@ export interface AssignedLead {
   createdAt: string;
   // وقت توزيع الرقم على المندوب (غير وقت وصوله) — إشعار «رقم جديد نزل» يُحسب منه
   assignedAt?: string;
+  // بيانات النقل لما الرقم يتنقل من سيلز لسيلز تاني (عشان إشعار النقل وإشعار الديلاي)
+  transferredFrom?: string;
+  transferredAt?: string;
+  transferredDelayed?: boolean;
   // اسم الفورم الذي نزل منه الرقم — يُكتب جمب الرقم في كل القوائم
   formName?: string;
   // وقت تسجيل الرقم في الكامبين (وقت نزوله في الفورم) — مش وقت استيراده
@@ -176,6 +180,10 @@ export interface Property {
 export interface DailyFeedback {
   id: string;
   userId: string;
+  // كاتب الفيدباك الأصلي (معرّفه واسمه) — يفضل محفوظ لما البطاقة تتنقل مع الرقم لسيلز تاني
+  authorId?: string;
+  authorName?: string;
+  by?: string;
   clientPhone: string;
   clientName: string;
   date: string;
@@ -235,4 +243,4 @@ export interface ChatMessage {
   readBy?: string[]; // من قرأها — تُستخدم في غرفة المدراء الجماعية
 }
 
-export type TabType = 'admin-dashboard' | 'admin-add-form' | 'admin-export' | 'dashboard' | 'clients' | 'admin-clients' | 'admin-forms' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'new-leads' | 'reports' | 'chat' | 'admin-users' | 'admin-feedback' | 'admin-leads' | 'admin-attendance' | 'admin-analytics' | 'admin-chat' | 'admin-settings' | 'calculator';
+export type TabType = 'admin-dashboard' | 'admin-add-form' | 'admin-export' | 'admin-overview' | 'admin-sources' | 'dashboard' | 'clients' | 'admin-clients' | 'admin-forms' | 'pipeline' | 'properties' | 'reminders' | 'daily-feedback' | 'new-leads' | 'reports' | 'chat' | 'admin-users' | 'admin-feedback' | 'admin-leads' | 'admin-attendance' | 'admin-analytics' | 'admin-chat' | 'admin-settings' | 'calculator';

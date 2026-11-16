@@ -34,9 +34,19 @@ const openRemindersOf = (client: any, reminders: any[] = []): any[] => {
 };
 
 // هل عمل المندوب حاجة بعد وقت معيّن؟ (كومنت في خط العميل أو مكالمة مسجّلة)
+// أحداث التخصيص/النقل والإنشاء الآلي (assign / created) مش إجراء من المندوب،
+// فما تلغيش شارة «اتأخر» (الديلاي) لما الرقم يتنقل لسيلز تاني.
 export const actedSince = (client: any, callLogs: any[], since: number): boolean => {
   const acts = Array.isArray(client?.activities) ? client.activities : [];
-  if (acts.some((a: any) => timeOf(a?.at || a?.createdAt) > since)) return true;
+  if (
+    acts.some((a: any) => {
+      const type = String(a?.type || '').trim().toLowerCase();
+      if (type === 'assign' || type === 'created') return false;
+      return timeOf(a?.at || a?.createdAt) > since;
+    })
+  ) {
+    return true;
+  }
   const phone = digitsOfPhone(client?.phone);
   if (!phone) return false;
   return (callLogs || []).some(
