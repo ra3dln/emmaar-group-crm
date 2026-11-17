@@ -90,4 +90,21 @@ check(
   JSON.parse(localStorage.getItem('crm_users')).some((u) => u.id === 'u-new')
 );
 
+// ===== نفس الفكرة عند فتح الموقع نفسه (startSync) =====
+// فتحة جديدة والنسخة المحفوظة مطابقة لنسخة السيرفر: طلب صغير بس
+localStorage.setItem('crm_server_version', String(server.version));
+localStorage.removeItem('crm_pending_push');
+gets.length = 0;
+const syncOpen = await import('../src/sync.ts?fast-open=2');
+await syncOpen.startSync();
+check('فتحة الموقع: ما نزّلش النسخة الكاملة لو مفيش جديد', !gets.includes('full'), `gets=${gets.join(',')}`);
+check('فتحة الموقع: سأل عن رقم النسخة بس', gets.includes('version'));
+
+// فيه رفعة معلّقة (بيانات على الجهاز لسه ما وصلتش السيرفر): لازم سحب كامل
+localStorage.setItem('crm_pending_push', '1');
+gets.length = 0;
+const syncOpen2 = await import('../src/sync.ts?fast-open=3');
+await syncOpen2.startSync();
+check('فيه رفعة معلّقة: بيسحب النسخة الكاملة ويدمج', gets.includes('full'), `gets=${gets.join(',')}`);
+
 console.log(`\n✅ نجحت ${passed} فحوصات (فتح الموقع بسرعة)`);

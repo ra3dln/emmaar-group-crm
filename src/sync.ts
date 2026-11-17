@@ -136,6 +136,30 @@ const rememberVersion = (version: number): void => {
     /* التخزين معطّل — نستخدم الذاكرة فقط */
   }
 };
+// فيه رفعة فشلت (شبكة/سيرفر)؟ معناها إن في بيانات على الجهاز لسه ما وصلتش
+// السيرفر، فلازم الفتحة الجاية تسحب نسخة السيرفر وتدمج وترفع — ما ينفعش نختصرها.
+const PENDING_PUSH_KEY = 'crm_pending_push';
+const setPendingPush = (): void => {
+  try {
+    localStorage.setItem(PENDING_PUSH_KEY, '1');
+  } catch {
+    /* لا شيء */
+  }
+};
+const clearPendingPush = (): void => {
+  try {
+    if (localStorage.getItem(PENDING_PUSH_KEY)) localStorage.removeItem(PENDING_PUSH_KEY);
+  } catch {
+    /* لا شيء */
+  }
+};
+const hasPendingPush = (): boolean => {
+  try {
+    return localStorage.getItem(PENDING_PUSH_KEY) === '1';
+  } catch {
+    return true;
+  }
+};
 // "آخر نسخة عرفناها" تبدأ من بيانات هذا الجهاز؛ قبل كده كانت فاضية، فأول دورة
 // بعد الفتح كانت بتعتبر كل المفاتيح "متغيّرة" وترفعها كلها للسيرفر بلا داعي.
 let snapshotReady = false;
@@ -374,6 +398,7 @@ const pushAll = async (): Promise<void> => {
   const payload = await res.json();
   serverVersion = payload.version;
   rememberVersion(serverVersion);
+  clearPendingPush();
 };
 
 const pushOne = async (key: string): Promise<void> => {
@@ -386,6 +411,7 @@ const pushOne = async (key: string): Promise<void> => {
   const payload = await res.json();
   serverVersion = payload.version;
   rememberVersion(serverVersion);
+  clearPendingPush();
 };
 
 const pushOneWithRetry = async (key: string): Promise<void> => {
@@ -611,6 +637,8 @@ export async function pushKeys(keys: string[]): Promise<boolean> {
         if (res.ok) {
           const payload = await res.json();
           serverVersion = payload.version;
+          rememberVersion(serverVersion);
+          clearPendingPush();
           for (const key of Object.keys(dataToSend)) {
             snapshot[key] = localStorage.getItem(key) || '[]';
           }
@@ -625,6 +653,8 @@ export async function pushKeys(keys: string[]): Promise<boolean> {
     throw lastErr;
   } catch (err) {
     console.warn('[sync] pushKeys failed:', err);
+    // في بيانات لسه ما وصلتش السيرفر: الفتحة الجاية لازم تسحب وتدمج وترفع
+    setPendingPush();
     return false;
   }
 }
@@ -645,6 +675,8 @@ export async function pushKey(key: string): Promise<boolean> {
     snapshot[key] = raw;
     return true;
   } catch {
+    // الرفع فشل: لازم الفتحة الجاية تسحب وتدمج وترفع بدل الاختصار السريع
+    setPendingPush();
     return false;
   }
 }
@@ -677,6 +709,32 @@ const attachWakeListeners = (): void => {
 
 // تُنادى مرة واحدة قبل تشغيل التطبيق: نجلب بيانات السيرفر أولاً ثم نبدأ المزامنة الدورية
 export async function startSync(): Promise<void> {
+  // ===== فتح سريع =====
+  // لو الجهاز عنده رقم آخر نسخة عرفها ومفيش أي رفعة معلّقة، فمفيش جديد على
+  // السيرفر: بنسأل طلب صغير (meta=version) بدل تنزيل النسخة الكاملة (١.٣ ميجا)
+  // ورفعها من جديد — ودي كانت أكبر حاجة بتطوّل فتح الموقع.
+  const knownOnOpen = cachedServerVersion();
+  if (knownOnOpen >= 0 && !hasPendingPush()) {
+    try {
+      const versionRes = await apiFetch(`${API}?meta=version`, { cache: 'no-store', headers: apiHeaders() });
+      if (versionRes.ok) {
+        const current = Number((await versionRes.json()).version) || 0;
+        if (current === knownOnOpen) {
+          serverVersion = current;
+          online = true;
+          snapshot = readAll();
+          window.setInterval(() => {
+            void tick();
+          }, POLL_MS);
+          attachWakeListeners();
+          return;
+        }
+      }
+    } catch {
+      /* أي خطأ: نكمل بالمسار العادي (سحب كامل) */
+    }
+  }
+
   // بدون قاعدة بيانات خارجية، النظام يعمل محلياً على هذا الجهاز فقط.
   // أي محاولة لاتصال بـ /api/store ستفشل (503 no external storage)،
   // وسيعتمد كل شيء على localStorage محلياً.
