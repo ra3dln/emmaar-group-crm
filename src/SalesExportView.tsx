@@ -106,15 +106,8 @@ export function SalesExportView() {
   const fieldClass = 'bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-[var(--text-strong)] text-sm';
 
   return (
-    <div className="space-y-4">
-      <div className="page-intro">
-        <div>
-          <h2>تصدير الأرقام</h2>
-          <p>شيت إكسل فيه اسم السيلز واسم العميل والرقم والفيدباك كامل — فلتر بالفورم أو اختار عملاء بعينهم.</p>
-        </div>
-      </div>
-
-      <div className="panel p-3 sm:p-4 flex flex-wrap gap-3 items-end">
+    <div className="space-y-3.5">
+      <div className="panel p-3.5 flex flex-wrap gap-2.5 items-end">
         <label>
           <span className="block text-[11px] text-[var(--text-muted)] mb-1">الفورم (عملاء كامبين)</span>
           <select value={formFilter} onChange={(e) => setFormFilter(e.target.value)} className={fieldClass}>

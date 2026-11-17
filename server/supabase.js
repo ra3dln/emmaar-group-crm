@@ -21,20 +21,35 @@ async function restFetch(env, pathname, options = {}) {
   const key = String(env.SUPABASE_SECRET_KEY || '').trim();
   if (!url || !key) throw new Error('Supabase غير مضبوط — أضف SUPABASE_URL و SUPABASE_SECRET_KEY');
 
-  const res = await fetch(`${url}/rest/v1/${pathname}`, {
-    ...options,
-    headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`supabase ${res.status}: ${text.slice(0, 200)}`);
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`${url}/rest/v1/${pathname}`, {
+        ...options,
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+      });
+      if (res.ok) return res;
+      const text = await res.text().catch(() => '');
+      const isRetryable = res.status >= 500 || text.includes('57014') || res.status === 429;
+      if (isRetryable && attempt < 2) {
+        await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+        continue;
+      }
+      throw new Error(`supabase ${res.status}: ${text.slice(0, 200)}`);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+        continue;
+      }
+      throw lastErr;
+    }
   }
-  return res;
 }
 
 // عميل عام يقرأ ويكتب مفاتيح متعددة في جدول crm_kv

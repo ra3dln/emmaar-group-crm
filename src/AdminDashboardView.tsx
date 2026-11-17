@@ -75,25 +75,25 @@ export function AdminDashboardView({ currentUser, users = [] }: any) {
   ];
   const total = numbers.length;
   const percent = (count: number) => (total ? Math.round((count / total) * 1000) / 10 : 0);
-  const fieldClass = 'bg-[var(--surface-2,var(--tint-1))] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2.5 text-sm text-[var(--text-strong)] min-w-[180px]';
+  const fieldClass = 'bg-[var(--surface-2,var(--tint-1))] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-xs font-bold text-[var(--text-strong)] min-w-[160px]';
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+    <div className="space-y-4">
+      <div className="panel p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-extrabold text-[var(--text-strong)]">Welcome {currentUser?.name}</h2>
-          <p className="text-sm text-[var(--text-muted)] mt-1">أرقام كل الخانات عند الفريق — والنسبة من الكل</p>
+          <h2 className="text-lg font-extrabold text-[var(--text-strong)]">Welcome {currentUser?.name}</h2>
+          <p className="text-xs text-[var(--text-muted)] mt-0.5">أرقام كل الخانات عند الفريق — والنسبة من الكل</p>
         </div>
-        <div className="flex flex-wrap gap-3">
-          <label>
-            <span className="block text-[11px] text-[var(--text-muted)] mb-1">Sales Rep</span>
+        <div className="flex flex-wrap gap-2.5">
+          <label className="flex items-center gap-2">
+            <span className="text-xs font-bold text-[var(--text-muted)]">Sales Rep</span>
             <select value={salesFilter} onChange={(e) => setSalesFilter(e.target.value)} className={fieldClass}>
               <option value="all" className="bg-gray-900">Full Dashboard</option>
               {salesUsers.map((u: any) => <option key={u.id} value={u.id} className="bg-gray-900">{u.name}</option>)}
             </select>
           </label>
-          <label>
-            <span className="block text-[11px] text-[var(--text-muted)] mb-1">Managers</span>
+          <label className="flex items-center gap-2">
+            <span className="text-xs font-bold text-[var(--text-muted)]">Managers</span>
             <select value={managerFilter} onChange={(e) => setManagerFilter(e.target.value)} className={fieldClass}>
               <option value="none" className="bg-gray-900">None</option>
               {managers.map((u: any) => <option key={u.id} value={u.id} className="bg-gray-900">{u.name} — {u.team}</option>)}
@@ -102,15 +102,15 @@ export function AdminDashboardView({ currentUser, users = [] }: any) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
         {cards.map((card) => {
           const count = numbers.filter(card.match).length;
           return (
-            <div key={card.id} className="panel p-5 min-h-[118px] flex flex-col justify-between">
-              <p className="font-bold text-[var(--text-strong)]">{card.label}</p>
-              <div className="flex items-end justify-between mt-3">
-                <b className="text-3xl font-semibold text-[var(--text-strong)]">{count}</b>
-                <span className="text-xs font-bold text-emerald-500 flex items-center gap-0.5">
+            <div key={card.id} className="panel p-4 min-h-[96px] flex flex-col justify-between">
+              <p className="text-xs font-bold text-[var(--text-muted)]">{card.label}</p>
+              <div className="flex items-end justify-between mt-2">
+                <b className="text-2xl font-extrabold text-[var(--text-strong)] tabular-nums">{count}</b>
+                <span className="text-xs font-bold text-emerald-500 flex items-center gap-0.5 tabular-nums">
                   <ArrowUp className="w-3.5 h-3.5" />{card.id === 'all' ? 100 : percent(count)}%
                 </span>
               </div>

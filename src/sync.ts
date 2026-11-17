@@ -374,13 +374,26 @@ const tick = async (): Promise<void> => {
   try {
     // 0) هل تغيّر شيء على السيرفر؟ (نفحص قبل الرفع حتى نكتشف إعادة الضبط قبل رفع أي بيانات قديمة)
     let prefetched: any = null;
-    const versionRes = await apiFetch(`${API}?meta=version`, { cache: 'no-store', headers: apiHeaders() });
-    if (!versionRes.ok) throw new Error(`version failed: ${versionRes.status}`);
-    const { version } = await versionRes.json();
-    if (version !== serverVersion) {
+    let version = 0;
+    if (serverVersion < 0) {
+      // أول دورة بعد فتح الموقع: نجيب النسخة الكاملة على طول (ردّها فيه رقم النسخة)
+      // بدل ما نضيّع دورة كاملة على سؤال «فيه جديد؟» — بيفرّق في سرعة الفتح.
       const fullRes = await apiFetch(API, { cache: 'no-store', headers: apiHeaders() });
       if (!fullRes.ok) throw new Error(`pull failed: ${fullRes.status}`);
-      const store = await fullRes.json();
+      prefetched = await fullRes.json();
+      version = Number(prefetched?.version) || 0;
+    } else {
+      const versionRes = await apiFetch(`${API}?meta=version`, { cache: 'no-store', headers: apiHeaders() });
+      if (!versionRes.ok) throw new Error(`version failed: ${versionRes.status}`);
+      version = Number((await versionRes.json()).version) || 0;
+    }
+    if (version !== serverVersion) {
+      if (!prefetched) {
+        const fullRes = await apiFetch(API, { cache: 'no-store', headers: apiHeaders() });
+        if (!fullRes.ok) throw new Error(`pull failed: ${fullRes.status}`);
+        prefetched = await fullRes.json();
+      }
+      const store = prefetched;
       // نسخة السيرفر الكاملة: نستخدمها بسؤال «الرقم ده عند حدّ تاني؟»
       // (من غير ما تدخل ذاكرة الحساب — تتبقى في المزامنة فقط)
       if (store?.data && typeof store.data === 'object') lastServerData = store.data as StoreData;

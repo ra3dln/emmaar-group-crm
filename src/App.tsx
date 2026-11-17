@@ -1892,6 +1892,30 @@ function App() {
         const data: any = await res.json().catch(() => null);
         if (res.ok && data?.ok) authorized = true;
       };
+
+      // ===== فتح أسرع: الجلسة المحفوظة على الجهاز تفتح الواجهة فوراً =====
+      // قبل كده كنا بنستنى رد /api/auth?action=me (قراءة كاملة لقاعدة البيانات)
+      // وبعده بس تبدأ المزامنة — فكان فتح الموقع بياخد وقت طويل. دلوقتي بنعرض
+      // بيانات الجهاز في نفس اللحظة وبنبدأ المزامنة، وأي 401 حقيقي من السيرفر
+      // (جلسة ملغاة/حساب موقوف) بيرجّع شاشة الدخول زي المعتاد.
+      const storedRaw = localStorage.getItem('current_user');
+      let storedUser: User | null = null;
+      try {
+        storedUser = storedRaw ? (JSON.parse(storedRaw) as User) : null;
+      } catch {
+        storedUser = null;
+      }
+      if (storedUser && String(storedUser.id || '')) {
+        markAuthorized();
+        setCurrentUser(storedUser);
+        setActiveTab(startTabFor(storedUser));
+        // تحقّق خلفي: لو السيرفر رفض الجلسة صراحةً (401) نخرجه من الحساب
+        void checkMe().then(() => {
+          if (rejected && !cancelled) handleLogout();
+        });
+        return;
+      }
+
       try {
         await checkMe();
         // محاولة ثانية سريعة قبل أي حكم (تغطي تعثّر دالة السيرفر للحظة)
@@ -10948,16 +10972,16 @@ function formSheetBlob(formName: string, rows: FormSheetRow[]): Blob {
   });
 }
 
-// تجميع أرقام الكامبين حسب اسم الفورم، مرتّبة من الأحدث للأقدم
-// (الأحدث = آخر حركة/فيدباك/إضافة على أي رقم جوه الفورم).
-function campaignFormsOf(clients: Client[] = [], leads: AssignedLead[] = []) {
+// تجميع أرقام الكامبين حسب اسم الفورم.
+// الأرقام جوه كل فورم بتترتب من الأقدم للأحدث (زي ما الطلب في الشيت).
+function campaignFormsOf(clients: Client[] = [], leads: AssignedLead[] = [], repeats?: Map<string, any[]>) {
   const digitsOf = (value: any) => String(value || '').replace(/\D/g, '');
   const timeOf = (value?: string) => {
     const time = Date.parse(String(value || ''));
     return Number.isFinite(time) ? time : 0;
   };
   const grouped = new Map<string, { rows: FormSheetRow[]; latest: number; order: number[] }>();
-  // order: وقت تسجيل كل رقم في الكامبين — الأرقام جوه الفورم بتترتب بيه (الأحدث فوق)
+  // order: وقت تسجيل كل رقم في الكامبين — الأرقام جوه الفورم بتترتب بيه (الأقدم فوق)
   const push = (name: string, row: FormSheetRow, at: number, registeredAt: number) => {
     const key = String(name || '').trim() || 'بدون اسم فورم';
     if (!grouped.has(key)) grouped.set(key, { rows: [], latest: 0, order: [] });
@@ -10978,10 +11002,39 @@ function campaignFormsOf(clients: Client[] = [], leads: AssignedLead[] = []) {
       campaignTimeMs(c)
     );
   }
-  // أرقام لسه في «توزيع الأرقام» مالهاش فيدباك بعد، لكن بتظهر عشان الشيت يكون كامل
+  // كل أرقام «توزيع الأرقام» — بما فيها المغلقة اللي ما اتحوّلتش لسجل عميل.
+  // (كانت المغلقة بتتخطى، فكانت أرقام بتنقص من الشيت.)
   for (const lead of leads) {
-    if (lead.status === 'closed' || knownPhones.has(digitsOf(lead.phone))) continue;
+    if (knownPhones.has(digitsOf(lead.phone))) continue;
     push(formNameOf(lead), { name: lead.name || '—', phone: lead.phone, feedback: '—' }, timeOf(lead.createdAt), campaignTimeMs(lead));
+  }
+
+  // أرقام الفورم المتكررة (اتسجّلت وهي موجودة أصلاً من فورم تانية): ظاهرة في الشاشة
+  // وبتتحسب في عدد الفورم، فلازم تكون في الشيت برضه.
+  for (const entries of repeats?.values() || []) {
+    for (const entry of (entries || []) as any[]) {
+      const formName = formNameOf(entry);
+      const phone = String(entry?.phone || '');
+      if (!phone) continue;
+      const key = repeatPhoneKey(phone);
+      const original = campaignClients.find((c) =>
+        [c.phone, ...(c.phones || [])].some((ph) => repeatPhoneKey(ph) === key)
+      );
+      // الأصل في نفس الفورم = الرقم موجود في الشيت أصلاً
+      if (original && formNameOf(original) === formName) continue;
+      const at = String(entry?.campaignAt || entry?.createdAt || '');
+      const ms = timeOf(at);
+      push(
+        formName,
+        {
+          name: String(entry?.name || original?.name || '—'),
+          phone,
+          feedback: `مكرر — الأصل في فورم ${original ? formNameOf(original) || 'بدون اسم فورم' : 'تانية'}`,
+        },
+        ms,
+        ms
+      );
+    }
   }
 
   return [...grouped.entries()]
@@ -10989,7 +11042,7 @@ function campaignFormsOf(clients: Client[] = [], leads: AssignedLead[] = []) {
       name,
       rows: group.rows
         .map((row, index) => ({ row, at: group.order[index] || 0 }))
-        .sort((a, b) => b.at - a.at)
+        .sort((a, b) => a.at - b.at)
         .map((item) => item.row),
       latest: group.latest,
     }))
@@ -11000,7 +11053,8 @@ function campaignFormsOf(clients: Client[] = [], leads: AssignedLead[] = []) {
 // سطر لكل فورم: اسم الفورم وجمبه زر «تصدير» بس — بلا تفاصيل ولا أرقام.
 // الفورمات فوق بعضها مرتّبة من الأحدث للأقدم (آخر حركة على أي رقم جوه الفورم).
 function AdminFormsSheetView({ clients = [], leads = [] }: { clients?: Client[]; leads?: AssignedLead[] }) {
-  const forms = useMemo(() => campaignFormsOf(clients, leads), [clients, leads]);
+  const repeatMap = useLeadRepeats();
+  const forms = useMemo(() => campaignFormsOf(clients, leads, repeatMap), [clients, leads, repeatMap]);
 
   const exportSheet = (form: { name: string; rows: FormSheetRow[] }) => {
     const safeName = form.name.replace(/[\\/:*?"<>|]/g, '-');
@@ -11664,6 +11718,63 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ar'));
   };
 
+  // ===== تصدير الأرقام المعروضة لإكسل =====
+  // بيصدّر اللي إنت شايفه بالظبط بعد الفلاتر (كامبين + سيلز + مرحلة + بحث)،
+  // والأرقام المكررة معاهم — من الأقدم للأحدث — وفيه اسم الكامبين واسم السيلز
+  // واسم العميل والرقم والفيدباك ووقت التسجيل.
+  const exportShownSheet = () => {
+    const rows: { ms: number; cells: string[] }[] = [];
+    const feedbackOf = (record: any) => {
+      const last = [...((record?.activities || []) as any[])]
+        .filter((a: any) => a && a.type === 'feedback')
+        .sort((a: any, b: any) => String(b.at || '').localeCompare(String(a.at || '')))[0];
+      return String(last?.text || record?.feedback || '').trim() || '—';
+    };
+    const addRow = (campaign: string, owner: string, name: string, phone: string, feedback: string, at: string, ms: number) => {
+      rows.push({
+        ms,
+        cells: [campaign, owner || '—', name || '—', phone || '—', feedback, at ? formatDateTime(at) : '—'],
+      });
+    };
+    for (const group of shownGroups) {
+      for (const c of group.clients as Client[]) {
+        addRow(group.name, ownerName(c), c.name, c.phone, feedbackOf(c), campaignTimeOf(c).at, campaignTimeMs(c));
+      }
+      for (const lead of group.leads as AssignedLead[]) {
+        addRow(group.name, userName(lead.salesId), lead.name || '', lead.phone, feedbackOf(lead), campaignTimeOf(lead).at, campaignTimeMs(lead));
+      }
+      // الأرقام المتكررة: داخلة في عدد الفورم، فلازم تكون في الشيت
+      for (const row of repeatRowsOf(group.name)) {
+        addRow(
+          group.name,
+          row.owner || '—',
+          row.name,
+          row.phone,
+          `مكرر — الأصل في فورم ${row.originForm || 'تانية'}`,
+          row.at,
+          Date.parse(row.at) || 0
+        );
+      }
+    }
+    // من الأقدم للأحدث
+    rows.sort((a, b) => a.ms - b.ms);
+    const title = activeForm === 'all' ? 'كل الفورمات' : activeForm;
+    const salesTitle = activeSales === 'all' ? 'كل السيلز' : userName(activeSales);
+    const blob = buildXlsx({
+      sheetName: 'عملاء كامبين',
+      rows: [
+        [`عملاء كامبين — ${title} — ${salesTitle}`],
+        [`تاريخ التصدير: ${formatDateTime(new Date().toISOString())} — الإجمالي: ${rows.length} رقم (من الأقدم للأحدث)`],
+        ['اسم الكامبين', 'اسم السيلز', 'اسم العميل', 'الرقم', 'الفيدباك', 'وقت التسجيل'],
+        ...rows.map((r) => r.cells),
+      ],
+      headerRows: [3],
+      titleRows: [1],
+      columnWidths: [26, 18, 26, 16, 50, 22],
+      merges: ['A1:F1', 'A2:F2'],
+    });
+    downloadBlob(blob, `عملاء-كامبين-${todayKey()}.xlsx`);
+  };
 
   return (
     <div className="space-y-4">
@@ -11788,6 +11899,14 @@ function AdminClientsView({ clients, leads = [], users, onSelect, onCall, onAdd,
             title="رفع شيت فيه اسم الشخص ورقمه"
           >
             <Upload className="w-3.5 h-3.5" /> رفع شيت
+          </button>
+          <button
+            type="button"
+            onClick={() => exportShownSheet()}
+            className="text-[11.5px] font-bold bg-[var(--tint-1)] border border-[var(--border)] text-[var(--text)] px-3 py-2 rounded-[var(--r-sm)] hover:bg-[var(--tint-2)] flex items-center gap-1.5"
+            title="تصدير الأرقام المعروضة لإكسل — من الأقدم للأحدث"
+          >
+            <Download className="w-3.5 h-3.5" /> تصدير Excel
           </button>
           <button
             type="button"

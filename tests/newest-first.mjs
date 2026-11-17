@@ -35,6 +35,12 @@ check('المراحل عند الإدارة الأحدث فوق', /const openLis
 check('عملاء كامبين الأحدث فوق', /const visible = newestFirst\(campaignClients\.filter/.test(app) && /const visibleLeads = newestFirst\(campaignLeads\.filter/.test(app));
 check('توزيع الأرقام الأحدث فوق', /const visible = newestFirst\(formLeads/.test(app));
 check('الفيدباك عند الإدارة (أرقام السيلز) الأحدث فوق', /return newestFirst\(list, \(n: FeedbackNumber\) => recordByPhone\.get/.test(app));
-check('شيت الفورمات: الأرقام جوه كل فورم الأحدث فوق', app.includes('.sort((a, b) => b.at - a.at)') && app.includes('campaignTimeMs(lead));'));
+// الشيت (إكسل) بيطلع من الأقدم للأحدث زي ما الطلب — الشاشة بس هي الأحدث فوق
+check(
+  'شيت الفورمات: أرقام كل فورم في الإكسل من الأقدم للأحدث',
+  app.includes('.sort((a, b) => a.at - b.at)') &&
+    app.includes('campaignTimeMs(lead));') &&
+    app.includes('campaignFormsOf(clients, leads, repeatMap)')
+);
 
 console.log(`\n✅ نجحت ${passed} فحوصات (الترتيب من الأحدث للأقدم)`);
