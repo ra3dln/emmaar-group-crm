@@ -236,6 +236,24 @@ export function mergeTombstones(stored, incoming) {
   return [...out.values()];
 }
 
+// شواهد حذف لسجلات أُعيد إنشاؤها بعد الحذف تسقط من القاعدة أيضاً.
+// نفس قاعدة الواجهة (src/sync.ts: dropResurrected): لو السجل موجود ووقته أحدث
+// من وقت الحذف فهو إعادة إنشاء حقيقية والشاهد مالوش لازمة. من غير التنظيف ده
+// العميل بيشيل الشاهد من عنده والسيرفر بيرجّعه (دمج = اتحاد) فكل مزامنة بتغيّر
+// رقم النسخة، وكل جهاز ينزّل البيانات كلها من الأول كل فتحة.
+export function pruneResurrectedTombstones(data) {
+  const tombstones = Array.isArray(data?.[TOMBSTONE_DATA_KEY]) ? data[TOMBSTONE_DATA_KEY] : [];
+  const rowsOf = (key) => (Array.isArray(data?.[key]) ? data[key] : []);
+  return tombstones.filter((tomb) => {
+    if (!tomb || typeof tomb.key !== 'string' || !tomb.id) return true;
+    const row = rowsOf(tomb.key).find((r) => r && String(r.id) === String(tomb.id));
+    if (!row) return true; // مش موجود => الشاهد باقي
+    const at = Number(tomb.at) || 0;
+    if (!at) return false; // شاهد قديم بلا وقت = حذف مباشر
+    return recordStamp(row) <= at; // أحدث من الحذف => إعادة إنشاء => الشاهد يسقط
+  });
+}
+
 // مقارنة بزمن ثابت: تمنع استنتاج المفتاح من فرق زمن الرد
 export const safeEqual = (a, b) => {
   const x = String(a || '');
@@ -379,6 +397,11 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
           data[body.key] = accept(body.key, body.value);
         } else {
           return send(res, 400, { error: 'bad request' });
+        }
+
+        // تنظيف شواهد السجلات اللي أُعيد إنشاؤها بعد الحذف (انظر pruneResurrectedTombstones)
+        if (Array.isArray(data[TOMBSTONE_DATA_KEY])) {
+          data[TOMBSTONE_DATA_KEY] = pruneResurrectedTombstones(data);
         }
 
         // ===== رفع من غير تغيير = ولا حفظ ولا نسخة جديدة =====

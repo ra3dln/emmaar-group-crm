@@ -144,6 +144,15 @@ check('ومحو شواهد الحذف من جهاز قديم لا يُحيي ا�
 const recreated = { ...MONA, createdAt: new Date(removedAt + 60_000).toISOString() };
 await push('crm_users', [ADMIN, AHMED, recreated], cookie);
 check('إعادة الإنشاء الأحدث من الحذف تعيش', (await usernames(cookie)) === 'admin,ahmed,mona');
+// شاهد الحساب اللي أُعيد إنشاؤه لازم يسقط من السيرفر كمان: لو فضل، كل جهاز
+// بيشيله من عنده والسيرفر بيرجّعه فكل مزامنة بتزوّد رقم النسخة والموقع بينزّل
+// كل البيانات من الأول عند كل فتحة.
+const afterRecreate = (await pull(cookie)).crm_tombstones || [];
+check(
+  'وشاهد السجل اللي أُعيد إنشاؤه اتشال من السيرفر',
+  !afterRecreate.some((t) => t && t.key === 'crm_users' && t.id === MONA.id),
+  JSON.stringify(afterRecreate)
+);
 
 // ===== ٥) نفس الحماية للعملاء =====
 await push('crm_clients', [{ id: 'c1', userId: 'sales-1', name: 'عميل أ', phone: '0100', createdAt: '2026-04-01T00:00:00.000Z' }], cookie);

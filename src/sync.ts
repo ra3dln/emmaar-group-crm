@@ -110,6 +110,17 @@ const ALL_KEYS = [...SYNC_KEYS, TOMBSTONE_KEY];
 // مفاتيح البيانات التي تُستبدل بالكامل عند إعادة الضبط
 const DATA_KEYS = SYNC_KEYS;
 
+// نفس السجلات بغض النظر عن الترتيب؟ المزامنة كانت بتعتبر أي اختلاف في الترتيب
+// «تغيير» فترفع ١.٣ ميجا لكل فتحة وتزوّد رقم النسخة، فكل فتحة تنزّل البيانات
+// كلها من جديد. المقارنة هنا بتحمي من الرفع والكتابة بلا داعي.
+const sameRecordSet = (left: any[], right: any[]): boolean => {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  const a = left.map((row) => JSON.stringify(row)).sort();
+  const b = right.map((row) => JSON.stringify(row)).sort();
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+};
+
 type Tombstone = { key: string; id: string; at?: number };
 type StoreData = Record<string, unknown>;
 
@@ -551,12 +562,12 @@ const tick = async (): Promise<void> => {
       }
       const merged = afterTombstones(union, allTombstones, key);
       const mergedRaw = JSON.stringify(merged);
-      if (mergedRaw !== JSON.stringify(local)) {
+      if (mergedRaw !== JSON.stringify(local) && !sameRecordSet(merged, local)) {
         localStorage.setItem(key, mergedRaw);
         changed = true;
       }
       // سجلات موجودة هنا ولم تصل السيرفر بعد (مثل جهاز كان غير متصل)
-      if (mergedRaw !== JSON.stringify(remote)) repush.push(key);
+      if (mergedRaw !== JSON.stringify(remote) && !sameRecordSet(merged, remote)) repush.push(key);
     }
 
     // كتابة قائمة الشواهد النهائية (بعد سقوط شواهد الإحياء) ودفعها للسيرفر
