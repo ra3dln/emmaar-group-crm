@@ -115,6 +115,42 @@ type StoreData = Record<string, unknown>;
 
 let serverVersion = -1;
 let snapshot: Record<string, string> = {};
+// آخر رقم نسخة عرفناه من السيرفر — بنحفظه على الجهاز، فالفتحة الجاية لو مفيش
+// أي جديد ما بننزّلش البيانات كلها (١.٣ ميجا) — قوة الفتح بتفرق جداً.
+const SERVER_VERSION_KEY = 'crm_server_version';
+const cachedServerVersion = (): number => {
+  try {
+    const raw = localStorage.getItem(SERVER_VERSION_KEY);
+    if (raw === null) return -1;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : -1;
+  } catch {
+    return -1;
+  }
+};
+const rememberVersion = (version: number): void => {
+  if (!Number.isFinite(version) || version < 0) return;
+  try {
+    localStorage.setItem(SERVER_VERSION_KEY, String(version));
+  } catch {
+    /* التخزين معطّل — نستخدم الذاكرة فقط */
+  }
+};
+// "آخر نسخة عرفناها" تبدأ من بيانات هذا الجهاز؛ قبل كده كانت فاضية، فأول دورة
+// بعد الفتح كانت بتعتبر كل المفاتيح "متغيّرة" وترفعها كلها للسيرفر بلا داعي.
+let snapshotReady = false;
+const initSnapshot = (): void => {
+  if (snapshotReady) return;
+  snapshotReady = true;
+  // لو الذاكرة اتملت خلاص (مزامنة أولى/دفع سابق) ما نمسحهاش — وإلا الحذف
+  // اللي حصل بعدها ما يتسجلش شاهد حذف ويرجع السجل للحياة.
+  if (Object.keys(snapshot).length) return;
+  try {
+    snapshot = readAll();
+  } catch {
+    snapshot = {};
+  }
+};
 let busy = false;
 let online = false;
 // آخر نسخة كاملة جاية من السيرفر (كل الحسابات) — للسؤال «الرقم ده عند حدّ تاني؟»
@@ -337,6 +373,7 @@ const pushAll = async (): Promise<void> => {
   if (!res.ok) throw new Error(`bulk failed: ${res.status}`);
   const payload = await res.json();
   serverVersion = payload.version;
+  rememberVersion(serverVersion);
 };
 
 const pushOne = async (key: string): Promise<void> => {
@@ -348,6 +385,7 @@ const pushOne = async (key: string): Promise<void> => {
   if (!res.ok) throw new Error(`push failed: ${res.status}`);
   const payload = await res.json();
   serverVersion = payload.version;
+  rememberVersion(serverVersion);
 };
 
 const pushOneWithRetry = async (key: string): Promise<void> => {
@@ -372,16 +410,25 @@ const tick = async (): Promise<void> => {
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
   busy = true;
   try {
+    initSnapshot();
     // 0) هل تغيّر شيء على السيرفر؟ (نفحص قبل الرفع حتى نكتشف إعادة الضبط قبل رفع أي بيانات قديمة)
     let prefetched: any = null;
     let version = 0;
-    if (serverVersion < 0) {
-      // أول دورة بعد فتح الموقع: نجيب النسخة الكاملة على طول (ردّها فيه رقم النسخة)
+    const knownVersion = serverVersion < 0 ? cachedServerVersion() : serverVersion;
+    if (serverVersion < 0 && knownVersion < 0) {
+      // أول مرة على الجهاز: نجيب النسخة الكاملة على طول (ردّها فيه رقم النسخة)
       // بدل ما نضيّع دورة كاملة على سؤال «فيه جديد؟» — بيفرّق في سرعة الفتح.
       const fullRes = await apiFetch(API, { cache: 'no-store', headers: apiHeaders() });
       if (!fullRes.ok) throw new Error(`pull failed: ${fullRes.status}`);
       prefetched = await fullRes.json();
       version = Number(prefetched?.version) || 0;
+    } else if (serverVersion < 0) {
+      // عندنا رقم آخر نسخة محفوظ: نسأل سؤال صغير «فيه جديد؟» — لو نفس النسخة
+      // ما بننزّلش البيانات كلها، وده اللي بيخلّي الفتح سريع.
+      const versionRes = await apiFetch(`${API}?meta=version`, { cache: 'no-store', headers: apiHeaders() });
+      if (!versionRes.ok) throw new Error(`version failed: ${versionRes.status}`);
+      version = Number((await versionRes.json()).version) || 0;
+      serverVersion = knownVersion;
     } else {
       const versionRes = await apiFetch(`${API}?meta=version`, { cache: 'no-store', headers: apiHeaders() });
       if (!versionRes.ok) throw new Error(`version failed: ${versionRes.status}`);
@@ -448,6 +495,7 @@ const tick = async (): Promise<void> => {
     }
     const store = prefetched;
     serverVersion = Math.max(serverVersion, Number(store.version) || 0);
+    rememberVersion(serverVersion);
 
     const latest = readAll();
     // أي مفتاح تغيّر محلياً أثناء الجلب نتركه لنسخة هذا الجهاز
@@ -537,6 +585,7 @@ export async function pushKeys(keys: string[]): Promise<boolean> {
   if (uniqueKeys.length === 1) return pushKey(uniqueKeys[0]);
 
   try {
+    initSnapshot();
     const dataToSend: Record<string, any[]> = {};
     for (const key of uniqueKeys) {
       const raw = localStorage.getItem(key);
@@ -585,6 +634,7 @@ export async function pushKeys(keys: string[]): Promise<boolean> {
 // يجعل السجل موجوداً على هذا الجهاز فقط — فيبدو لمن يجرّب الدخول من جهازه «مش شغّال».
 export async function pushKey(key: string): Promise<boolean> {
   try {
+    initSnapshot();
     const raw = localStorage.getItem(key);
     if (raw === null) return false;
     // أي معرّف اختفى عن القائمة منذ آخر مزامنة = حذف حقيقي، وله شاهد حذف يسبق الرفع
