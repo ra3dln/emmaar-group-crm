@@ -13190,6 +13190,8 @@ const LEAD_SOURCE_DEFAULTS = {
   assignCursor: 0,
   perSalesLimit: 0,
   acceptTestLeads: true,
+  // سر تطبيق فيسبوك (اختياري): يجعل التوكن القصير (ساعتين) يتجدّد تلقائياً إلى ٦٠ يوماً
+  appSecret: '',
   // ميعاد انتهاء صلاحية التوكن (ثواني) — ننبّه قبله بيومين حتى لا يتوقف السحب فجأة
   tokenExpiresAt: 0,
   lastRun: null as any,
@@ -13210,7 +13212,12 @@ const writeLocalSource = (patch: any) => {
 };
 
 // الإعدادات المحفوظة محلياً تُعرض بنفس شكل الإعدادات القادمة من السيرفر
-const localSourceView = (next: any) => ({ ...next, hasToken: !!next.token });
+const localSourceView = (next: any) => ({
+  ...next,
+  hasToken: !!next.token,
+  hasAppSecret: !!next.appSecret,
+  autoRenewReady: !!next.appSecret,
+});
 
 // إضافة الأرقام المسحوبة إلى بيانات هذا الجهاز ثم إخبار التطبيق ليحدّث الشاشة
 const ingestLocalLeads = (leads: any[]) => {
@@ -13308,7 +13315,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
   const [dbIssue, setDbIssue] = useState('');
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
-  const [form, setForm] = useState({ sheetUrl: '', token: '', intervalMinutes: 5, perSalesLimit: 0 });
+  const [form, setForm] = useState({ sheetUrl: '', token: '', appSecret: '', intervalMinutes: 5, perSalesLimit: 0 });
   const [pages, setPages] = useState<any[]>([]);
   // تشخيص آخر استكشاف: لكل مصدر (صفحات الحساب / الأعمال) هل نجح وكام صفحة رجع
   const [pageSources, setPageSources] = useState<any[]>([]);
@@ -13327,6 +13334,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
     setForm({
       sheetUrl: view.sheetUrl || '',
       token: '',
+      appSecret: '', // سر التطبيق: يُكتب مرة واحدة ولا يُعاد عرضه أبداً
       intervalMinutes: view.intervalMinutes || 5,
       perSalesLimit: Number(next.perSalesLimit) || 0,
     });
@@ -13403,13 +13411,15 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
         });
         const json = await res.json();
         if (!res.ok || !json.ok) throw new Error(json.error || 'تعذّر الاستكشاف');
-        applyConfig(localSourceView(writeLocalChannel(channel, { type: 'meta', token, pages: json.pages, tokenExpiresAt: json.tokenExpiresAt || 0 })));
+        // بلا قاعدة بيانات: نحفظ التوكن (الممتد إن اتمدّد) وتوكنات الصفحات في المتصفح
+        applyConfig(localSourceView(writeLocalChannel(channel, { type: 'meta', token: json.token || token, pages: json.pages, tokenExpiresAt: json.tokenExpiresAt || 0 })));
         setPages(json.pages.map((p: any) => ({ id: p.id, name: p.name })));
         setPageSources(Array.isArray(json.sources) ? json.sources : []);
         setTokenKind(String(json.tokenType || ''));
         setForms([]);
         setSelected({});
-        setNotice(json.warning || `وجدت ${json.pages.length} صفحة — اضغط صفحة لعرض نماذجها`);
+        const extendedNote = json.extended ? `${json.hint || 'تم تمديد التوكن تلقائياً — صالح ٦٠ يوماً.'}\n` : '';
+        setNotice(extendedNote + (json.warning || `وجدت ${json.pages.length} صفحة — اضغط صفحة لعرض نماذجها`));
         return;
       }
 
@@ -13430,7 +13440,9 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       await save({ type: 'meta' }, '');
       setForms([]);
       setSelected({});
-      setNotice(json.warning || `وجدت ${json.pages.length} صفحة — اضغط صفحة لعرض نماذجها`);
+      // رسالة التمديد (لو اتمدّد التوكن) تيجي فوق رسالة الصفحات عشان المستخدم يشوفها
+      const extendedNote = json.extended ? `${json.hint || 'تم تمديد التوكن تلقائياً — صالح ٦٠ يوماً.'}\n` : '';
+      setNotice(extendedNote + (json.warning || `وجدت ${json.pages.length} صفحة — اضغط صفحة لعرض نماذجها`));
     } catch (error: any) {
       setNotice(error?.message || 'تعذّر الاستكشاف');
     } finally {
@@ -13791,17 +13803,27 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
             {view.hasToken && Number(view.tokenExpiresAt) > 0 && (() => {
               const msLeft = Number(view.tokenExpiresAt) * 1000 - Date.now();
               const days = Math.ceil(msLeft / (24 * 60 * 60 * 1000));
+              const autoRenew = !!config?.autoRenewReady;
+              const pagesReady = !!view.hasPageTokens;
               if (msLeft <= 0) {
                 return (
                   <div className="mt-2 rounded-[var(--r-md)] px-3 py-2 text-[11px] font-bold bg-red-500/10 border border-red-400/30 text-red-300">
-                    ⛔ انتهت صلاحية هذا التوكن — السحب متوقف حتى تولّد توكن جديداً وتلصقه هنا.
+                    ⛔ انتهت صلاحية توكن الاستكشاف.
+                    {pagesReady
+                      ? ' السحب ما زال شغّالاً بتوكنات الصفحات — فقط الاستكشاف وتحديث الصفحات يحتاج توكناً جديداً.'
+                      : ' السحب متوقف حتى تولّد توكن جديداً وتلصقه هنا.'}
                   </div>
                 );
               }
               if (msLeft <= 2 * 24 * 60 * 60 * 1000) {
                 return (
                   <div className="mt-2 rounded-[var(--r-md)] px-3 py-2 text-[11px] font-bold bg-amber-500/10 border border-amber-400/30 text-amber-300">
-                    ⏰ التوكن ينتهي خلال {days <= 1 ? 'أقل من يوم' : `${days} أيام`} — ولّد توكن جديداً الآن (من Graph API Explorer مع صلاحياته الخمس) قبل أن يتوقف السحب تلقائياً.
+                    ⏰ التوكن ينتهي خلال {days <= 1 ? 'أقل من يوم' : `${days} أيام`} —{' '}
+                    {autoRenew
+                      ? 'لكن التجديد التلقائي مفعّل، فسيُجدَّد وحده إلى ٦٠ يوماً قبل ما ينتهي.'
+                      : pagesReady
+                        ? 'السحب مستمر بتوكنات الصفحات. أضف «App Secret» بالأسفل ليُجدَّد التوكن وحده إلى ٦٠ يوماً.'
+                        : 'ولّد توكن جديداً الآن (من Graph API Explorer مع صلاحياته الخمس) أو أضف «App Secret» بالأسفل، قبل أن يتوقف السحب.'}
                   </div>
                 );
               }
@@ -13811,6 +13833,38 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
                 </p>
               );
             })()}
+
+            {/* ===== سر التطبيق (App Secret): يحوّل التوكن القصير (ساعتين) إلى ٦٠ يوماً ===== */}
+            <div className="mt-3 rounded-[var(--r-md)] border border-[var(--border)] bg-[var(--tint-1)] px-3 py-2.5">
+              <label className="block text-xs text-[var(--text)] mb-1">
+                App Secret لتطبيق فيسبوك {config?.hasAppSecret ? <span className="text-emerald-300">✓ متسجّل</span> : <span className="text-[var(--text-dim)]">(اختياري)</span>}
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  dir="ltr"
+                  type="password"
+                  value={form.appSecret}
+                  onChange={(e) => setForm({ ...form, appSecret: e.target.value })}
+                  placeholder={config?.hasAppSecret ? 'محفوظ على السيرفر ✓ — ألصق سراً جديداً لتغييره' : 'سِر التطبيق من developers.facebook.com'}
+                  className="flex-1 bg-[var(--tint-1)] border border-[var(--border)] rounded-[var(--r-md)] px-4 py-3 text-[var(--text-strong)] text-sm"
+                />
+                <button
+                  onClick={() =>
+                    save(
+                      { appSecret: form.appSecret.trim() },
+                      'تم حفظ سر التطبيق — صار النظام يبدّل التوكن القصير بتوكن ٦٠ يوماً تلقائياً ✓'
+                    )
+                  }
+                  disabled={busy !== '' || !form.appSecret.trim()}
+                  className="gradient-primary text-[var(--text-strong)] px-5 py-3 rounded-[var(--r-md)] font-bold text-xs disabled:opacity-50 whitespace-nowrap"
+                >
+                  حفظ السر
+                </button>
+              </div>
+              <p className="text-[11px] text-[var(--text-dim)] mt-1">
+                developers.facebook.com ← التطبيق ← Settings ← Basic ← App Secret (Show). يُحفظ على السيرفر ولا يُعرض بعد الحفظ — وبه يتمدّد التوكن لوحده إلى ٦٠ يوماً بدل ما تنتهي كل ساعتين.
+              </p>
+            </div>
           </div>
 
           {/* تشخيص الاستكشاف: يبيّن منين جت الصفحات وإيه اللي فشل بالضبط

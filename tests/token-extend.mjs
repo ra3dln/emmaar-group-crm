@@ -102,7 +102,7 @@ out = await prepareToken(SHORT_TOKEN);
 assert.equal(out.token, SHORT_TOKEN, 'التوكن زي ما هو');
 assert.equal(out.extended, false);
 assert.equal(calls.includes('exchange'), false, 'مافيش محاولة تمديد بلا مفاتيح');
-assert.match(out.hint, /FB_APP_SECRET/, 'الرسالة بتقول المتغير المطلوب');
+assert.match(out.hint, /App Secret/, 'الرسالة بتقول المتغير المطلوب');
 console.log('✓ من غير App Secret: التوكن يُحفظ مع رسالة توضّح المطلوب');
 
 // ٣) توكن طويل باقي فيه أسابيع => لا تمديد

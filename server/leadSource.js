@@ -188,7 +188,7 @@ export const isChannelOn = (config, channel) => {
 // لا نشترط «صفحات» لأن النموذج يمكن سحبه بمعرّفه فقط: /{form-id}/leads
 export const isChannelReady = (config) => {
   if (!config) return false;
-  if (isMetaSource(config)) return !!(config.token && config.forms?.length);
+  if (isMetaSource(config)) return !!(hasAnyUsableToken(config) && config.forms?.length);
   return !!String(config.sheetUrl || '').trim();
 };
 
@@ -213,6 +213,12 @@ const permissionOf = (message) => /requires\s+([a-z_]+)\s+permission/i.exec(Stri
 export const isPermissionError = (error) =>
   !!error?.permission || error?.code === 200 || error?.code === 10 || /#200|#10\)/.test(String(error?.message || ''));
 
+// خطأ «التوكن غير صالح أو انتهت صلاحيته» (كود 190 من فيسبوك):
+// هو الوحيد الذي يستحق تجريب توكن آخر — أما خطأ الصلاحيات فيبقى كما هو.
+export const isTokenError = (error) =>
+  error?.code === 190 ||
+  /غير صالح أو انتهت|انتهت صلاحيته|Invalid OAuth|OAuthException|invalid_token/i.test(String(error?.message || ''));
+
 const graphGet = async (path, params, timeoutMs = 20000) => {
   const url = new URL(`${GRAPH_BASE}${path}`);
   for (const [key, value] of Object.entries(params || {})) url.searchParams.set(key, value);
@@ -223,7 +229,11 @@ const graphGet = async (path, params, timeoutMs = 20000) => {
     const code = json.error.code;
     const permission = permissionOf(message);
 
-    if (code === 190) throw new Error('التوكن غير صالح أو انتهت صلاحيته — ولّد توكن جديداً والصقه هنا');
+    if (code === 190) {
+      const error = new Error('التوكن غير صالح أو انتهت صلاحيته — ولّد توكن جديداً والصقه هنا');
+      error.code = 190;
+      throw error;
+    }
     if (code === 4 || code === 17) throw new Error('فيسبوك حدّد معدل الطلبات مؤقتاً — حاول بعد دقائق');
 
     // صلاحية ناقصة: نشرحها بالعربي ونجهّز رسالة تعرف المستخدم ماذا يفعل بالضبط
@@ -323,8 +333,17 @@ async function fetchFromMeta(config, channel = 'facebook') {
   const cursors = { ...(config.formCursors || {}) };
 
   for (const form of config.forms) {
-    const token = pageToken(form.pageId) || String(form.token || '').trim() || fallbackToken;
-    if (!token) {
+    // سلسلة توكنات تجرّب واحدة واحدة: توكن صفحة النموذج أولاً، ثم بقية توكنات
+    // الصفحات (فهي لا تنتهي)، ثم توكن المستخدم. فسحب النموذج لا يتوقف لمجرد
+    // انتهاء توكن المستخدم — المشكلة التي كانت تُوقف الأرقام كل فترة.
+    const candidates = [
+      pageToken(form.pageId),
+      String(form.token || '').trim(),
+      ...(config.pages || []).map((p) => String(p?.token || '').trim()),
+      fallbackToken,
+    ].filter(Boolean);
+    const tokens = [...new Set(candidates)];
+    if (!tokens.length) {
       errors.push(`لا يوجد توكن لسحب النموذج «${form.name || form.id}»`);
       continue;
     }
@@ -336,7 +355,7 @@ async function fetchFromMeta(config, channel = 'facebook') {
       ? Number(cursors[form.id]) || 0
       : (config.forms.length === 1 ? baseCursor : 0);
 
-    const params = { fields: 'created_time,field_data', limit: '200', access_token: token };
+    const params = { fields: 'created_time,field_data', limit: '200', access_token: tokens[0] };
     // نطلب من فيسبوك الأرقام الأحدث من آخر سحب لهذا الفورم فقط.
     // نرجع ثانية للوراء: فيسبوك يخزّن الوقت بدقة الثانية، والليدز التي تصل في نفس
     // ثانية آخر ليد تم سحبه كانت تُسقط للأبد بصمت (سبب «الرقمين الناقصين»).
@@ -347,14 +366,32 @@ async function fetchFromMeta(config, channel = 'facebook') {
     }
 
     try {
-      let json;
-      try {
-        json = await graphGet(`/${form.id}/leads`, params);
-      } catch (error) {
-        // لو الصلاحية منعت الفلترة، نجلب الأرقام بدون فلتر (التكرار مرفوض لاحقاً تلقائياً)
-        if (!isPermissionError(error)) throw error;
-        json = await graphGet(`/${form.id}/leads`, { fields: 'created_time,field_data', limit: '200', access_token: token });
+      let json = null;
+      let lastError = null;
+      for (const token of tokens) {
+        params.access_token = token;
+        try {
+          json = await graphGet(`/${form.id}/leads`, params);
+          break;
+        } catch (error) {
+          lastError = error;
+          // لو الصلاحية منعت الفلترة، نجلب الأرقام بدون فلتر (التكرار مرفوض لاحقاً تلقائياً)
+          if (isPermissionError(error)) {
+            try {
+              json = await graphGet(`/${form.id}/leads`, { fields: 'created_time,field_data', limit: '200', access_token: token });
+              break;
+            } catch (retryError) {
+              lastError = retryError;
+              // خطأ صلاحية أو توكن منتهٍ => نجرّب توكن الصفحة التالي
+              if (!isPermissionError(retryError) && !isTokenError(retryError)) throw retryError;
+              continue;
+            }
+          }
+          // توكن منتهٍ أو مرفوض => نجرّب توكن الصفحة التالي
+          if (!isTokenError(error)) throw error;
+        }
       }
+      if (!json) throw lastError || new Error(`تعذّر سحب النموذج «${form.name || form.id}»`);
 
       // ===== متابعة «التالي» في الأرقام =====
       // طلب واحد بيرجع صفحة واحدة بس (فيسبوك بيسقّفها ١٠٠–٢٠٠ حتى لو limit أكبر).
@@ -414,8 +451,16 @@ async function fetchFromMeta(config, channel = 'facebook') {
 
 // المصدر الفعلي: نحترم اختيار المستخدم، لكن لو الإعداد مضبوط على «ملف منشور» بلا رابط
 // بينما يوجد توكن ميتا ونماذج مختارة، فالنية واضحة أنه فيسبوك — ولا نتركه يفشل بصمت.
+// وجود توكن صفحة يفي بالغرض أيضاً: توكنات الصفحات لا تنتهي، فالسحب يبقى شغّالاً
+// حتى لو انتهى توكن المستخدم (اللي بيستخدمه في الاستكشاف فقط).
 export const isMetaSource = (config) =>
-  config.type === 'meta' || (!String(config.sheetUrl || '').trim() && !!config.token && !!(config.forms || []).length);
+  config.type === 'meta' ||
+  (!String(config.sheetUrl || '').trim() && hasAnyUsableToken(config) && !!(config.forms || []).length);
+
+// أي توكن صالح للاستخدام: توكن المستخدم أو توكن صفحة واحدة على الأقل
+export const hasAnyUsableToken = (config = {}) =>
+  !!String(config.token || '').trim() ||
+  (Array.isArray(config.pages) && config.pages.some((p) => !!String(p?.token || '').trim()));
 
 // السحب من قناة واحدة. أرقام قناة إنستجرام تُوسم بمصدرها حتى لو جاءت من ملف منشور
 // فتعرف من نظرة واحدة أي كامبين جاء منها الرقم.
@@ -459,14 +504,25 @@ export const TOKEN_REMIND_BEFORE_MS = 2 * 24 * 60 * 60 * 1000;
 // (متغيّرا بيئة على السيرفر فقط — لا يُكتبان في الكود ولا في الواجهة).
 const EXTEND_BEFORE_MS = 7 * 24 * 60 * 60 * 1000; // نمدّد لما يبقى على الانتهاء أقل من أسبوع
 
-export function longLivedCredentials() {
-  const id = String(process.env.FB_APP_ID || process.env.META_APP_ID || '').trim();
-  const secret = String(process.env.FB_APP_SECRET || process.env.META_APP_SECRET || '').trim();
+// App ID تطبيق فيسبوك — رقم عام (ميتا تنشره في واجهة التطبيق) وليس سراً.
+// من متغيّرات البيئة إن وُجد، وإلا فالقيمة الافتراضية لتطبيق إعمار جروب.
+export const DEFAULT_FB_APP_ID = '2010203473000828';
+
+// مفتاح التمديد من مكانين: متغيّر بيئة على السيرفر (لمن يضبطه في Vercel)،
+// أو سر التطبيق المحفوظ في إعدادات النظام على الخادم (D1) — وهذا ما يجعل
+// التمديد يعمل بلا أي إعداد على لوحة Vercel.
+export function longLivedCredentials(config = {}) {
+  const id = String(
+    process.env.FB_APP_ID || process.env.META_APP_ID || config?.fbAppId || DEFAULT_FB_APP_ID || ''
+  ).trim();
+  const secret = String(
+    process.env.FB_APP_SECRET || process.env.META_APP_SECRET || config?.appSecret || config?.facebook?.appSecret || ''
+  ).trim();
   return { id, secret, ready: !!(id && secret) };
 }
 
-async function exchangeForLongLived(token) {
-  const { id, secret, ready } = longLivedCredentials();
+async function exchangeForLongLived(token, config = {}) {
+  const { id, secret, ready } = longLivedCredentials(config);
   if (!ready) return null;
   try {
     const url = new URL('https://graph.facebook.com/oauth/access_token');
@@ -487,7 +543,7 @@ async function exchangeForLongLived(token) {
 
 // يعيد التوكن الصالح للاستخدام: يمدّ القصير (ساعتين) إلى طويل (٦٠ يوماً) لو
 // App Secret متاح، ويحسب ميعاد الانتهاء الفعلي في كل الأحوال.
-export async function prepareToken(raw) {
+export async function prepareToken(raw, config = {}) {
   const token = String(raw || '').trim();
   if (!token) return { token: '', expiresAt: 0, extended: false, hint: '' };
   const info = await debugToken(token);
@@ -499,7 +555,7 @@ export async function prepareToken(raw) {
   let finalExpiry = expiresAt;
   let extended = false;
   if (expiresAt > 0 && msLeft < EXTEND_BEFORE_MS && !isPageToken) {
-    const longLived = await exchangeForLongLived(token);
+    const longLived = await exchangeForLongLived(token, config);
     if (longLived?.token) {
       finalToken = longLived.token;
       finalExpiry = longLived.expiresAt || 0;
@@ -515,10 +571,41 @@ export async function prepareToken(raw) {
     hint = `تم تمديد التوكن تلقائياً — صالح ${days} يوم.`;
   } else if (finalExpiry && leftMs < EXTEND_BEFORE_MS) {
     const hours = Math.max(1, Math.round(leftMs / 3600000));
-    hint = `التوكن صالح ${hours} ساعة فقط. لتحويله إلى ٦٠ يوماً: أضف FB_APP_ID و FB_APP_SECRET في متغيرات بيئة السيرفر ثم اضغط «استكشاف الصفحات» مرة أخرى.`;
+    const hasSecret = longLivedCredentials(config).ready;
+    hint = hasSecret
+      ? `التوكن صالح ${hours} ساعة فقط — ولم يتم تمديده. تأكد أن سر التطبيق صحيح في الإعدادات.`
+      : `التوكن صالح ${hours} ساعة فقط. لتحويله إلى ٦٠ يوماً: أضف «App Secret» في إعدادات هذه القناة (يبقى محفوظاً على السيرفر ولا يُعرض بعد الحفظ).`;
   }
 
   return { token: finalToken, expiresAt: finalExpiry, extended, hint };
+}
+
+// ===== تجديد تلقائي للتوكن قبل انتهائه (بلا تدخل من المستخدم) =====
+// المشكلة: توكن Graph API Explorer يعيش ساعتين، فلو لم يُجدَّد توقّف السحب.
+// هنا نُجدّد التوكن بأنفسنا في كل دورة سحب: لو التوكن المحفوظ قارب على الانتهاء
+// (أو انتهى) نبدّله بتوكن ٦٠ يوماً عبر fb_exchange_token ونحفظه فوراً —
+// فالتنبيه بيختفي لوحده من غير ما يضطر المستخدم يلصق توكن جديد كل مرة.
+export async function renewExpiringTokens(config = {}, { now = Date.now() } = {}) {
+  let next = config;
+  const notes = [];
+  let changed = false;
+  for (const channel of CHANNELS) {
+    const cfg = channelConfigOf(config, channel) || {};
+    const token = String(cfg.token || '').trim();
+    const expiresAt = Number(cfg.tokenExpiresAt) || 0;
+    if (!token || !expiresAt) continue; // لا توكن أو ميعاد مجهول — لا نلمس فيسبوك
+    const msLeft = expiresAt * 1000 - now;
+    if (msLeft >= EXTEND_BEFORE_MS) continue; // لسه قدام — لا نُجدّد بلا داعي
+    const prepared = await prepareToken(token, config);
+    if (prepared.extended) {
+      next = applyChannelPatch(next, { channel, token: prepared.token, tokenExpiresAt: prepared.expiresAt });
+      changed = true;
+      notes.push(`${CHANNEL_LABELS[channel]}: ${prepared.hint}`);
+    } else if (prepared.hint) {
+      notes.push(`${CHANNEL_LABELS[channel]}: ${prepared.hint}`);
+    }
+  }
+  return { config: next, notes, changed };
 }
 
 // تنبيهات انتهاء صلاحية توكنات السحب — تُمرَّر إلى محرك الإشعارات ليصلها الإدارة
@@ -536,12 +623,28 @@ export function tokenExpiryAlerts(config = {}, now = Date.now()) {
     const label = CHANNEL_LABELS[channel];
     const expired = msLeft <= 0;
     const days = Math.max(1, Math.round(msLeft / (24 * 60 * 60 * 1000)));
+    // هل السحب ما زال شغّالاً بدون توكن المستخدم؟ (توكنات الصفحات لا تنتهي)
+    const pagesReady = (cfg.pages || []).some((p) => !!String(p?.token || '').trim());
+    const pullKeepsRunning = pagesReady;
+    const canAutoRenew = longLivedCredentials(config).ready;
+    let body;
+    if (expired) {
+      body = pullKeepsRunning
+        ? `انتهى توكن استكشاف ${label} — لكن السحب ما زال شغّالاً بتوكنات الصفحات. ولّد توكن مستخدم جديداً متى شئت للاستكشاف والتحديث التلقائي.`
+        : `ولّد توكن جديداً من Graph API Explorer وألصقه في إعدادات سحب الأرقام (${label}) — حتى لا يتوقف وصول أرقام الكامبينات.`;
+    } else {
+      body = pullKeepsRunning
+        ? `باقٍ ${days} يوم على انتهاء توكن استكشاف ${label} — والسحب مستمر بتوكنات الصفحات${canAutoRenew ? '، والتجديد التلقائي جاهز' : ''}.`
+        : `باقٍ ${days} يوم على انتهاء توكن سحب ${label} — ولّد توكن جديداً وألصقه قبل انتهائه حتى لا يتوقف السحب تلقائياً.`;
+    }
     alerts.push({
       id: `lead-token-${channel}-${expiresAt}`,
-      title: expired ? `⛔ انتهى توكن سحب ${label} — السحب متوقف` : `⏰ توكن سحب ${label} ينتهي قريباً`,
-      body: expired
-        ? `ولّد توكن جديداً من Graph API Explorer وألصقه في إعدادات سحب الأرقام (${label}) — حتى لا يتوقف وصول أرقام الكامبينات.`
-        : `باقٍ ${days} يوم على انتهاء توكن سحب ${label} — ولّد توكن جديداً وألصقه قبل انتهائه حتى لا يتوقف السحب تلقائياً.`,
+      title: expired
+        ? pullKeepsRunning
+          ? `⛔ انتهى توكن استكشاف ${label} — السحب مستمر بتوكنات الصفحات`
+          : `⛔ انتهى توكن سحب ${label} — السحب متوقف`
+        : `⏰ توكن سحب ${label} ينتهي قريباً`,
+      body,
       url: '/',
     });
   }
@@ -799,6 +902,8 @@ const publicChannel = (config = {}) => ({
   intervalMinutes: config.intervalMinutes || DEFAULTS.intervalMinutes,
   perSalesLimit: Number(config.perSalesLimit) || 0,
   hasToken: !!config.token,
+  // هل عندنا توكنات صفحات؟ (هي لا تنتهي، فالسحب يستمر لو انتهى توكن المستخدم)
+  hasPageTokens: (config.pages || []).some((p) => !!String(p?.token || '').trim()),
   // ميعاد انتهاء التوكن (ثواني) — تُحسب منه «أيام متبقية» للتنبيه قبل الانتهاء
   tokenExpiresAt: Number(config.tokenExpiresAt) || 0,
   lastRun: config.lastRun || null,
@@ -808,6 +913,10 @@ export const publicConfig = (config = {}) => ({
   ...publicChannel(config),
   acceptTestLeads: config.acceptTestLeads !== false,
   instagram: publicChannel(config.instagram || DEFAULTS.instagram),
+  // سر التطبيق: لا يُرسل أبداً — الواجهة تعرض «متسجّل ✓» فقط.
+  hasAppSecret: !!String(config.appSecret || '').trim(),
+  // هل التجديد التلقائي جاهز؟ (سر موجود ⇒ التوكن القصير يتحوّل لـ ٦٠ يوماً)
+  autoRenewReady: longLivedCredentials(config).ready,
 });
 
 // --- التنظيف والحفظ بلا أي تخزين ---
@@ -1207,6 +1316,15 @@ export function applyChannelPatch(config, body = {}) {
   const next = { ...config };
   if (channel === 'instagram') next.instagram = { ...(config.instagram || {}), ...patch };
   else Object.assign(next, patch);
+
+  // ===== سر تطبيق فيسبوك (App Secret) =====
+  // سرّ على مستوى التطبيق كله (مش لكل قناة): يُحفظ على السيرفر فقط — في إعدادات
+  // النظام على قاعدة البيانات — ولا يُرسل للواجهة أبداً (يُعرض «متسجّل ✓» فقط).
+  // وجوده يجعل السيرفر يبدّل التوكن القصير (ساعتين) بتوكن ٦٠ يوماً تلقائياً.
+  if (typeof body.appSecret === 'string' && body.appSecret.trim()) {
+    next.appSecret = body.appSecret.trim();
+  }
+  if (body.clearAppSecret) delete next.appSecret;
   // تصفير مؤشر التوزيع يخص النظام كله (مناوبة واحدة على المندوبين)
   if (body.resetCursor) next.assignCursor = 0;
 

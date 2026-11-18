@@ -13,7 +13,7 @@
 // يعمل أيضاً مع Vercel Cron تلقائياً: Vercel يرسل نفس القيمة في ترويسة
 // Authorization: Bearer <CRON_SECRET> — فلا حاجة لأي تعديل إضافي في هذه الحالة.
 
-import { CHANNELS, isChannelOn, normalizeConfig, publicConfig, runAutoImportCore, tokenExpiryAlerts } from '../server/leadSource.js';
+import { CHANNELS, isChannelOn, normalizeConfig, publicConfig, renewExpiringTokens, runAutoImportCore, tokenExpiryAlerts } from '../server/leadSource.js';
 import { safeEqual } from '../server/store.js';
 import { pickJsonStore, pickStorage } from '../server/storage.js';
 import { processPushesOnce } from '../server/push.js';
@@ -61,9 +61,18 @@ export default async function handler(req, res) {
       });
     }
 
-    const config = normalizeConfig(await configStore.load());
+    let config = normalizeConfig(await configStore.load());
     // force=1 للاختبارات/التشغيل اليدوي فقط — المجدول العادي يحترم «كل كم دقيقة»
     const force = params.get('force') === '1';
+
+    // ===== تجديد التوكن قبل السحب (بلا تدخل من المستخدم) =====
+    // توكن Graph API Explorer يعيش ساعتين فقط. هنا نبدّله بتوكن ٦٠ يوماً قبل ما
+    // ينتهي ونحفظه — فالتنبيه بيختفي لوحده والسحب ما بيقفش.
+    const renewed = await renewExpiringTokens(config);
+    if (renewed.changed) {
+      await configStore.save(renewed.config);
+      config = renewed.config;
+    }
 
     // كل قناة لها مشغّلها: يكفي أن تكون قناة واحدة مفعّلة (فيسبوك أو إنستجرام)
     // السحب التلقائي والتذكيرات مستقلان، فلا يوقف توقف القنوات إرسال التذكيرات.
@@ -83,8 +92,12 @@ export default async function handler(req, res) {
     // ونمرّر معها تنبيهات انتهاء صلاحية توكن السحب — تصل الإدارة قبل الانتهاء بيومين.
     let push = null;
     try {
-      const vapidStore = useSupabase ? supabaseJsonStore(process.env, VAPID_KEY) : redisJsonStore(process.env, VAPID_KEY);
-      const stateStore = useSupabase ? supabaseJsonStore(process.env, PUSH_STATE_KEY) : redisJsonStore(process.env, PUSH_STATE_KEY);
+      // ملاحظة: كان هنا اختيار المخزن بـ useSupabase — وهو متغيّر غير معرّف بعد
+      // التحويل إلى D1، فكان السطر يرمي خطأ ReferenceError في كل دورة
+      // (فكل الإشعارات — ومنها تنبيه انتهاء التوكن — ما كانت تصل للأجهزة).
+      // الحل: نفس اختيار المخزون الموحّد في كل مكان (D1 ← Supabase ← Redis).
+      const vapidStore = pickJsonStore(process.env, VAPID_KEY);
+      const stateStore = pickJsonStore(process.env, PUSH_STATE_KEY);
       push = await processPushesOnce({ storage, vapidStore, stateStore, systemAlerts: tokenExpiryAlerts(config) });
     } catch (error) {
       // فشل الإشعارات لا يوقف سحب الأرقام — يُسجَّل ويُعاد في الدورة القادمة

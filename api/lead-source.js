@@ -25,7 +25,9 @@ import {
   fetchFormInfo,
   fetchFormsForPage,
   normalizeConfig,
+  prepareToken,
   publicConfig,
+  renewExpiringTokens,
   resetChannelCursors,
   runAutoImportCore,
 } from '../server/leadSource.js';
@@ -152,16 +154,25 @@ export default async function handler(req, res) {
     if (action === 'discover') {
       const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
       const channelCfg = channelConfigOf(config, channel) || {};
-      const token = String(body.token || channelCfg.token || '').trim();
+      const pasted = String(body.token || channelCfg.token || '').trim();
+      // ===== تمديد التوكن قبل الحفظ =====
+      // توكن Graph API Explorer يعيش ساعتين فقط — ولولا هذه الخطوة كان التوكن
+      // الجديد يُحفظ منتهياً ساعتين بعد لصقه، ويظهر التنبيه من جديد.
+      // هنا نبدّله بتوكن ٦٠ يوماً (لو سر التطبيق متاح) ونحفظ هو.
+      const prepared = await prepareToken(pasted, config);
+      const token = prepared.token;
       const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(token);
-      const next = applyChannelPatch(config, { channel, token, pages, tokenExpiresAt });
+      const expiresAt = tokenExpiresAt || prepared.expiresAt;
+      const next = applyChannelPatch(config, { channel, token, pages, tokenExpiresAt: expiresAt });
       await configStore.save(next);
       return reply(res, 200, {
         ok: true,
         pages: pages.map((p) => ({ id: p.id, name: p.name })),
-        warning,
-        tokenExpiresAt,
-        // تشخيص المصادر: يبيّن للإدارة ليه صفحة معيّنة ما ظهرتش (توكن صفحة / صلاحية ناقصة)
+        warning: [warning, prepared.hint].filter(Boolean).join('\n'),
+        tokenExpiresAt: expiresAt,
+        // هل اتمدّد التوكن؟ والرسالة بتقول المستخدم إيه بالظبط
+        extended: prepared.extended,
+        hint: prepared.hint,
         sources,
         tokenType,
         config: publicConfig(next),
@@ -199,7 +210,11 @@ export default async function handler(req, res) {
 
     // السحب الفعلي: يُنظَّف ويُوزَّع ويُحفظ في قاعدة البيانات مباشرة
     if (action === 'run') {
-      const next = normalizeConfig(config);
+      // تجديد ذاتي قبل السحب: لو التوكن المحفوظ قارب على الانتهاء نبدّله بتوكن
+      // ٦٠ يوماً ونحفظه — فالسحب يستمر بلا تدخل من المستخدم.
+      const renewed = await renewExpiringTokens(config);
+      if (renewed.changed) await configStore.save(renewed.config);
+      const next = normalizeConfig(renewed.config);
       const summary = await runAutoImportCore({
         storage: dataStore,
         config: next,
@@ -207,16 +222,29 @@ export default async function handler(req, res) {
         force: body.force !== false,
         saveConfig: (updated) => configStore.save(updated),
       });
-      return reply(res, 200, { ok: true, summary, config: publicConfig(next) });
+      return reply(res, 200, {
+        ok: true,
+        summary,
+        renewed: renewed.changed,
+        notes: renewed.notes,
+        config: publicConfig(next),
+      });
     }
 
     // «حفظ» وأي طلب آخر — لو الواجهة ألصقت توكن جديداً نسجّل ميعاد انتهائه للتنبيه قبله
     const pastedToken = typeof body.token === 'string' && body.token.trim() && !body.clearToken ? body.token.trim() : '';
-    const expiryPatch = pastedToken ? { tokenExpiresAt: (await debugToken(pastedToken))?.expiresAt || 0 } : {};
+    const prepared = pastedToken ? await prepareToken(pastedToken, config) : null;
+    const expiryPatch = prepared ? { token: prepared.token, tokenExpiresAt: prepared.expiresAt } : {};
     const next = normalizeConfig(applyChannelPatch(config, { ...body, ...expiryPatch }));
     if (typeof body.acceptTestLeads === 'boolean') next.acceptTestLeads = body.acceptTestLeads;
     await configStore.save(next);
-    return reply(res, 200, { ok: true, stateless: false, config: publicConfig(next) });
+    return reply(res, 200, {
+      ok: true,
+      stateless: false,
+      extended: prepared?.extended || false,
+      hint: prepared?.hint || '',
+      config: publicConfig(next),
+    });
   } catch (error) {
     return reply(res, 500, { ok: false, error: String(error?.message || error) });
   }
@@ -236,9 +264,23 @@ async function statelessHandler(req, res, url) {
     if (action === 'discover') {
       const channel = body.channel === 'instagram' ? 'instagram' : 'facebook';
       const channelCfg = channelConfigOf(body.config || {}, channel) || {};
-      const token = String(body.token || channelCfg.token || '').trim();
-      const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(token);
-      return reply(res, 200, { ok: true, pages, warning, tokenExpiresAt, sources, tokenType });
+      const pasted = String(body.token || channelCfg.token || '').trim();
+      // نفس تمديد التوكن في الوضع بلا قاعدة: التوكن القصير (ساعتين) يُبدَّل
+      // بـ ٦٠ يوماً قبل ما يُرجع للواجهة تحفظه في المتصفح.
+      const prepared = await prepareToken(pasted, body.config || {});
+      const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(prepared.token);
+      return reply(res, 200, {
+        ok: true,
+        pages,
+        // التوكن بعد التمديد (٦٠ يوماً) — المتصفح يحفظه بدل القصير
+        token: prepared.token,
+        warning: [warning, prepared.hint].filter(Boolean).join('\n'),
+        tokenExpiresAt: tokenExpiresAt || prepared.expiresAt,
+        extended: prepared.extended,
+        hint: prepared.hint,
+        sources,
+        tokenType,
+      });
     }
 
     if (action === 'form-info') {
