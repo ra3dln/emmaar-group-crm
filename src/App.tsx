@@ -13285,11 +13285,27 @@ const writeLocalChannel = (channel: LeadChannel, patch: any) => {
   return writeLocalSource({ instagram: { ...((current as any).instagram || {}), ...patch } });
 };
 
+// سبب وقوف قاعدة البيانات المركزية بكلام مفهوم. السيرفر بيرجّع رسالة Supabase
+// الخام (مثلاً exceed_egress_quota)، والواجهة كانت بتقول «مفيش قاعدة بيانات» —
+// ودي بتبلّب الإدارة لأن البيانات موجودة فعلاً والقاعدة موقوفة مؤقتاً بس.
+const databaseIssueText = (raw: string): string => {
+  const text = String(raw || '');
+  if (/exceed_egress_quota|egress/i.test(text))
+    return 'تجاوز حد النقل (Egress) في Supabase — حد الخطة المجانية خلص الشهر ده';
+  if (/spend cap|402|restricted/i.test(text))
+    return 'حساب Supabase موقوف مؤقتاً (حد الإنفاق / الخطة)';
+  if (/\b401\b/.test(text)) return 'الجلسة انتهت — سجّل الدخول من جديد';
+  const code = (text.match(/\b(4\d\d|5\d\d)\b/) || [])[1];
+  return code ? `السيرفر رجّع خطأ ${code}` : 'تعذّر الوصول لسيرفر البيانات';
+};
+
 function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
   const meta = CHANNEL_META[channel];
   const [config, setConfig] = useState<any>(null);
   // true = سيرفر الشركة (يخزّن في ملف) · false = استضافة بلا قاعدة بيانات (التخزين في المتصفح)
   const [remote, setRemote] = useState<boolean | null>(null);
+  // سبب تعطّل القاعدة المركزية (حد نقل / خطة / جلسة) — يعرض للإدارة بدل «مفيش قاعدة»
+  const [dbIssue, setDbIssue] = useState('');
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
   const [form, setForm] = useState({ sheetUrl: '', token: '', intervalMinutes: 5, perSalesLimit: 0 });
@@ -13327,14 +13343,20 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
 
   useEffect(() => {
     fetch('/api/lead-source', { cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then(async (res) => {
+        // خطأ السيرفر معناها إن القاعدة مش شغّالة (حد النقل خلص مثلاً) — بنقرا السبب
+        if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(() => '')}`);
+        return res.json();
+      })
       .then((json) => {
         // على الاستضافة تعلن الوظيفة أنها بلا ذاكرة => الإعدادات تُحفظ في المتصفح
+        setDbIssue('');
         setRemote(!json.stateless);
         applyConfig(json.stateless ? localSourceView(readLocalSource()) : json.config);
       })
-      .catch(() => {
-        // لا يوجد خادم إعدادات أصلاً: نعمل محلياً في كل الأحوال — الميزة تظل ظاهرة
+      .catch((error) => {
+        // لا يوجد خادم إعدادات أصلاً أو القاعدة موقوفة: نعمل محلياً — والميزة تظل ظاهرة
+        setDbIssue(databaseIssueText(String((error as any)?.message || '')));
         setRemote(false);
         applyConfig(localSourceView(readLocalSource()));
       });
@@ -13674,7 +13696,13 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       </p>
       <p className="text-[11px] text-[var(--text-dim)] leading-relaxed mb-4">{meta.hint}</p>
 
-      {remote === false && (
+      {dbIssue && (
+        <p className="text-[11px] text-red-300 leading-relaxed mb-4 bg-red-500/10 border border-red-400/30 rounded-[var(--r-md)] px-3 py-2">
+          قاعدة البيانات المركزية موقوفة دلوقتي: {dbIssue}. البيانات الجديدة بتُحفظ على هذا الجهاز، وأول ما ترجع الخدمة
+          بتترفع لوحدها وتظهر على كل الأجهزة.
+        </p>
+      )}
+      {remote === false && !dbIssue && (
         <p className="text-[11px] text-amber-300/90 leading-relaxed mb-4 bg-amber-500/10 border border-amber-400/20 rounded-[var(--r-md)] px-3 py-2">
           على هذه الاستضافة لا توجد قاعدة بيانات مركزية: الإعدادات والأرقام تُحفظ في متصفح هذا الجهاز، والسحب التلقائي يعمل ما دام
           الموقع مفتوحاً. على سيرفر الشركة يعمل السحب في الخلفية وتظهر الأرقام على كل الأجهزة.
