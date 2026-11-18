@@ -46,10 +46,10 @@ globalThis.fetch = async (input) => {
     const inspected = url.searchParams.get('input_token') || '';
     const access = url.searchParams.get('access_token') || '';
     const expired = inspected === 'EXPIRED-TOKEN';
-    // ميتا بترفض فحص توكن مستخدم بـ access_token = التوكن نفسه (رمز 190)
-    // — والطريقة الصحيحة هي App Access Token (app_id|app_secret).
-    if (!access.includes('|')) {
-      return errorJson('Invalid OAuth access token data.', 190);
+    // ميتا: لو مرّرنا App Access Token (app_id|app_secret) بترجّع بيانات التطبيق
+    // نفسه (من غير تاريخ انتهاء) — فالتشخيص لازم يبدأ بالتوكن نفسه.
+    if (access.includes('|')) {
+      return json({ data: { app_id: '2010203473000828', type: 'APP', expires_at: 0, is_valid: true } });
     }
     return json({
       data: {
@@ -112,9 +112,9 @@ const authCookie = `${COOKIE_NAME}=${encodeURIComponent(managerSession)}`;
   console.log('✓ سر التطبيق المحفوظ في الإعدادات يحوّل التوكن القصير إلى ٦٠ يوماً');
 }
 
-// ===== ١ب) تشخيص الصلاحية لازم يمرّ بـ App Access Token =====
-// (السبب الجذري: ميتا بترفض /debug_token لما نمرّر توكن المستخدم نفسه —
-//  فكان الميعاد بيتقرا «مش معروف» ومفيش تمديد ولا تاريخ.)
+// ===== ١ب) تشخيص الصلاحية لازم يبدأ بالتوكن نفسه =====
+// (ميتا بترجّع بيانات التطبيق نفسه لو ابدأنا بـ App Access Token —
+//  فمياعرفناش ميعاد انتهاء توكن المستخدم، فيبقى الميعاد صفر والتمديد والتذكير غلط)
 {
   const debugCalls = [];
   const prevFetch = globalThis.fetch;
@@ -123,18 +123,21 @@ const authCookie = `${COOKIE_NAME}=${encodeURIComponent(managerSession)}`;
     if (url.pathname.endsWith('/debug_token')) {
       const access = url.searchParams.get('access_token') || '';
       debugCalls.push(access);
-      if (!access.includes('|')) return errorJson('Invalid OAuth access token data.', 190);
+      if (access.includes('|')) {
+        // نتيجة ميتا لو استخدمنا App Access Token: بيانات التطبيق (من غير تاريخ)
+        return json({ data: { app_id: '2010203473000828', type: 'APP', expires_at: 0, is_valid: true } });
+      }
       return json({ data: { is_valid: true, type: 'USER', expires_at: nowSec() + 2 * 60 * 60 } });
     }
     return prevFetch(input);
   };
   const info = await debugToken(SHORT_TOKEN, { appSecret: 'secret-from-settings' });
   assert.ok(info, 'التشخيص نجح');
-  assert.equal(info.type, 'USER', 'نوع التوكن اتقرا صح');
+  assert.equal(info.type, 'USER', 'نوع التوكن اتقرا صح (مش بيانات التطبيق)');
   assert.ok(info.expiresAt > nowSec(), 'ميعاد الانتهاء اتقرا — مش صفر');
-  assert.equal(debugCalls[0].includes('|'), true, 'أول محاولة تستخدم App Access Token (app_id|app_secret)');
+  assert.equal(debugCalls[0].includes('|'), false, 'أول محاولة تستخدم التوكن نفسه');
   globalThis.fetch = prevFetch;
-  console.log('✓ تشخيص صلاحية التوكن بيستخدم App Access Token — فميعاد الانتهاء بيتقرا صح');
+  console.log('✓ تشخيص صلاحية التوكن بيبدأ بالتوكن نفسه — فميعاد الانتهاء بيتقرا صح');
 }
 
 // ===== ٢) المسار المنشور فعلاً: api/lead-source.js يوسّع التوكن =====

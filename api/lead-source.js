@@ -162,8 +162,10 @@ export default async function handler(req, res) {
       const prepared = await prepareToken(pasted, config);
       const token = prepared.token;
       const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(token, config);
-      // لو الميعاد المجهول (٠) ماينمسحش الميعاد القديم المحفوظ — الجهل مش دليل انتهاء
-      const expiresAt = tokenExpiresAt || prepared.expiresAt || Number(channelCfg.tokenExpiresAt) || 0;
+      // لو الميعاد المجهول (٠) ماينمسحش الميعاد القديم المحفوظ — الجهل مش دليل انتهاء.
+      // بس لو التوكن اتبدّل (اتمدّد) فميعاده القديم مالوش لازمة — تبديله معناه توكن جديد.
+      const expiresAt =
+        tokenExpiresAt || prepared.expiresAt || (prepared.extended ? 0 : Number(channelCfg.tokenExpiresAt) || 0);
       const next = applyChannelPatch(config, { channel, token, pages, tokenExpiresAt: expiresAt });
       await configStore.save(next);
       return reply(res, 200, {

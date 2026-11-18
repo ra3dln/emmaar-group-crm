@@ -13802,13 +13802,13 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
               </button>
             </div>
             <p className="text-[11px] text-[var(--text-dim)] mt-1">
-              ولّد التوكن من Graph API Explorer على developers.facebook.com وامنحه هذه الصلاحيات الخمس معاً:{' '}
-              <span dir="ltr">leads_retrieval + pages_manage_ads + pages_show_list + pages_read_engagement + pages_manage_metadata</span>، ثم الصقه واضغط «استكشف صفحاتي».
+              ولّد التوكن من Graph API Explorer على developers.facebook.com وامنحه هذه الصلاحيات معاً:{' '}
+              <span dir="ltr">leads_retrieval + pages_show_list + pages_read_engagement + pages_manage_ads + business_management</span>، ثم الصقه واضغط «استكشف صفحاتي».
               <span className="block mt-1 text-amber-400/80">
                 لو ظهر خطأ <span dir="ltr">Requires pages_manage_ads permission (#200)</span> فمعناه أن التوكن ناقص هذه الصلاحية — أعد توليده وأضفها ثم أعد المحاولة.
               </span>
               <span className="block mt-1 text-emerald-400/80">
-                 توكن Graph API Explorer يعيش ساعتين فقط. لتجنّب انتهائه: بعد توليده اضغط <span dir="ltr">Open in Access Token Debugger</span> ثم <span dir="ltr">Extend Access Token</span> — فيصبح صالحاً ٦٠ يوماً.
+                 توكن Graph API Explorer يعيش ساعتين فقط — لكن لو حفظت «App Secret» بالأسفل، السيرفر بيحوّله لوحده لتوكن ٦٠ يوم عند الاستكشاف، ويجدّده قبل ما ينتهي.
               </span>
               <span className="block mt-1 text-amber-300/90">
                 صفحة داخل Business Manager مش بتظهر؟ أضف صلاحية <span dir="ltr">business_management</span> معاهم — صفحات الأعمال (owned + client) تُطلب بعد كده تلقائياً.

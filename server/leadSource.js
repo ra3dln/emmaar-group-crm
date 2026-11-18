@@ -488,16 +488,25 @@ export async function debugToken(token, config = {}) {
   const input = String(token || '').trim();
   if (!input) return null;
   const { id, secret, ready } = longLivedCredentials(config);
-  const accessTokens = ready ? [`${id}|${secret}`, input] : [input];
+  // ترتيب المحاولات مهم: التوكن نفسه أولاً — ميتا بترجّع بيه بيانات توكن المستخدم
+  // كاملة (التاريخ والصلاحيات). أما لو بدأنا بـ App Access Token فميتا بترجّع
+  // بيانات التطبيق نفسه (من غير تاريخ انتهاء) فيبقى الميعاد «صفر» والتمديد
+  // والتذكير بيشتغلوا على رقم غلط.
+  const accessTokens = ready ? [input, `${id}|${secret}`] : [input];
   for (const access of accessTokens) {
     try {
       const json = await graphGet('/debug_token', { input_token: input, access_token: access });
       const data = json.data || {};
+      if (data.is_valid === false) continue; // توكن غير صالح => نجرب الوسيلة التالية
+      const expiresAt = Number(data.expires_at) || 0;
+      const type = String(data.type || '').toUpperCase();
+      // نتيجة ناقصة (من غير تاريخ ومن غير نوع صفحة) => مش نتيجة موثوقة
+      if (!expiresAt && type !== 'PAGE') continue;
       return {
-        valid: data.is_valid !== false,
-        expiresAt: Number(data.expires_at) || 0,
+        valid: true,
+        expiresAt,
         // نوع التوكن يهم الاستكشاف: توكن الصفحة (PAGE) لا يرى صفحات المستخدم
-        type: String(data.type || '').toUpperCase(),
+        type,
         scopes: Array.isArray(data.scopes) ? data.scopes.map(String) : [],
         profileId: String(data.profile_id || ''),
       };
