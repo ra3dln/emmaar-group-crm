@@ -1770,7 +1770,7 @@ function App() {
   // التوكن ينتهي بعد مدة محددة (ساعتان للمستكشف، أو ٦٠ يوماً بعد التمديد)، وعند انتهائه
   // يتوقف سحب أرقام الكامبينات بصمت. هنا نقرأ الإعدادات مرة عند الدخول ونعرض شريط
   // تذكير قبل الانتهاء بيومين — حتى يجدّده الإدارة قبل أن ينقطع السحب.
-  const [tokenNotice, setTokenNotice] = useState<{ channel: 'facebook' | 'instagram'; label: string; expired: boolean } | null>(null);
+  const [tokenNotice, setTokenNotice] = useState<{ channel: 'facebook' | 'instagram'; label: string; expired: boolean; pagesReady?: boolean; autoRenew?: boolean } | null>(null);
   useEffect(() => {
     if (!currentUser || currentUser.role === 'sales') return;
     let alive = true;
@@ -1782,7 +1782,14 @@ function App() {
         const warnOf = (cfg: any, channel: 'facebook' | 'instagram', label: string) => {
           const expiresAt = Number(cfg?.tokenExpiresAt) || 0;
           if (!cfg?.hasToken || !expiresAt || expiresAt * 1000 - now > 2 * 24 * 60 * 60 * 1000) return null;
-          return { channel, label, expired: expiresAt * 1000 <= now };
+          return {
+            channel,
+            label,
+            expired: expiresAt * 1000 <= now,
+            // السحب يكمل بتوكنات الصفحات (لا تنتهي) فلو فيه توكنات صفحات السحب مش متوقف
+            pagesReady: !!cfg?.hasPageTokens,
+            autoRenew: !!json?.config?.autoRenewReady,
+          };
         };
         setTokenNotice(warnOf(json.config, 'facebook', 'فيسبوك') || warnOf(json.config.instagram, 'instagram', 'إنستجرام'));
       })
@@ -3918,9 +3925,21 @@ function App() {
           <div className={`reminder-strip${tokenNotice.expired ? ' is-danger' : ''}`} role="status" aria-live="polite">
             <span className="rs-icon" aria-hidden="true"><KeyRound className="w-4 h-4" /></span>
             <div className="rs-body">
-              <b>{tokenNotice.expired ? `انتهى توكن سحب ${tokenNotice.label} — السحب متوقف` : `توكن سحب ${tokenNotice.label} ينتهي خلال يومين`}</b>
+              <b>
+                {tokenNotice.expired
+                  ? tokenNotice.pagesReady
+                    ? `انتهى توكن استكشاف ${tokenNotice.label} — السحب مستمر بتوكنات الصفحات`
+                    : `انتهى توكن سحب ${tokenNotice.label} — السحب متوقف`
+                  : `توكن سحب ${tokenNotice.label} ينتهي خلال يومين`}
+              </b>
               <small>
-                ولّد توكن جديداً من Graph API Explorer (بصلاحياته الخمس) وألصقه في إعدادات سحب الأرقام — حتى لا يتوقف وصول أرقام الكامبينات.
+                {tokenNotice.expired
+                  ? tokenNotice.pagesReady
+                    ? 'السحب ما زال شغّالاً بتوكنات الصفحات — فقط الاستكشاف وتحديث الصفحات يحتاج توكناً جديداً.'
+                    : 'ولّد توكن جديداً من Graph API Explorer (بصلاحياته الخمس) وألصقه في إعدادات سحب الأرقام — حتى لا يتوقف وصول أرقام الكامبينات.'
+                  : tokenNotice.autoRenew
+                    ? 'التجديد التلقائي مفعّل — سيُجدَّد وحده إلى ٦٠ يوماً قبل ما ينتهي. ولو حبّيت تتأكد: ولّد توكناً جديداً والصقه في إعدادات سحب الأرقام.'
+                    : 'ولّد توكن جديداً من Graph API Explorer (بصلاحياته الخمس) وألصقه في إعدادات سحب الأرقام — حتى لا يتوقف وصول أرقام الكامبينات.'}
               </small>
             </div>
             <div className="rs-actions">

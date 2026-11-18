@@ -187,7 +187,21 @@ export default async function handler(req, res) {
       const pageId = String(body.pageId || '');
       const page = (channelCfg.pages || []).find((p) => p.id === pageId);
       if (!page) return reply(res, 404, { ok: false, error: 'الصفحة غير موجودة في إعدادات هذه القناة — أعد الاستكشاف' });
-      const forms = await fetchFormsForPage(page.id, page.token);
+      // سلسلة توكنات: توكن الصفحة أولاً، ثم توكن المستخدم، ثم بقية توكنات الصفحات.
+      // فقائمة النماذج تظل شغّالة حتى لو توكن مستخدم الاستكشاف انتهى.
+      const tokens = [...new Set([page.token, channelCfg.token, ...(channelCfg.pages || []).map((p) => p.token)].filter(Boolean))];
+      let forms = [];
+      let lastError = null;
+      for (const token of tokens) {
+        try {
+          forms = await fetchFormsForPage(page.id, token);
+          break;
+        } catch (error) {
+          lastError = error;
+          if (!/غير صالح|انتهت صلاحيته|Invalid OAuth|OAuthException/i.test(String(error?.message || ''))) throw error;
+        }
+      }
+      if (!forms.length && lastError) throw lastError;
       return reply(res, 200, { ok: true, forms });
     }
 
