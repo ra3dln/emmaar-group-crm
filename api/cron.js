@@ -14,8 +14,8 @@
 // Authorization: Bearer <CRON_SECRET> — فلا حاجة لأي تعديل إضافي في هذه الحالة.
 
 import { CHANNELS, isChannelOn, normalizeConfig, publicConfig, runAutoImportCore, tokenExpiryAlerts } from '../server/leadSource.js';
-import { redisJsonStore, redisStorage, safeEqual } from '../server/store.js';
-import { supabaseJsonStore, supabaseStorage } from '../server/supabase.js';
+import { safeEqual } from '../server/store.js';
+import { pickJsonStore, pickStorage } from '../server/storage.js';
 import { processPushesOnce } from '../server/push.js';
 
 const CONFIG_KEY = 'crm:lead-source:config';
@@ -50,17 +50,14 @@ export default async function handler(req, res) {
       return reply(res, 403, { ok: false, error: 'غير مسموح' });
     }
 
-    // نفضّل Supabase لو مضبوط، وإلا Redis — نفس الواجهة
-    const supaStore = supabaseStorage(process.env);
-    const supaConfig = supabaseJsonStore(process.env, CONFIG_KEY);
-    const useSupabase = supaStore.configured && supaConfig.configured;
-    const storage = useSupabase ? supaStore : redisStorage(process.env);
-    const configStore = useSupabase ? supaConfig : redisJsonStore(process.env, CONFIG_KEY);
+    // نفس مخزون باقي النقاط: D1 ← Supabase ← Redis
+    const storage = pickStorage(process.env);
+    const configStore = pickJsonStore(process.env, CONFIG_KEY);
     if (!storage.configured || !configStore.configured) {
       return reply(res, 503, {
         ok: false,
         error: 'قاعدة البيانات غير مضبوطة',
-        hint: 'أضف Supabase (SUPABASE_URL + SUPABASE_SECRET_KEY) أو Upstash Redis من Storage في لوحة Vercel ثم أعد النشر.',
+        hint: 'أضف Cloudflare D1 (D1_ACCOUNT_ID + D1_DATABASE_ID + D1_API_TOKEN) أو Supabase أو Upstash Redis من لوحة Vercel ثم أعد النشر.',
       });
     }
 

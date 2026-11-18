@@ -9,14 +9,11 @@
 //
 // التخزين هو نفسه المستخدم في /api/store (Supabase ثم Redis) — فنفس المنطق المحلي
 // يعمل على الاستضافة بلا أي تفريع، والليد الجديد يدخل قاعدة البيانات المشتركة فوراً.
-import { redisStorage } from '../../server/store.js';
-import { supabaseStorage } from '../../server/supabase.js';
+import { NO_DATABASE_HINT, pickStorage } from '../../server/storage.js';
 import { createPublicHandler } from '../../server/publicPage.js';
 
 export default async function handler(req, res) {
-  const supa = supabaseStorage(process.env);
-  const redis = redisStorage(process.env);
-  const storage = supa.configured ? supa : redis;
+  const storage = pickStorage(process.env);
 
   if (!storage.configured) {
     res.statusCode = 503;
@@ -26,7 +23,7 @@ export default async function handler(req, res) {
       JSON.stringify({
         ok: false,
         error: 'no database',
-        hint: 'قاعدة البيانات غير مضبوطة — أضف Supabase (SUPABASE_URL + SUPABASE_SECRET_KEY) أو Upstash Redis ثم أعد النشر.',
+        hint: NO_DATABASE_HINT,
       })
     );
     return;

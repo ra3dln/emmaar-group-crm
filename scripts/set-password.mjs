@@ -53,8 +53,12 @@ const loadStorage = async () => {
     const dbFile = path.resolve(env.CRM_DB_FILE || path.join(root, 'data', 'db.json'));
     return { storage: fileStorage(dbFile), where: dbFile };
   }
+  const { d1Storage } = await import('../server/d1.js');
   const { supabaseStorage } = await import('../server/supabase.js');
   const { redisStorage } = await import('../server/store.js');
+  // نفس ترتيب الاستضافة: D1 ← Supabase ← Redis (server/storage.js)
+  const d1 = d1Storage(env);
+  if (d1.configured) return { storage: d1, where: 'Cloudflare D1' };
   const supa = supabaseStorage(env);
   if (supa.configured) return { storage: supa, where: 'Supabase' };
   const redis = redisStorage(env);

@@ -16,13 +16,11 @@
 // بدون أي من المخزنين ترجع الوظيفة 503 ويعمل النظام محلياً على كل جهاز كما كان
 // — لا يتعطّل الموقع، يفقد فقط المزامنة المشتركة.
 
-import { createStoreHandler, redisStorage } from '../server/store.js';
-import { supabaseStorage } from '../server/supabase.js';
+import { createStoreHandler } from '../server/store.js';
+import { NO_DATABASE_HINT, pickStorage } from '../server/storage.js';
 
-// نفضّل Supabase لو مضبوط، وإلا نرجع لـ Redis — نفس الواجهة تماماً
-const supa = supabaseStorage(process.env);
-const redis = redisStorage(process.env);
-const storage = supa.configured ? supa : redis;
+// الاختيار في مكان واحد: D1 ← Supabase ← Redis (server/storage.js)
+const storage = pickStorage(process.env);
 // auth: متغيّرات البيئة التي فيها AUTH_SECRET => بوابة الجلسة إلزامية
 const handler = createStoreHandler({ ...storage, auth: process.env });
 
@@ -34,7 +32,7 @@ export default async function (req, res) {
     res.end(
       JSON.stringify({
         error: 'no database',
-        hint: 'قاعدة البيانات غير مضبوطة — أضف Supabase (SUPABASE_URL + SUPABASE_SECRET_KEY) أو Upstash Redis من Storage في لوحة Vercel ثم أعد النشر لتعمل المزامنة المشتركة.',
+        hint: NO_DATABASE_HINT,
       })
     );
     return;

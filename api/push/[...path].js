@@ -14,24 +14,17 @@
 // بإلزام جلسة صحيحة (AUTH_SECRET) — فلا يشترك أحد ليستلم إشعارات بأسماء وأرقام العملاء.
 
 import { createPushHandlerFromStore } from '../../server/push.js';
-import { redisJsonStore, redisStorage } from '../../server/store.js';
-import { supabaseJsonStore, supabaseStorage } from '../../server/supabase.js';
+import { pickJsonStore, pickStorage } from '../../server/storage.js';
 
 const VAPID_KEY = 'crm:push:vapid';
 const STATE_KEY = 'crm:push:state';
 
-// نفضّل Supabase لو مضبوط، وإلا Redis — نفس الواجهة تماماً
-const supaStorage = supabaseStorage(process.env);
-const supaVapid = supabaseJsonStore(process.env, VAPID_KEY);
-const useSupabase = supaStorage.configured && supaVapid.configured;
-
-const storage = useSupabase ? supaStorage : redisStorage(process.env);
-const vapidStore = useSupabase ? supaVapid : redisJsonStore(process.env, VAPID_KEY);
+// نفس مخزون باقي النقاط: D1 ← Supabase ← Redis
+const storage = pickStorage(process.env);
+const vapidStore = pickJsonStore(process.env, VAPID_KEY);
 // نفس مخزن حالة الإرسال الذي يقرأه/يكتبه المُشغّل الدوري — به يعرف التشخيص
 // آخر مرة عمل فيها المُشغّل فعلاً ونتيجة آخر إرسال.
-const stateStore = useSupabase
-  ? supabaseJsonStore(process.env, STATE_KEY)
-  : redisJsonStore(process.env, STATE_KEY);
+const stateStore = pickJsonStore(process.env, STATE_KEY);
 
 // مُسبِّب الإشعارات يُبنى مرة واحدة لكل استدعاء دالة (الدالة قد تُعاد استخدامها عبر حافة واحدة)
 let cached = null;

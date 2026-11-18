@@ -29,19 +29,14 @@ import {
   resetChannelCursors,
   runAutoImportCore,
 } from '../server/leadSource.js';
-import { redisJsonStore, redisStorage } from '../server/store.js';
-import { supabaseJsonStore, supabaseStorage } from '../server/supabase.js';
+import { pickJsonStore, pickStorage } from '../server/storage.js';
 import { authConfigured, isManagerRole, sessionFromRequest } from '../server/auth.js';
 
 const CONFIG_KEY = 'crm:lead-source:config';
 
-// نفضّل Supabase لو مضبوط، وإلا نرجع لـ Redis — نفس الواجهة تماماً
-const supaStorage = supabaseStorage(process.env);
-const supaConfig = supabaseJsonStore(process.env, CONFIG_KEY);
-const useSupabase = supaStorage.configured && supaConfig.configured;
-
-const storage = useSupabase ? supaStorage : redisStorage(process.env);
-const configStore = useSupabase ? supaConfig : redisJsonStore(process.env, CONFIG_KEY);
+// نفس مخزون باقي النقاط (D1 ← Supabase ← Redis): البيانات والإعدادات في نفس القاعدة
+const storage = pickStorage(process.env);
+const configStore = pickJsonStore(process.env, CONFIG_KEY);
 // نعمل بالوضع الدائم فقط لو القاعدة مضبوطة فعلاً
 const hasDatabase = storage.configured && configStore.configured;
 

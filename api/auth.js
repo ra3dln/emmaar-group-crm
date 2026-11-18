@@ -9,12 +9,9 @@
 // (vite.config.js) حتى تكون الحماية واحدة في المكانين بلا أي فرق.
 
 import { createAuthHandler } from '../server/authApi.js';
-import { redisStorage } from '../server/store.js';
-import { supabaseStorage } from '../server/supabase.js';
+import { pickStorage } from '../server/storage.js';
 
-// نفضّل Supabase لو مضبوط، وإلا Redis — نفس الواجهة تماماً
-const supa = supabaseStorage(process.env);
-const redis = redisStorage(process.env);
-const storage = supa.configured ? supa : redis;
+// نفس اختيار باقي النقاط: D1 ← Supabase ← Redis (server/storage.js)
+const storage = pickStorage(process.env);
 
 export default createAuthHandler({ storage, env: process.env });
