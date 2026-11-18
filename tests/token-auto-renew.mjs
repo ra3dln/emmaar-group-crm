@@ -198,6 +198,47 @@ const authCookie = `${COOKIE_NAME}=${encodeURIComponent(managerSession)}`;
   console.log('✓ التوكن السليم مايتجدّدش (بلا طلبات زيادة على فيسبوك)');
 }
 
+// ===== ٣ب) تجديد التوكن حتى لو ميتا ما بتحدّدش تاريخ انتهاء =====
+// (توكنات ميتا الممتدة أحياناً مالها expires_at — فبنجدّد على أساس «آخر تمديد»)
+{
+  const DAY2 = 24 * 60 * 60 * 1000;
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = new URL(typeof input === 'string' ? input : input.href || input.url || String(input));
+    if (url.pathname.endsWith('/debug_token')) {
+      // ميتا: توكن مالهوش تاريخ انتهاء
+      return json({ data: { app_id: '2010203473000828', type: 'USER', expires_at: 0, is_valid: true } });
+    }
+    if (url.pathname.endsWith('/oauth/access_token')) {
+      return json({ access_token: LONG_TOKEN, token_type: 'bearer' }); // من غير expires_in
+    }
+    return prevFetch(input);
+  };
+  // ميعاد مجهول + آخر تمديد من ٣٠ يوم → لازم يتجدّد
+  const stale = {
+    token: SHORT_TOKEN,
+    tokenExpiresAt: 0,
+    tokenExtendedAt: Date.now() - 30 * DAY2,
+    appSecret: 'secret-from-settings',
+  };
+  const renewed = await renewExpiringTokens(stale);
+  assert.equal(renewed.changed, true, 'التوكن اتجدّد رغم إن الميعاد مجهول');
+  assert.equal(renewed.config.token, LONG_TOKEN, 'التوكن اتبدّل');
+  assert.ok(renewed.config.tokenExtendedAt >= Date.now() - 60000, 'آخر تمديد اتسجّل');
+
+  // آخر تمديد قريب (من يومين) → ما فيش تجديد (بلا طلبات زيادة)
+  const fresh = {
+    token: SHORT_TOKEN,
+    tokenExpiresAt: 0,
+    tokenExtendedAt: Date.now() - 2 * DAY2,
+    appSecret: 'secret-from-settings',
+  };
+  const notRenewed = await renewExpiringTokens(fresh);
+  assert.equal(notRenewed.changed, false, 'التوكن السليم ما اتجدّدش');
+  globalThis.fetch = prevFetch;
+  console.log('✓ التجديد يشتغل حتى لو ميتا ما بتحدّدش تاريخ انتهاء (على أساس آخر تمديد)');
+}
+
 // ===== ٤) سر التطبيق: يُحفظ على السيرفر ولا يظهر في الردود =====
 {
   const patched = applyChannelPatch({ token: SHORT_TOKEN }, { channel: 'facebook', appSecret: 'super-secret-value' });

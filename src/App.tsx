@@ -13462,9 +13462,17 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       // رسالة التمديد (نجاح أو سبب الفشل) تيجي فوق رسالة الصفحات عشان المستخدم يشوفها
       const extendedNote = json.hint ? `${json.hint}\n` : '';
       const dbg = json.tokenDebug;
-      const debugNote = dbg
-        ? `تشخيص التوكن: ${dbg.type || 'غير معروف'} — ينتهي ${dbg.expiresAt ? new Date(Number(dbg.expiresAt) * 1000).toLocaleDateString('ar-EG') : 'غير معروف'}${dbg.scopes?.length ? ` — الصلاحيات: ${dbg.scopes.join('، ')}` : ''}\n`
-        : 'تشخيص التوكن: ميتا ما رجّعش بيانات الصلاحية (التوكن بيشتغل لكن ميعاد الانتهاء غير معروف)\n';
+      const raw = json.tokenRaw?.data;
+      const rawErr = json.tokenRaw?.error;
+      const debugNote = raw
+        ? `تشخيص التوكن: ${raw.type || 'غير معروف'} — انتهاء ${
+            raw.expires_at ? new Date(Number(raw.expires_at) * 1000).toLocaleDateString('ar-EG') : 'غير معروف (ميتا ما بتحدّدش تاريخ انتهاء)'
+          }${raw.data_access_expires_at ? ` — صلاحية الوصول للبيانات ${new Date(Number(raw.data_access_expires_at) * 1000).toLocaleDateString('ar-EG')}` : ''}\n`
+        : dbg
+          ? `تشخيص التوكن: ${dbg.type} — ينتهي ${dbg.expiresAt ? new Date(Number(dbg.expiresAt) * 1000).toLocaleDateString('ar-EG') : 'غير معروف'}\n`
+          : rawErr
+            ? `تشخيص التوكن: ميتا رجّعت خطأ — ${rawErr}\n`
+            : '';
       setNotice(extendedNote + debugNote + (json.warning || `وجدت ${json.pages.length} صفحة — اضغط صفحة لعرض نماذجها`));
     } catch (error: any) {
       setNotice(error?.message || 'تعذّر الاستكشاف');

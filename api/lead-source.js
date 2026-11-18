@@ -24,6 +24,7 @@ import {
   discoverPages,
   fetchFormInfo,
   fetchFormsForPage,
+  inspectTokenRaw,
   normalizeConfig,
   prepareToken,
   publicConfig,
@@ -168,7 +169,14 @@ export default async function handler(req, res) {
       // بس لو التوكن اتبدّل (اتمدّد) فميعاده القديم مالوش لازمة — تبديله معناه توكن جديد.
       const expiresAt =
         tokenExpiresAt || prepared.expiresAt || (prepared.extended ? 0 : Number(channelCfg.tokenExpiresAt) || 0);
-      const next = applyChannelPatch(config, { channel, token, pages, tokenExpiresAt: expiresAt });
+      const next = applyChannelPatch(config, {
+        channel,
+        token,
+        pages,
+        tokenExpiresAt: expiresAt,
+        // آخر تمديد: بيخلينا نجدّد التوكن حتى لو ميتا ما بتحدّدش تاريخ انتهاء
+        tokenExtendedAt: prepared.extendedAt || Number(channelCfg.tokenExtendedAt) || 0,
+      });
       await configStore.save(next);
       return reply(res, 200, {
         ok: true,
@@ -182,6 +190,8 @@ export default async function handler(req, res) {
         tokenDebug: tokenDebug
           ? { valid: tokenDebug.valid, type: tokenDebug.type, expiresAt: tokenDebug.expiresAt, scopes: tokenDebug.scopes }
           : null,
+        // البيانات الخام من ميتا (بتبيّن لو التوكن مالوش تاريخ انتهاء)
+        tokenRaw: await inspectTokenRaw(token, config),
         sources,
         tokenType,
         config: publicConfig(next),

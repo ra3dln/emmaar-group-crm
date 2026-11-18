@@ -484,6 +484,37 @@ export const fetchLeads = async (config, channel = 'facebook') => {
 // بتاع الطلب، ميتا بترفض الطلب برمز 190، فنقرأ «ميتاعرفش» (٠) بدل ميعاد الانتهاء
 // الحقيقي. والنتيجة: مفيش تمديد، مفيش تاريخ، والتنبيه بيطلع فاضي أو غلط.
 // فبنستخدم App Access Token أول ما يكون السر متاح، وبنجرب التوكن نفسه كبديل.
+// تشخيص خام: بيرجّع بيانات ميتا كما هي — حتى لو الميعاد مجهول — للتشخيص.
+// (بعض توكنات ميتا ما بتحدّدش تاريخ انتهاء، فبنفضل نعرف السبب صريح)
+export async function inspectTokenRaw(token, config = {}) {
+  const input = String(token || '').trim();
+  if (!input) return null;
+  const { id, secret, ready } = longLivedCredentials(config);
+  const accessTokens = ready ? [input, `${id}|${secret}`] : [input];
+  let last = null;
+  for (const access of accessTokens) {
+    try {
+      const url = new URL(`${GRAPH_BASE}/debug_token`);
+      url.searchParams.set('input_token', input);
+      url.searchParams.set('access_token', access);
+      const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+      const json = await res.json().catch(() => ({}));
+      if (json.error) {
+        last = { error: String(json.error.message || '') };
+        continue;
+      }
+      last = { data: json.data || {} };
+      break;
+    } catch (error) {
+      last = { error: String(error?.message || error) };
+    }
+  }
+  return last;
+}
+
+// أقصى عمر للتوكن الممتد قبل ما نعيد تمديده — بنستخدمه لما ميتا ما بتقولش تاريخ انتهاء
+export const TOKEN_EXTENDED_MAX_AGE_MS = 20 * 24 * 60 * 60 * 1000;
+
 export async function debugToken(token, config = {}) {
   const input = String(token || '').trim();
   if (!input) return null;
@@ -620,7 +651,7 @@ export async function prepareToken(raw, config = {}) {
     hint = `لم يتم تمديد التوكن: ${exchangeError}`;
   }
 
-  return { token: finalToken, expiresAt: finalExpiry, extended, hint };
+  return { token: finalToken, expiresAt: finalExpiry, extended, hint, extendedAt: extended ? Date.now() : 0 };
 }
 
 // ===== تجديد تلقائي للتوكن قبل انتهائه (بلا تدخل من المستخدم) =====
@@ -636,12 +667,22 @@ export async function renewExpiringTokens(config = {}, { now = Date.now() } = {}
     const cfg = channelConfigOf(config, channel) || {};
     const token = String(cfg.token || '').trim();
     const expiresAt = Number(cfg.tokenExpiresAt) || 0;
-    if (!token || !expiresAt) continue; // لا توكن أو ميعاد مجهول — لا نلمس فيسبوك
-    const msLeft = expiresAt * 1000 - now;
-    if (msLeft >= EXTEND_BEFORE_MS) continue; // لسه قدام — لا نُجدّد بلا داعي
+    const extendedAt = Number(cfg.tokenExtendedAt) || 0;
+    if (!token) continue; // لا توكن — لا نلمس فيسبوك
+    const msLeft = expiresAt ? expiresAt * 1000 - now : Infinity;
+    // لها نتجدّد: الميعاد معروف وقارب على الانتهاء، أو الميعاد مجهول (ميتا ما
+    // بتحدّدش تاريخ للتوكن الممتد) بس آخر تمديد بقاله مدة طويلة.
+    const dueByExpiry = expiresAt > 0 && msLeft < EXTEND_BEFORE_MS;
+    const dueByAge = !expiresAt && extendedAt > 0 && now - extendedAt > TOKEN_EXTENDED_MAX_AGE_MS;
+    if (!dueByExpiry && !dueByAge) continue; // لسه قدام — لا نُجدّد بلا داعي
     const prepared = await prepareToken(token, config);
     if (prepared.extended) {
-      next = applyChannelPatch(next, { channel, token: prepared.token, tokenExpiresAt: prepared.expiresAt });
+      next = applyChannelPatch(next, {
+        channel,
+        token: prepared.token,
+        tokenExpiresAt: prepared.expiresAt,
+        tokenExtendedAt: prepared.extendedAt || now,
+      });
       changed = true;
       notes.push(`${CHANNEL_LABELS[channel]}: ${prepared.hint}`);
     } else if (prepared.hint) {
@@ -1347,6 +1388,10 @@ export function applyChannelPatch(config, body = {}) {
   // ميعاد انتهاء صلاحية التوكن (ثواني، ٠ = لا ينتهي أو مجهول) — يصل من الاستكشاف
   if (Number.isFinite(Number(body.tokenExpiresAt)) && Number(body.tokenExpiresAt) >= 0) {
     patch.tokenExpiresAt = Number(body.tokenExpiresAt);
+  }
+  // آخر مرة اتمدّد فيها التوكن (ms) — بيخلينا نجدّد حتى لو ميتا ما بتحدّدش تاريخ انتهاء
+  if (Number.isFinite(Number(body.tokenExtendedAt)) && Number(body.tokenExtendedAt) > 0) {
+    patch.tokenExtendedAt = Number(body.tokenExtendedAt);
   }
   if (body.resetCursor) {
     patch.cursorTime = 0;
