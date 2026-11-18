@@ -161,8 +161,9 @@ export default async function handler(req, res) {
       // هنا نبدّله بتوكن ٦٠ يوماً (لو سر التطبيق متاح) ونحفظ هو.
       const prepared = await prepareToken(pasted, config);
       const token = prepared.token;
-      const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(token);
-      const expiresAt = tokenExpiresAt || prepared.expiresAt;
+      const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(token, config);
+      // لو الميعاد المجهول (٠) ماينمسحش الميعاد القديم المحفوظ — الجهل مش دليل انتهاء
+      const expiresAt = tokenExpiresAt || prepared.expiresAt || Number(channelCfg.tokenExpiresAt) || 0;
       const next = applyChannelPatch(config, { channel, token, pages, tokenExpiresAt: expiresAt });
       await configStore.save(next);
       return reply(res, 200, {
@@ -268,7 +269,7 @@ async function statelessHandler(req, res, url) {
       // نفس تمديد التوكن في الوضع بلا قاعدة: التوكن القصير (ساعتين) يُبدَّل
       // بـ ٦٠ يوماً قبل ما يُرجع للواجهة تحفظه في المتصفح.
       const prepared = await prepareToken(pasted, body.config || {});
-      const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(prepared.token);
+      const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(prepared.token, body.config || {});
       return reply(res, 200, {
         ok: true,
         pages,

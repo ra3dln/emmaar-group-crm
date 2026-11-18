@@ -474,24 +474,38 @@ export const fetchLeads = async (config, channel = 'facebook') => {
   }));
 };
 
-// ===== صلاحية التوكن: متى ينتهي؟ =====
+// ===== تشخيص صلاحية التوكن: متى ينتهي؟ =====
 // فيسبوك يخبّرنا بموعد انتهاء أي توكن عبر /debug_token (expires_at بالثواني، و٠ = لا ينتهي).
 // به ننبّه الإدارة قبل انتهاء التوكن بيومين — فلا يتوقف سحب الأرقام فجأة بصمت.
-export async function debugToken(token) {
-  try {
-    const json = await graphGet('/debug_token', { input_token: token, access_token: token });
-    const data = json.data || {};
-    return {
-      valid: data.is_valid !== false,
-      expiresAt: Number(data.expires_at) || 0,
-      // نوع التوكن يهم الاستكشاف: توكن الصفحة (PAGE) لا يرى صفحات المستخدم
-      type: String(data.type || '').toUpperCase(),
-      scopes: Array.isArray(data.scopes) ? data.scopes.map(String) : [],
-      profileId: String(data.profile_id || ''),
-    };
-  } catch {
-    return null; // التشخيص اختياري — فشله لا يمنع الاستكشاف ولا السحب
+//
+// ===== ملاحظة مهمة (سبب فشل التشخيص سابقاً) =====
+// طلب /debug_token لازم يتعمل بـ **App Access Token** (app_id|app_secret) —
+// لأنه بيفحص توكن مستخدم. لو مرّرنا توكن المستخدم نفسه كـ access_token
+// بتاع الطلب، ميتا بترفض الطلب برمز 190، فنقرأ «ميتاعرفش» (٠) بدل ميعاد الانتهاء
+// الحقيقي. والنتيجة: مفيش تمديد، مفيش تاريخ، والتنبيه بيطلع فاضي أو غلط.
+// فبنستخدم App Access Token أول ما يكون السر متاح، وبنجرب التوكن نفسه كبديل.
+export async function debugToken(token, config = {}) {
+  const input = String(token || '').trim();
+  if (!input) return null;
+  const { id, secret, ready } = longLivedCredentials(config);
+  const accessTokens = ready ? [`${id}|${secret}`, input] : [input];
+  for (const access of accessTokens) {
+    try {
+      const json = await graphGet('/debug_token', { input_token: input, access_token: access });
+      const data = json.data || {};
+      return {
+        valid: data.is_valid !== false,
+        expiresAt: Number(data.expires_at) || 0,
+        // نوع التوكن يهم الاستكشاف: توكن الصفحة (PAGE) لا يرى صفحات المستخدم
+        type: String(data.type || '').toUpperCase(),
+        scopes: Array.isArray(data.scopes) ? data.scopes.map(String) : [],
+        profileId: String(data.profile_id || ''),
+      };
+    } catch {
+      /* نجرب وسيلة أخرى */
+    }
   }
+  return null; // التشخيص اختياري — فشله لا يمنع الاستكشاف ولا السحب
 }
 
 // قبل كم يوم ننبّه؟ (يومان كما طُلب — قابل للتغيير من هنا)
@@ -523,7 +537,7 @@ export function longLivedCredentials(config = {}) {
 
 async function exchangeForLongLived(token, config = {}) {
   const { id, secret, ready } = longLivedCredentials(config);
-  if (!ready) return null;
+  if (!ready) return { token: '', expiresAt: 0, error: '' };
   try {
     const url = new URL('https://graph.facebook.com/oauth/access_token');
     url.searchParams.set('grant_type', 'fb_exchange_token');
@@ -533,11 +547,18 @@ async function exchangeForLongLived(token, config = {}) {
     const response = await fetch(url);
     const json = await response.json();
     const accessToken = String(json?.access_token || '').trim();
-    if (!accessToken) return null;
-    const debug = await debugToken(accessToken);
-    return { token: accessToken, expiresAt: Number(debug?.expiresAt) || 0 };
-  } catch {
-    return null; // فشل التمديد لا يمنع الاستكشاف — نكمل بالتوكن كما هو
+    if (!accessToken) {
+      // ميتا رفضت التبديل — أهم سبب: التوكن صادر من تطبيق تاني
+      // (Graph API Explorer issued tokens belong to Meta's Explorer app,
+      //  ولا يقبل facebookswap them with another app's credentials).
+      const message = String(json?.error?.message || json?.error_message || '').trim();
+      return { token: '', expiresAt: 0, error: message };
+    }
+    const debug = await debugToken(accessToken, config);
+    return { token: accessToken, expiresAt: Number(debug?.expiresAt) || 0, error: '' };
+  } catch (error) {
+    // فشل التمديد لا يمنع الاستكشاف — نكمل بالتوكن كما هو
+    return { token: '', expiresAt: 0, error: String(error?.message || error) };
   }
 }
 
@@ -546,7 +567,7 @@ async function exchangeForLongLived(token, config = {}) {
 export async function prepareToken(raw, config = {}) {
   const token = String(raw || '').trim();
   if (!token) return { token: '', expiresAt: 0, extended: false, hint: '' };
-  const info = await debugToken(token);
+  const info = await debugToken(token, config);
   const expiresAt = Number(info?.expiresAt) || 0;
   const isPageToken = String(info?.type || '').toUpperCase() === 'PAGE';
   const msLeft = expiresAt ? expiresAt * 1000 - Date.now() : Infinity;
@@ -554,8 +575,13 @@ export async function prepareToken(raw, config = {}) {
   let finalToken = token;
   let finalExpiry = expiresAt;
   let extended = false;
-  if (expiresAt > 0 && msLeft < EXTEND_BEFORE_MS && !isPageToken) {
+  let exchangeError = '';
+  // التمديد مطلوب لو: الميعاد معروف وقارب على الانتهاء، أو الميعاد مجهول أصلاً
+  // (يعني التشخيص ما اشتغلش — نجرّب التبديل على أي حال).
+  const shouldExtend = !isPageToken && longLivedCredentials(config).ready && (expiresAt === 0 || msLeft < EXTEND_BEFORE_MS);
+  if (shouldExtend) {
     const longLived = await exchangeForLongLived(token, config);
+    exchangeError = String(longLived?.error || '');
     if (longLived?.token) {
       finalToken = longLived.token;
       finalExpiry = longLived.expiresAt || 0;
@@ -567,14 +593,16 @@ export async function prepareToken(raw, config = {}) {
   let hint = '';
   const leftMs = finalExpiry ? finalExpiry * 1000 - Date.now() : Infinity;
   if (extended) {
-    const days = Math.max(1, Math.round(leftMs / 86400000));
+    const days = finalExpiry ? Math.max(1, Math.round(leftMs / 86400000)) : 60;
     hint = `تم تمديد التوكن تلقائياً — صالح ${days} يوم.`;
   } else if (finalExpiry && leftMs < EXTEND_BEFORE_MS) {
     const hours = Math.max(1, Math.round(leftMs / 3600000));
     const hasSecret = longLivedCredentials(config).ready;
     hint = hasSecret
-      ? `التوكن صالح ${hours} ساعة فقط — ولم يتم تمديده. تأكد أن سر التطبيق صحيح في الإعدادات.`
+      ? `التوكن صالح ${hours} ساعة فقط — ولم يتم تمديده${exchangeError ? `: ${exchangeError}` : '. تأكد أن سر التطبيق صحيح في الإعدادات.'}`
       : `التوكن صالح ${hours} ساعة فقط. لتحويله إلى ٦٠ يوماً: أضف «App Secret» في إعدادات هذه القناة (يبقى محفوظاً على السيرفر ولا يُعرض بعد الحفظ).`;
+  } else if (exchangeError) {
+    hint = `لم يتم تمديد التوكن: ${exchangeError}`;
   }
 
   return { token: finalToken, expiresAt: finalExpiry, extended, hint };
@@ -669,7 +697,7 @@ async function graphList(path, params, maxPages = 10) {
   return rows;
 }
 
-export async function discoverPages(token) {
+export async function discoverPages(token, config = {}) {
   if (!token) throw new Error('ألصق التوكن أولاً');
 
   const byId = new Map();
@@ -690,7 +718,7 @@ export async function discoverPages(token) {
   };
 
   // نوع التوكن أولاً: توكن صفحة واحدة (Page Token) هو أشهر سبب لظهور صفحة واحدة فقط
-  const debug = await debugToken(token);
+  const debug = await debugToken(token, config);
   const isPageToken = debug?.type === 'PAGE';
 
   // ١) صفحات المستخدم — مع متابعة «التالي» حتى آخر دفعة
@@ -1422,7 +1450,7 @@ export function createLeadSourceHandler({ storeFile, configFile, auth = null }) 
         const token = String(body?.token || '').trim() || channelCfg.token || '';
         // تمديد تلقائي إلى توكن ٦٠ يوماً قبل الاستكشاف (Graph Explorer يعطي ساعتين)
         const prepared = await prepareToken(token);
-        const { pages, warning, tokenExpiresAt } = await discoverPages(prepared.token);
+        const { pages, warning, tokenExpiresAt } = await discoverPages(prepared.token, current);
         const expiresAt = tokenExpiresAt || prepared.expiresAt;
         // نحفظ التوكن (الممدَّد) وبيانات الصفحات في قناته كي يعمل السحب لاحقاً بدون إعادة لصق
         saveConfig(configFile, applyChannelPatch(current, { channel, token: prepared.token, pages, tokenExpiresAt: expiresAt }));

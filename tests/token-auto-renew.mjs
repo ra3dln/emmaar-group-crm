@@ -44,7 +44,13 @@ globalThis.fetch = async (input) => {
 
   if (url.pathname.endsWith('/debug_token')) {
     const inspected = url.searchParams.get('input_token') || '';
+    const access = url.searchParams.get('access_token') || '';
     const expired = inspected === 'EXPIRED-TOKEN';
+    // ميتا بترفض فحص توكن مستخدم بـ access_token = التوكن نفسه (رمز 190)
+    // — والطريقة الصحيحة هي App Access Token (app_id|app_secret).
+    if (!access.includes('|')) {
+      return errorJson('Invalid OAuth access token data.', 190);
+    }
     return json({
       data: {
         is_valid: !expired,
@@ -87,6 +93,7 @@ const {
   prepareToken,
   publicConfig,
   renewExpiringTokens,
+  debugToken,
   tokenExpiryAlerts,
 } = await import('../server/leadSource.js');
 
@@ -102,6 +109,31 @@ const authCookie = `${COOKIE_NAME}=${encodeURIComponent(managerSession)}`;
   assert.equal(prepared.token, LONG_TOKEN, 'التوكن المستخدم هو الممدَّد');
   assert.match(prepared.hint, /تمديد/, 'رسالة التمديد واضحة');
   console.log('✓ سر التطبيق المحفوظ في الإعدادات يحوّل التوكن القصير إلى ٦٠ يوماً');
+}
+
+// ===== ١ب) تشخيص الصلاحية لازم يمرّ بـ App Access Token =====
+// (السبب الجذري: ميتا بترفض /debug_token لما نمرّر توكن المستخدم نفسه —
+//  فكان الميعاد بيتقرا «مش معروف» ومفيش تمديد ولا تاريخ.)
+{
+  const debugCalls = [];
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = new URL(typeof input === 'string' ? input : input.href || input.url || String(input));
+    if (url.pathname.endsWith('/debug_token')) {
+      const access = url.searchParams.get('access_token') || '';
+      debugCalls.push(access);
+      if (!access.includes('|')) return errorJson('Invalid OAuth access token data.', 190);
+      return json({ data: { is_valid: true, type: 'USER', expires_at: nowSec() + 2 * 60 * 60 } });
+    }
+    return prevFetch(input);
+  };
+  const info = await debugToken(SHORT_TOKEN, { appSecret: 'secret-from-settings' });
+  assert.ok(info, 'التشخيص نجح');
+  assert.equal(info.type, 'USER', 'نوع التوكن اتقرا صح');
+  assert.ok(info.expiresAt > nowSec(), 'ميعاد الانتهاء اتقرا — مش صفر');
+  assert.equal(debugCalls[0].includes('|'), true, 'أول محاولة تستخدم App Access Token (app_id|app_secret)');
+  globalThis.fetch = prevFetch;
+  console.log('✓ تشخيص صلاحية التوكن بيستخدم App Access Token — فميعاد الانتهاء بيتقرا صح');
 }
 
 // ===== ٢) المسار المنشور فعلاً: api/lead-source.js يوسّع التوكن =====

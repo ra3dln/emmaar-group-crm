@@ -13418,7 +13418,7 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
         setTokenKind(String(json.tokenType || ''));
         setForms([]);
         setSelected({});
-        const extendedNote = json.extended ? `${json.hint || 'تم تمديد التوكن تلقائياً — صالح ٦٠ يوماً.'}\n` : '';
+        const extendedNote = json.hint ? `${json.hint}\n` : '';
         setNotice(extendedNote + (json.warning || `وجدت ${json.pages.length} صفحة — اضغط صفحة لعرض نماذجها`));
         return;
       }
@@ -13440,8 +13440,8 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       await save({ type: 'meta' }, '');
       setForms([]);
       setSelected({});
-      // رسالة التمديد (لو اتمدّد التوكن) تيجي فوق رسالة الصفحات عشان المستخدم يشوفها
-      const extendedNote = json.extended ? `${json.hint || 'تم تمديد التوكن تلقائياً — صالح ٦٠ يوماً.'}\n` : '';
+      // رسالة التمديد (نجاح أو سبب الفشل) تيجي فوق رسالة الصفحات عشان المستخدم يشوفها
+      const extendedNote = json.hint ? `${json.hint}\n` : '';
       setNotice(extendedNote + (json.warning || `وجدت ${json.pages.length} صفحة — اضغط صفحة لعرض نماذجها`));
     } catch (error: any) {
       setNotice(error?.message || 'تعذّر الاستكشاف');
