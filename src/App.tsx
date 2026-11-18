@@ -13461,7 +13461,11 @@ function ChannelSourceCard({ channel }: { channel: LeadChannel }) {
       setSelected({});
       // رسالة التمديد (نجاح أو سبب الفشل) تيجي فوق رسالة الصفحات عشان المستخدم يشوفها
       const extendedNote = json.hint ? `${json.hint}\n` : '';
-      setNotice(extendedNote + (json.warning || `وجدت ${json.pages.length} صفحة — اضغط صفحة لعرض نماذجها`));
+      const dbg = json.tokenDebug;
+      const debugNote = dbg
+        ? `تشخيص التوكن: ${dbg.type || 'غير معروف'} — ينتهي ${dbg.expiresAt ? new Date(Number(dbg.expiresAt) * 1000).toLocaleDateString('ar-EG') : 'غير معروف'}${dbg.scopes?.length ? ` — الصلاحيات: ${dbg.scopes.join('، ')}` : ''}\n`
+        : 'تشخيص التوكن: ميتا ما رجّعش بيانات الصلاحية (التوكن بيشتغل لكن ميعاد الانتهاء غير معروف)\n';
+      setNotice(extendedNote + debugNote + (json.warning || `وجدت ${json.pages.length} صفحة — اضغط صفحة لعرض نماذجها`));
     } catch (error: any) {
       setNotice(error?.message || 'تعذّر الاستكشاف');
     } finally {

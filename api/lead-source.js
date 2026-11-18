@@ -162,6 +162,8 @@ export default async function handler(req, res) {
       const prepared = await prepareToken(pasted, config);
       const token = prepared.token;
       const { pages, warning, tokenExpiresAt, sources = [], tokenType = '' } = await discoverPages(token, config);
+      // تشخيص التوكن النهائي: نوعه وميعاد انتهائه فعلياً (بيظهر في الواجهة)
+      const tokenDebug = await debugToken(token, config);
       // لو الميعاد المجهول (٠) ماينمسحش الميعاد القديم المحفوظ — الجهل مش دليل انتهاء.
       // بس لو التوكن اتبدّل (اتمدّد) فميعاده القديم مالوش لازمة — تبديله معناه توكن جديد.
       const expiresAt =
@@ -176,6 +178,10 @@ export default async function handler(req, res) {
         // هل اتمدّد التوكن؟ والرسالة بتقول المستخدم إيه بالظبط
         extended: prepared.extended,
         hint: prepared.hint,
+        // تشخيص كامل: نوع التوكن + ميعاد الانتهاء + الصلاحيات (لتشخيص أي خلل)
+        tokenDebug: tokenDebug
+          ? { valid: tokenDebug.valid, type: tokenDebug.type, expiresAt: tokenDebug.expiresAt, scopes: tokenDebug.scopes }
+          : null,
         sources,
         tokenType,
         config: publicConfig(next),
