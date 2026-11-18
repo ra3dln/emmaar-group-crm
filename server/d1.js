@@ -18,8 +18,14 @@
 //   crm:store:version  => رقم النسخة
 //   crm:lead-source:config / crm:push:vapid / crm:push:state => إعدادات
 
-const DATA_KEY = 'crm:store:data';
+// كل مفتاح من مفاتيح النظام في صف مستقل: crm:data:crm_users / crm:data:crm_clients ...
+// ليه؟ D1 أقصى حجم للصف الواحد ~١ ميجا، والبيانات كلها في صف واحد كانت ~١.٩ ميجا
+// فالرفع كان بيرجع 500. صف لكل مفتاح = أكبر صف عندنا ~٥٠٠ ك.ب، وأي تعديل بيكتب
+// المفاتيح اللي اتغيّرت بس.
+const DATA_PREFIX = 'crm:data:';
 const VERSION_KEY = 'crm:store:version';
+// سقف آمن للصف الواحد (D1 بيقف عند ~١ ميجا)
+const MAX_ROW_BYTES = 900 * 1024;
 
 // جدول صغير: مفتاح (نص) ← قيمة (نص JSON). يُنشأ تلقائياً أول مرة.
 const TABLE_SQL =
@@ -148,12 +154,22 @@ export function d1Client(env = {}) {
     await setMany([[key, value]]);
   }
 
-  return { configured, getMany, getOne, setMany, setOne };
+  return { configured, ensureTable, getMany, getOne, setMany, setOne };
 }
 
-// ===== مخزن المزامنة الكامل (نفس supabaseStorage) =====
+// ===== مخزن المزامنة الكامل (نفس supabaseStorage) — صف لكل مفتاح =====
 export function d1Storage(env = {}) {
   const client = d1Client(env);
+  const parseJson = (raw) => {
+    if (raw === null || raw === undefined) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+  const rowsOfPrefix = () =>
+    d1Query(env, "SELECT key, value FROM crm_kv WHERE key LIKE 'crm:data:%'");
 
   return {
     configured: client.configured,
@@ -163,26 +179,47 @@ export function d1Storage(env = {}) {
       return Number(value) || 0;
     },
     async load() {
-      const map = await client.getMany([DATA_KEY, VERSION_KEY]);
-      const data = map[DATA_KEY];
-      return {
-        version: Number(map[VERSION_KEY]) || 0,
-        data: data && typeof data === 'object' && !Array.isArray(data) ? data : {},
-      };
+      await client.ensureTable();
+      const version = Number(await client.getOne(VERSION_KEY)) || 0;
+      const rows = await rowsOfPrefix();
+      const data = {};
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const name = String(row.key || '').slice(DATA_PREFIX.length);
+        if (!name) continue;
+        const parsed = parseJson(row.value);
+        if (parsed !== null) data[name] = parsed;
+      }
+      return { version, data };
     },
     async save(db) {
+      await client.ensureTable();
       const payload = db?.data || {};
-      const size = JSON.stringify(payload).length;
-      // سقف آمن: صف واحد في D1 أقصى حجم له ~١ ميجا، وفشل واضح أفضل من صمت
-      if (size > 950 * 1024) {
-        throw new Error(
-          'حجم البيانات أكبر من سقف الصف في Cloudflare D1 (~١ ميجا) — قلّل صور العقارات ثم أعد المحاولة'
-        );
+      const existing = await rowsOfPrefix();
+      const stored = new Map((Array.isArray(existing) ? existing : []).map((row) => [row.key, row.value]));
+
+      const pairs = [];
+      for (const [name, value] of Object.entries(payload)) {
+        const key = DATA_PREFIX + name;
+        const raw = JSON.stringify(value === undefined ? null : value);
+        if (raw.length > MAX_ROW_BYTES) {
+          throw new Error(
+            `المفتاح ${name} أكبر من سقف الصف في Cloudflare D1 (~١ ميجا) — قلّل صور العقارات ثم أعد المحاولة`
+          );
+        }
+        if (stored.get(key) !== raw) pairs.push([key, value === undefined ? null : value]);
+        stored.delete(key);
       }
-      await client.setMany([
-        [DATA_KEY, payload],
-        [VERSION_KEY, Number(db?.version) || 0],
-      ]);
+
+      // مفاتيح اتشالت من البيانات (إعادة ضبط): صفوفها تتمسح
+      const gone = [...stored.keys()];
+      if (gone.length) {
+        const placeholders = gone.map(() => '?').join(', ');
+        await d1Query(env, `DELETE FROM crm_kv WHERE key IN (${placeholders})`, gone);
+      }
+
+      const versionRow = [VERSION_KEY, Number(db?.version) || 0];
+      if (pairs.length) await client.setMany([...pairs, versionRow]);
+      else await client.setOne(VERSION_KEY, versionRow[1]);
     },
   };
 }
