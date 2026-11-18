@@ -72,6 +72,15 @@ export function supabaseClient(env = {}) {
     return map[key] ?? null;
   }
 
+  // كل الصفوف مرة واحدة — للنقل الكامل (server/migrate.js) والتشخيص
+  async function getAll() {
+    const res = await restFetch(env, 'crm_kv?select=key,value');
+    const rows = await res.json();
+    const out = {};
+    for (const row of Array.isArray(rows) ? rows : []) out[row.key] = row.value;
+    return out;
+  }
+
   // كتابة/تحديث عدة مفاتاح في طلب واحد (upsert بالحقل المركّب key)
   async function setMany(entries) {
     if (!entries.length) return;
@@ -87,7 +96,7 @@ export function supabaseClient(env = {}) {
     await setMany([[key, value]]);
   }
 
-  return { configured, getMany, getOne, setMany, setOne };
+  return { configured, getMany, getOne, getAll, setMany, setOne };
 }
 
 // ===== المخزن الرئيسي (نفس واجهة redisStorage) =====

@@ -452,6 +452,75 @@ export async function debugToken(token) {
 // قبل كم يوم ننبّه؟ (يومان كما طُلب — قابل للتغيير من هنا)
 export const TOKEN_REMIND_BEFORE_MS = 2 * 24 * 60 * 60 * 1000;
 
+// ===== تمديد التوكن تلقائياً إلى ٦٠ يوماً =====
+// Graph API Explorer يعطي «توكن مستخدم قصير» ينتهي في ساعتين — وهو السبب الحقيقي
+// لتوقف السحب كل فترة. ميتا تسمح بتبديله بتوكن طويل (٦٠ يوماً) عبر
+// oauth/access_token?grant_type=fb_exchange_token، بشرط App ID + App Secret
+// (متغيّرا بيئة على السيرفر فقط — لا يُكتبان في الكود ولا في الواجهة).
+const EXTEND_BEFORE_MS = 7 * 24 * 60 * 60 * 1000; // نمدّد لما يبقى على الانتهاء أقل من أسبوع
+
+export function longLivedCredentials() {
+  const id = String(process.env.FB_APP_ID || process.env.META_APP_ID || '').trim();
+  const secret = String(process.env.FB_APP_SECRET || process.env.META_APP_SECRET || '').trim();
+  return { id, secret, ready: !!(id && secret) };
+}
+
+async function exchangeForLongLived(token) {
+  const { id, secret, ready } = longLivedCredentials();
+  if (!ready) return null;
+  try {
+    const url = new URL('https://graph.facebook.com/oauth/access_token');
+    url.searchParams.set('grant_type', 'fb_exchange_token');
+    url.searchParams.set('client_id', id);
+    url.searchParams.set('client_secret', secret);
+    url.searchParams.set('fb_exchange_token', token);
+    const response = await fetch(url);
+    const json = await response.json();
+    const accessToken = String(json?.access_token || '').trim();
+    if (!accessToken) return null;
+    const debug = await debugToken(accessToken);
+    return { token: accessToken, expiresAt: Number(debug?.expiresAt) || 0 };
+  } catch {
+    return null; // فشل التمديد لا يمنع الاستكشاف — نكمل بالتوكن كما هو
+  }
+}
+
+// يعيد التوكن الصالح للاستخدام: يمدّ القصير (ساعتين) إلى طويل (٦٠ يوماً) لو
+// App Secret متاح، ويحسب ميعاد الانتهاء الفعلي في كل الأحوال.
+export async function prepareToken(raw) {
+  const token = String(raw || '').trim();
+  if (!token) return { token: '', expiresAt: 0, extended: false, hint: '' };
+  const info = await debugToken(token);
+  const expiresAt = Number(info?.expiresAt) || 0;
+  const isPageToken = String(info?.type || '').toUpperCase() === 'PAGE';
+  const msLeft = expiresAt ? expiresAt * 1000 - Date.now() : Infinity;
+
+  let finalToken = token;
+  let finalExpiry = expiresAt;
+  let extended = false;
+  if (expiresAt > 0 && msLeft < EXTEND_BEFORE_MS && !isPageToken) {
+    const longLived = await exchangeForLongLived(token);
+    if (longLived?.token) {
+      finalToken = longLived.token;
+      finalExpiry = longLived.expiresAt || 0;
+      extended = true;
+    }
+  }
+
+  // رسالة واحدة واضحة: ليه التوكن فاضل فيه ساعات، وإيه اللازم عشان يبقى ٦٠ يوم
+  let hint = '';
+  const leftMs = finalExpiry ? finalExpiry * 1000 - Date.now() : Infinity;
+  if (extended) {
+    const days = Math.max(1, Math.round(leftMs / 86400000));
+    hint = `تم تمديد التوكن تلقائياً — صالح ${days} يوم.`;
+  } else if (finalExpiry && leftMs < EXTEND_BEFORE_MS) {
+    const hours = Math.max(1, Math.round(leftMs / 3600000));
+    hint = `التوكن صالح ${hours} ساعة فقط. لتحويله إلى ٦٠ يوماً: أضف FB_APP_ID و FB_APP_SECRET في متغيرات بيئة السيرفر ثم اضغط «استكشاف الصفحات» مرة أخرى.`;
+  }
+
+  return { token: finalToken, expiresAt: finalExpiry, extended, hint };
+}
+
 // تنبيهات انتهاء صلاحية توكنات السحب — تُمرَّر إلى محرك الإشعارات ليصلها الإدارة
 // على أجهزتها حتى لو الموقع مقفول. التنبيه يتكرر كل ١٢ ساعة حتى يُجدَّد التوكن،
 // ومعرّف التنبيه يحتوي ميعاد الانتهاء — فبمجرد التجديد يصبح تنبيهاً جديداً لا حاجة له.
@@ -1219,9 +1288,10 @@ export function createLeadSourceHandler({ storeFile, configFile, auth = null }) 
         const current = loadConfig(configFile);
         // المفاتيح العامة للنظام (لیست لقناة بعينها)
         const globalPatch = typeof body.acceptTestLeads === 'boolean' ? { acceptTestLeads: body.acceptTestLeads } : {};
-        // لو الواجهة ألصقت توكن جديداً مباشرة (بلا استكشاف) نسجّل ميعاد انتهائه حتى يستمر التنبيه
+        // لو الواجهة ألصقت توكن جديداً مباشرة (بلا استكشاف): نمدّده ونحفظ ميعاده
         const pastedToken = typeof body.token === 'string' && body.token.trim() && !body.clearToken ? body.token.trim() : '';
-        const expiryPatch = pastedToken ? { tokenExpiresAt: (await debugToken(pastedToken))?.expiresAt || 0 } : {};
+        const prepared = pastedToken ? await prepareToken(pastedToken) : null;
+        const expiryPatch = prepared ? { token: prepared.token, tokenExpiresAt: prepared.expiresAt } : {};
         const saved = saveConfig(configFile, { ...applyChannelPatch(current, { ...body, ...expiryPatch }), ...globalPatch });
         return reply(res, 200, { ok: true, config: publicConfig(saved) });
       }
@@ -1232,14 +1302,18 @@ export function createLeadSourceHandler({ storeFile, configFile, auth = null }) 
         const channel = body?.channel === 'instagram' ? 'instagram' : 'facebook';
         const channelCfg = channelConfigOf(current, channel) || {};
         const token = String(body?.token || '').trim() || channelCfg.token || '';
-        const { pages, warning, tokenExpiresAt } = await discoverPages(token);
-        // نحفظ التوكن وبيانات الصفحات في قناته كي يعمل السحب لاحقاً بدون إعادة لصق
-        saveConfig(configFile, applyChannelPatch(current, { channel, token, pages, tokenExpiresAt }));
+        // تمديد تلقائي إلى توكن ٦٠ يوماً قبل الاستكشاف (Graph Explorer يعطي ساعتين)
+        const prepared = await prepareToken(token);
+        const { pages, warning, tokenExpiresAt } = await discoverPages(prepared.token);
+        const expiresAt = tokenExpiresAt || prepared.expiresAt;
+        // نحفظ التوكن (الممدَّد) وبيانات الصفحات في قناته كي يعمل السحب لاحقاً بدون إعادة لصق
+        saveConfig(configFile, applyChannelPatch(current, { channel, token: prepared.token, pages, tokenExpiresAt: expiresAt }));
         return reply(res, 200, {
           ok: true,
           pages: pages.map((p) => ({ id: p.id, name: p.name })),
-          warning,
-          tokenExpiresAt,
+          warning: [warning, prepared.hint].filter(Boolean).join('\n'),
+          tokenExpiresAt: expiresAt,
+          extended: prepared.extended,
         });
       }
 
