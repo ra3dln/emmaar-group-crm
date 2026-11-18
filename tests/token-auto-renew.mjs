@@ -67,7 +67,8 @@ globalThis.fetch = async (input) => {
     assert.ok(url.searchParams.get('client_id'), 'الـ App ID لازم يتبعت');
     assert.ok(url.searchParams.get('client_secret'), 'الـ App Secret لازم يتبعت');
     tokenExpirySeconds = nowSec() + 60 * DAY;
-    return json({ access_token: LONG_TOKEN, token_type: 'bearer', expires_in: 5183944 });
+    // ميتا بترجّع مدة الصلاحية مع التوكن الجديد — وهي أدقّ من قراءة debug_token
+    return json({ access_token: LONG_TOKEN, token_type: 'bearer', expires_in: 60 * DAY });
   }
 
   if (url.pathname.endsWith('/me/accounts')) {
@@ -155,7 +156,7 @@ const authCookie = `${COOKIE_NAME}=${encodeURIComponent(managerSession)}`;
     Number(res.payload.tokenExpiresAt) > nowSec() + 50 * DAY,
     'ميعاد الانتهاء الجديد ~٦٠ يوم'
   );
-  assert.match(String(res.payload.warning || ''), /تمديد/, 'الرسالة بتقول إن التوكن اتمدّد');
+  assert.match(String(res.payload.hint || ''), /تمديد/, 'الرسالة بتقول إن التوكن اتمدّد');
   console.log('✓ المسار المنشور (api/lead-source.js) يوسّع التوكن ويرجّع توكن ٦٠ يوماً');
 }
 
@@ -282,6 +283,28 @@ const authCookie = `${COOKIE_NAME}=${encodeURIComponent(managerSession)}`;
   });
   assert.equal(ready, true, 'القناة جاهزة بتوكن الصفحة');
   console.log('✓ القناة جاهزة حتى لو انتهى توكن المستخدم');
+}
+
+// ===== ٤ب) الميعاد بيتحسب من expires_in اللي ميتا بترجّعه مع التوكن =====
+// (لأن فحص debug_token ممكن يرجع خطأ من ميتا فيبقى الميعاد مجهولاً والتنبيه غلط)
+{
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = new URL(typeof input === 'string' ? input : input.href || input.url || String(input));
+    if (url.pathname.endsWith('/debug_token')) {
+      // ميتا بترفض الفحص هنا → الميعاد لازم يبقى معروف من expires_in
+      return errorJson('Invalid OAuth access token data.', 190);
+    }
+    if (url.pathname.endsWith('/oauth/access_token')) {
+      return json({ access_token: LONG_TOKEN, token_type: 'bearer', expires_in: 60 * DAY });
+    }
+    return prevFetch(input);
+  };
+  const prepared = await prepareToken(SHORT_TOKEN, { appSecret: 'secret-from-settings' });
+  assert.equal(prepared.extended, true, 'التوكن اتمدّد');
+  assert.ok(prepared.expiresAt > nowSec() + 55 * DAY, 'ميعاد الانتهاء اتحسب من expires_in (~٦٠ يوم)');
+  globalThis.fetch = prevFetch;
+  console.log('✓ ميعاد انتهاء التوكن بيتحسب من expires_in حتى لو فحص debug_token فشل');
 }
 
 // ===== ٦) التنبيه يقول الحقيقة: السحب مستمر بتوكنات الصفحات =====

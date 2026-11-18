@@ -169,7 +169,7 @@ export default async function handler(req, res) {
       return reply(res, 200, {
         ok: true,
         pages: pages.map((p) => ({ id: p.id, name: p.name })),
-        warning: [warning, prepared.hint].filter(Boolean).join('\n'),
+        warning: warning || '',
         tokenExpiresAt: expiresAt,
         // هل اتمدّد التوكن؟ والرسالة بتقول المستخدم إيه بالظبط
         extended: prepared.extended,
@@ -275,7 +275,7 @@ async function statelessHandler(req, res, url) {
         pages,
         // التوكن بعد التمديد (٦٠ يوماً) — المتصفح يحفظه بدل القصير
         token: prepared.token,
-        warning: [warning, prepared.hint].filter(Boolean).join('\n'),
+        warning: warning || '',
         tokenExpiresAt: tokenExpiresAt || prepared.expiresAt,
         extended: prepared.extended,
         hint: prepared.hint,

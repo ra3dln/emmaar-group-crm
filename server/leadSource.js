@@ -555,7 +555,13 @@ async function exchangeForLongLived(token, config = {}) {
       return { token: '', expiresAt: 0, error: message };
     }
     const debug = await debugToken(accessToken, config);
-    return { token: accessToken, expiresAt: Number(debug?.expiresAt) || 0, error: '' };
+    // ميتا بترجّع مدة الصلاحية مع التوكن الجديد (expires_in بالثواني) — دي أدقّ
+    // من قراءة debug_token، لأن فحص الصلاحية ممكن يرجع خطأ من ميتا فيبقى الميعاد مجهولاً.
+    const expiresIn = Number(json?.expires_in) || 0;
+    const expiresAt = expiresIn
+      ? Math.floor(Date.now() / 1000) + expiresIn
+      : Number(debug?.expiresAt) || 0;
+    return { token: accessToken, expiresAt, error: '' };
   } catch (error) {
     // فشل التمديد لا يمنع الاستكشاف — نكمل بالتوكن كما هو
     return { token: '', expiresAt: 0, error: String(error?.message || error) };
@@ -1457,7 +1463,7 @@ export function createLeadSourceHandler({ storeFile, configFile, auth = null }) 
         return reply(res, 200, {
           ok: true,
           pages: pages.map((p) => ({ id: p.id, name: p.name })),
-          warning: [warning, prepared.hint].filter(Boolean).join('\n'),
+          warning: warning || '',
           tokenExpiresAt: expiresAt,
           extended: prepared.extended,
         });
