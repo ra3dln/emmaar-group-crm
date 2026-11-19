@@ -75,4 +75,8 @@ check(
 assert.ok(/if \(r === 'answered'\) \{\s*suggestedAtRef\.current = '';\s*setNextCallAt\(''\);/.test(app) && !/120 : 1440/.test(app), '✗ ميعاد تم الرد');
 passed += 1; console.log('✓ «تم الرد» ما بيحطش ميعاد تذكير لوحده (السيلز يختاره)');
 
+// القلم في نافذة الإجراء (كارت العميل) بيفتح تعديل الاسم والرقم مفتوح
+assert.ok(app.includes("onOpenDetails?.(client, { edit: true })") && app.includes('startEditing={editClientOnOpen}') && /startEditing\s*\?\s*\{ open: true/.test(app), '✗ قلم الكارت');
+passed += 1; console.log('✓ قلم كارت العميل بيفتح تعديل الاسم والرقم على طول');
+
 console.log(`\n✅ نجحت ${passed} فحوصات (أرقام إضافية للعميل)`);

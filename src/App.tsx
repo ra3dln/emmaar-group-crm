@@ -1557,6 +1557,8 @@ function App() {
   const [showImportClients, setShowImportClients] = useState(false);
   
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+  // القلم في نافذة الإجراء بيفتح التفاصيل وخانة تعديل الاسم والرقم مفتوحة
+  const [editClientOnOpen, setEditClientOnOpen] = useState(false);
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
@@ -4171,7 +4173,7 @@ function App() {
             dailyFeedbacks={currentUser.role === 'admin' ? fullFeedbacks : dailyFeedbacks}
             onClose={() => setSelectedUserFeedback(null)}
           />}
-        {selectedClient && <ClientDetailModal client={selectedClient} users={users} callLogs={currentUser.role === 'admin' ? fullCallLogs : callLogs} onClose={() => setSelectedClient(null)} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
+        {selectedClient && <ClientDetailModal client={selectedClient} startEditing={editClientOnOpen} users={users} callLogs={currentUser.role === 'admin' ? fullCallLogs : callLogs} onClose={() => { setSelectedClient(null); setEditClientOnOpen(false); }} onSuccess={loadData} onCall={() => { setCallClient(selectedClient); setSelectedClient(null); }} />}
         {callClient && <CallFlowModal
           client={callClient}
           user={currentUser}
@@ -4189,11 +4191,12 @@ function App() {
           )}
           onAddPartner={(id: string) => handleSetPartner(callClient.phone, id, 'add')}
           onRemovePartner={(id: string) => handleSetPartner(callClient.phone, id, 'remove')}
-          onOpenDetails={(target: any) => {
+          onOpenDetails={(target: any, opts?: { edit?: boolean }) => {
             const detail = (clients || []).find((x: Client) => String(x.id) === String(target?.id));
             if (!detail) return;
             setCallClient(null);
             setReminderCallId(null);
+            setEditClientOnOpen(!!opts?.edit);
             setSelectedClient(detail);
           }}
           onClose={() => { setCallClient(null); setReminderCallId(null); }}
@@ -8330,7 +8333,8 @@ function CallFlowModal({
               <button type="button" className="eg-icon-btn" title="View details" onClick={() => onOpenDetails?.(client)}>
                 <Eye className="w-4.5 h-4.5" />
               </button>
-              <button type="button" className="eg-icon-btn" title="Write comment" onClick={() => commentRef.current?.focus()}>
+              {/* القلم = تعديل اسم العميل ورقمه */}
+              <button type="button" className="eg-icon-btn" title="تعديل الاسم والرقم" onClick={() => onOpenDetails?.(client, { edit: true })}>
                 <Edit3 className="w-4.5 h-4.5" />
               </button>
               <button type="button" className="eg-icon-btn is-primary" title="New action"
@@ -16560,7 +16564,7 @@ const ACTIVITY_ICONS: Record<string, string> = {
   whatsapp: '', call: '', public: '🔗', note: '',
 };
 
-function ClientDetailModal({ client, users = [], onClose, onSuccess, onCall, callLogs = [] }: any) {
+function ClientDetailModal({ client, users = [], onClose, onSuccess, onCall, callLogs = [], startEditing = false }: any) {
   const activities: ClientActivity[] = client.activities || [];
   // فيدباك العميل وكومنتاته — تظهر هنا لحظة الضغط على الكارت (بدل ما تفضل مخفية)
   // كلام المندوب فقط: لا لوجات (اتصال/واتساب/تذكير) ولا كومنت مكرر.
@@ -16655,7 +16659,11 @@ function ClientDetailModal({ client, users = [], onClose, onSuccess, onCall, cal
     await persistClient((stored) => ({ ok: true, client: removeExtraPhone(stored, phone) }));
   };
   // ===== تعديل الاسم والرقم =====
-  const [basicsForm, setBasicsForm] = useState<{ open: boolean; name: string; phone: string }>({ open: false, name: '', phone: '' });
+  const [basicsForm, setBasicsForm] = useState<{ open: boolean; name: string; phone: string }>(() =>
+    startEditing
+      ? { open: true, name: String(client?.name || ''), phone: String(client?.phone || '') }
+      : { open: false, name: '', phone: '' }
+  );
   const saveBasics = async () => {
     if (phoneSaving) return;
     const saved = await persistClient((stored, all) => editClientBasics(stored, basicsForm.name, basicsForm.phone, all));

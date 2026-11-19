@@ -91,7 +91,7 @@ const fieldData = [
   const app = fs.readFileSync('src/App.tsx', 'utf8');
   const sync = fs.readFileSync('src/sync.ts', 'utf8');
   check('الكلام بيتزامن لكل الأجهزة', sync.includes("'crm_lead_answers'"));
-  check('زرار العين بيفتح تفاصيل العميل', /onOpenDetails=\{\(target: any\) => \{[\s\S]{0,300}setSelectedClient\(detail\)/.test(app));
+  check('زرار العين بيفتح تفاصيل العميل', /onOpenDetails=\{\(target: any(, opts\?: \{ edit\?: boolean \})?\) => \{[\s\S]{0,400}setSelectedClient\(detail\)/.test(app));
   const modal = app.slice(app.indexOf('function ClientDetailModal'), app.indexOf('function ClientDetailModal') + 12000);
   check('تفاصيل العميل فيها «كلام العميل في الفورم»', modal.includes('<LeadFormAnswers phones={[client.phone,'));
 }
