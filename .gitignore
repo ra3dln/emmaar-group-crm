@@ -21,3 +21,7 @@ backup/
 
 # ملفات مؤقتة للفحص والصيانة المحلية (سكربتات لمرة واحدة وسجلاتها)
 tmp-*
+
+# Cloudflare Workers (محلي)
+.dev.vars
+.wrangler/

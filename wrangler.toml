@@ -1,0 +1,30 @@
+# ===== الموقع على Cloudflare Workers (الخطة المجانية، من غير كارت) =====
+# الرفع:      npm run build && npx wrangler deploy
+# الأسرار:    npx wrangler secret put AUTH_SECRET   /   npx wrangler secret put CRON_SECRET
+# (الأسرار مش بتتكتب هنا أبداً — AGENTS.md)
+
+name = "emmaar-crm"
+main = "worker/index.js"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# الواجهة (npm run build). أي مسار مش ملف = الصفحة الرئيسية (تطبيق صفحة واحدة).
+# نقاط api وصفحة الوحدة العامة /p/<id> بتروح للـ Worker الأول.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/p", "/p/*"]
+
+# نفس قاعدة البيانات اللي شغّال عليها الموقع (crm) — مباشرة من غير REST ولا توكن
+[[d1_databases]]
+binding = "DB"
+database_name = "crm"
+database_id = "0a2f8f14-4dfe-4123-b5fb-853c3ca94b10"
+
+# المُشغّل الدوري: سحب الأرقام من فيسبوك + التوزيع التلقائي + الإشعارات (كل ٥ دقايق)
+[triggers]
+crons = ["*/5 * * * *"]
+
+[observability]
+enabled = true

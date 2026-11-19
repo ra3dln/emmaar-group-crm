@@ -33,7 +33,16 @@ const TABLE_SQL =
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ===== الربط المباشر (جوه Cloudflare Workers) =====
+// لما الموقع شغّال على Cloudflare نفسها، القاعدة متاحة مباشرة (env.DB) من غير REST
+// ولا توكن. worker/index.js بيسجّلها هنا قبل ما يحمّل أي نقطة api.
+export function useD1Binding(db) {
+  globalThis.__CRM_D1_BINDING__ = db || null;
+}
+const d1Binding = () => globalThis.__CRM_D1_BINDING__ || null;
+
 export function d1Configured(env = {}) {
+  if (d1Binding()) return true;
   return Boolean(
     String(env.D1_ACCOUNT_ID || '').trim() &&
       String(env.D1_DATABASE_ID || '').trim() &&
@@ -44,6 +53,11 @@ export function d1Configured(env = {}) {
 // تنفيذ استعلام واحد على D1. يرجّع مصفوفة الصفوف الناتجة.
 // إعادة محاولة قصيرة على 5xx/429 فقط (أخطاء الصلاحيات والحصص تظهر فوراً برسالتها).
 export async function d1Query(env, sql, params = []) {
+  const binding = d1Binding();
+  if (binding) {
+    const result = await binding.prepare(sql).bind(...params).all();
+    return Array.isArray(result?.results) ? result.results : [];
+  }
   const accountId = String(env.D1_ACCOUNT_ID || '').trim();
   const databaseId = String(env.D1_DATABASE_ID || '').trim();
   const token = String(env.D1_API_TOKEN || '').trim();

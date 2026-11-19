@@ -65,15 +65,17 @@ export function createVapidAccessor(store) {
 }
 
 // ---------- توقيع VAPID (JWT ES256) ----------
-function vapidHeader(endpoint, keys, subject) {
+// التوقيع بـ WebCrypto (crypto.subtle): شغّال زي ما هو على Node وعلى Cloudflare Workers
+// (crypto.sign بمفتاح JWK مش مدعوم في Workers)، وبيرجّع r||s مباشرة — الصيغة اللي JWS محتاجها.
+async function vapidHeader(endpoint, keys, subject) {
   const aud = new URL(endpoint).origin;
   const header = b64u(JSON.stringify({ typ: 'JWT', alg: 'ES256' }));
   const payload = b64u(JSON.stringify({ aud, exp: Math.floor(Date.now() / 1000) + 6 * 3600, sub: subject }));
-  const signature = crypto.sign('sha256', Buffer.from(`${header}.${payload}`), {
-    key: crypto.createPrivateKey({ key: keys.privateJwk, format: 'jwk' }),
-    dsaEncoding: 'ieee-p1363', // مهم: JWS يحتاج r||s لا صيغة DER
-  });
-  return { jwt: `${header}.${payload}.${b64u(signature)}`, publicKey: keys.publicKey };
+  const { kty, crv, x, y, d } = keys.privateJwk;
+  const subtle = (globalThis.crypto && globalThis.crypto.subtle) || crypto.webcrypto.subtle;
+  const key = await subtle.importKey('jwk', { kty, crv, x, y, d, ext: true }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const signature = await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, Buffer.from(`${header}.${payload}`));
+  return { jwt: `${header}.${payload}.${b64u(Buffer.from(signature))}`, publicKey: keys.publicKey };
 }
 
 // ---------- تشفير الحمولة (aes128gcm) ----------
@@ -129,7 +131,7 @@ export const PUSH_SUBJECT =
 export async function sendPush(subscription, payload, keys, subject = PUSH_SUBJECT) {
   const data = Buffer.from(JSON.stringify(payload));
   const body = encryptPayload(subscription, data);
-  const { jwt, publicKey } = vapidHeader(subscription.endpoint, keys, subject);
+  const { jwt, publicKey } = await vapidHeader(subscription.endpoint, keys, subject);
   const res = await fetch(subscription.endpoint, {
     method: 'POST',
     headers: {
