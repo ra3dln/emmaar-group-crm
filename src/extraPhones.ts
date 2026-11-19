@@ -62,6 +62,49 @@ export const addExtraPhone = (
   };
 };
 
+// ===== تعديل اسم العميل ورقمه =====
+// الرقم هو اللي بيربط تاريخ العميل (مكالمات/كومنتات/فورم/تكرار)، فلو اتغيّر الرقم القديم
+// بيتحفظ لوحده كرقم إضافي — التاريخ ما يضيعش والبحث بالرقم القديم يلاقيه.
+// والرقم الجديد لازم يكون صحيح ومش عند عميل تاني (رقم واحد = صاحب واحد).
+export const editClientBasics = (
+  client: any,
+  rawName: string,
+  rawPhone: string,
+  allClients: any[] = [],
+  at: string = new Date().toISOString()
+): AddExtraPhoneResult => {
+  const name = String(rawName || '').trim();
+  if (!name) return { ok: false, error: 'اكتب اسم العميل' };
+  const phone = phoneDigitsOf(rawPhone);
+  if (phone.length < MIN_PHONE_DIGITS) return { ok: false, error: 'اكتب رقم صحيح' };
+  const oldPhone = phoneDigitsOf(client?.phone);
+  const owner = (allClients || []).find(
+    (c: any) =>
+      String(c?.id) !== String(client?.id) &&
+      [c?.phone, ...(Array.isArray(c?.phones) ? c.phones : [])].some((p: any) => phoneDigitsOf(p) === phone)
+  );
+  if (owner) return { ok: false, error: `الرقم ده مسجّل على عميل تاني (${owner.name || 'بدون اسم'})` };
+  const extras = (Array.isArray(client?.phones) ? client.phones : []).filter((p: any) => phoneDigitsOf(p) !== phone);
+  const notes = { ...(client?.phoneNotes && typeof client.phoneNotes === 'object' ? client.phoneNotes : {}) };
+  delete notes[phone];
+  const changedPhone = !!oldPhone && oldPhone !== phone;
+  if (changedPhone && !extras.some((p: any) => phoneDigitsOf(p) === oldPhone)) {
+    extras.push(oldPhone);
+    if (!notes[oldPhone]) notes[oldPhone] = 'الرقم القديم';
+  }
+  return {
+    ok: true,
+    client: {
+      ...client,
+      name,
+      phone: changedPhone || !client?.phone ? phone : client.phone,
+      phones: extras,
+      phoneNotes: notes,
+      updatedAt: at,
+    },
+  };
+};
+
 // شيل رقم إضافي (وملحوظته معاه)
 export const removeExtraPhone = (client: any, rawPhone: string, at: string = new Date().toISOString()): any => {
   const phone = phoneDigitsOf(rawPhone);

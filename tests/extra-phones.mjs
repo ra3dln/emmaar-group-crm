@@ -48,4 +48,31 @@ check(
     /const ok = await pushKey\('crm_clients'\);/.test(app)
 );
 
+// ===== تعديل اسم العميل ورقمه =====
+{
+  const { editClientBasics } = await import('../src/extraPhones.ts');
+  const base = { id: 'c1', name: 'أحمد', phone: '01000000001', phones: [], phoneNotes: {} };
+  const others = [base, { id: 'c2', name: 'منى', phone: '01000000002' }];
+  const renamed = editClientBasics(base, '  أحمد علي ', '01000000001', others);
+  assert.ok(renamed.ok && renamed.client.name === 'أحمد علي' && renamed.client.phone === '01000000001' && renamed.client.phones.length === 0, '✗ تعديل الاسم بس');
+  passed += 1; console.log('✓ تعديل الاسم بس من غير ما الرقم يتغيّر');
+  const moved = editClientBasics(base, 'أحمد', '01000000009', others);
+  assert.ok(moved.ok && moved.client.phone === '01000000009' && moved.client.phones.includes('01000000001') && moved.client.phoneNotes['01000000001'] === 'الرقم القديم', '✗ تغيير الرقم');
+  passed += 1; console.log('✓ تغيير الرقم بيحفظ القديم كرقم إضافي (التاريخ ما يضيعش)');
+  const taken = editClientBasics(base, 'أحمد', '01000000002', others);
+  assert.ok(!taken.ok && /عميل تاني/.test(taken.error), '✗ رقم عميل تاني');
+  passed += 1; console.log('✓ رقم عند عميل تاني مرفوض');
+  assert.ok(!editClientBasics(base, '', '01000000001', others).ok && !editClientBasics(base, 'أحمد', '12', others).ok, '✗ مدخلات ناقصة');
+  passed += 1; console.log('✓ اسم فاضي أو رقم ناقص مرفوض');
+  const back = editClientBasics(moved.client, 'أحمد', '01000000001', others);
+  assert.ok(back.ok && back.client.phone === '01000000001' && !back.client.phones.includes('01000000001'), '✗ رجوع للرقم القديم');
+  passed += 1; console.log('✓ الرجوع للرقم القديم بيشيله من الأرقام الإضافية');
+  assert.ok(app.includes('editClientBasics(stored, basicsForm.name, basicsForm.phone, all)') && app.includes('title="تعديل الاسم والرقم"'), '✗ زرار التعديل');
+  passed += 1; console.log('✓ زرار «تعديل الاسم والرقم» في تفاصيل العميل وبيحفظ على السيرفر');
+}
+
+// ===== «تم الرد» مالوش ميعاد تذكير تلقائي =====
+assert.ok(/if \(r === 'answered'\) \{\s*suggestedAtRef\.current = '';\s*setNextCallAt\(''\);/.test(app) && !/120 : 1440/.test(app), '✗ ميعاد تم الرد');
+passed += 1; console.log('✓ «تم الرد» ما بيحطش ميعاد تذكير لوحده (السيلز يختاره)');
+
 console.log(`\n✅ نجحت ${passed} فحوصات (أرقام إضافية للعميل)`);

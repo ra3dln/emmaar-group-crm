@@ -76,7 +76,7 @@ import {
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
 import { alertMapOf, clientActionState, leadAlertState, actedAfterReminder } from './reminders';
 import { buildNextActionReminder, nextActionByPhoneOf, nextActionMapOf, type NextAction } from './nextAction';
-import { addExtraPhone, extraPhonesOf, removeExtraPhone } from './extraPhones';
+import { addExtraPhone, editClientBasics, extraPhonesOf, removeExtraPhone } from './extraPhones';
 import { isPartnerOf, isRecordOwner, ownsPhone, partnerPhonesOf, partnersOnPhone, sharedPhonesOf, withPartner, withoutPartner } from './partners';
 import { installBackGuard } from './backNav';
 import { ThemePaletteButton, ThemeSettingsPanel } from './ThemeWheel';
@@ -8262,11 +8262,17 @@ function CallFlowModal({
     // الاقتراح بيتحط بس لو الحقل فاضي أو لسه فيه اقتراحنا اللي قبله.
     const userPicked = !!nextCallAt && nextCallAt !== suggestedAtRef.current;
     if (!fromReminder && !userPicked) {
-      const base = new Date();
-      base.setMinutes(base.getMinutes() + (r === 'no-answer' ? 120 : 1440));
-      const suggested = toLocalInput(base);
-      suggestedAtRef.current = suggested;
-      setNextCallAt(suggested);
+      // «تم الرد»: مفيش ميعاد تلقائي — المندوب يختاره بنفسه (كان بيتحط بعد يوم لوحده)
+      if (r === 'answered') {
+        suggestedAtRef.current = '';
+        setNextCallAt('');
+      } else {
+        const base = new Date();
+        base.setMinutes(base.getMinutes() + 120);
+        const suggested = toLocalInput(base);
+        suggestedAtRef.current = suggested;
+        setNextCallAt(suggested);
+      }
     }
     // «لم يرد» = لا يوجد رد: تُكتب في الكومنتات تلقائياً حتى لا يحتاج المندوب لكتابتها
     if (r === 'no-answer' && !comment.trim()) setComment(NO_ANSWER_COMMENT);
@@ -16648,12 +16654,56 @@ function ClientDetailModal({ client, users = [], onClose, onSuccess, onCall, cal
     if (phoneSaving) return;
     await persistClient((stored) => ({ ok: true, client: removeExtraPhone(stored, phone) }));
   };
+  // ===== تعديل الاسم والرقم =====
+  const [basicsForm, setBasicsForm] = useState<{ open: boolean; name: string; phone: string }>({ open: false, name: '', phone: '' });
+  const saveBasics = async () => {
+    if (phoneSaving) return;
+    const saved = await persistClient((stored, all) => editClientBasics(stored, basicsForm.name, basicsForm.phone, all));
+    if (saved) setBasicsForm({ open: false, name: '', phone: '' });
+  };
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="page-intro"><div><h2>{client.name}</h2></div></div>
+        <div className="page-intro">
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="break-words">{current.name}</h2>
+            {!basicsForm.open && (
+              <button type="button" title="تعديل الاسم والرقم"
+                onClick={() => { setBasicsForm({ open: true, name: String(current.name || ''), phone: String(current.phone || '') }); setPhoneError(''); }}
+                className="client-edit-btn p-1.5 rounded-[var(--r-sm)] text-[var(--text-muted)] hover:text-[var(--brand)] hover:bg-[var(--tint-1)] shrink-0">
+                <Edit3 className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
         <div className="space-y-3">
-          <p className="text-[var(--text)]" dir="ltr">{client.phone}</p>
+          {basicsForm.open ? (
+            <div className="client-edit-form bg-[var(--tint-1)] rounded-[var(--r-md)] p-3 space-y-2">
+              <input type="text" autoFocus placeholder="اسم العميل"
+                value={basicsForm.name}
+                onChange={(e) => { setBasicsForm({ ...basicsForm, name: e.target.value }); setPhoneError(''); }}
+                className="w-full bg-[var(--tint-2)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-[var(--text-strong)]" />
+              <input type="tel" inputMode="tel" dir="ltr" placeholder="رقم العميل"
+                value={basicsForm.phone}
+                onChange={(e) => { setBasicsForm({ ...basicsForm, phone: e.target.value }); setPhoneError(''); }}
+                className="w-full bg-[var(--tint-2)] border border-[var(--border)] rounded-[var(--r-md)] px-3 py-2 text-[var(--text-strong)]" />
+              <p className="text-[11px] text-[var(--text-dim)]">لو غيّرت الرقم، القديم بيتحفظ كرقم إضافي عشان تاريخ العميل ما يضيعش.</p>
+              {phoneError && <p className="text-xs text-red-400">{phoneError}</p>}
+              <div className="flex gap-2">
+                <button type="button" disabled={phoneSaving || !basicsForm.name.trim() || !basicsForm.phone.trim()} onClick={() => void saveBasics()}
+                  className="flex-1 bg-[var(--brand)] text-white py-2 rounded-[var(--r-md)] font-bold disabled:opacity-50">
+                  {phoneSaving ? 'جاري الحفظ…' : 'حفظ التعديل'}
+                </button>
+                <button type="button" disabled={phoneSaving}
+                  onClick={() => { setBasicsForm({ open: false, name: '', phone: '' }); setPhoneError(''); }}
+                  className="px-4 bg-[var(--tint-2)] text-[var(--text-strong)] py-2 rounded-[var(--r-md)] font-bold">
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-[var(--text)]" dir="ltr">{current.phone}</p>
+          )}
           {/* ===== أرقام إضافية ===== */}
           <div className="extra-phones space-y-2">
             {extraPhones.map((item) => (
