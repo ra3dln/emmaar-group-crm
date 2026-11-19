@@ -3,7 +3,7 @@
 # الأسرار:    npx wrangler secret put AUTH_SECRET   /   npx wrangler secret put CRON_SECRET
 # (الأسرار مش بتتكتب هنا أبداً — AGENTS.md)
 
-name = "emmaar-crm"
+name = "crm"
 main = "worker/index.js"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
