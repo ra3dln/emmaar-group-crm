@@ -72,6 +72,7 @@ import {
   isDelayedNumber,
   isFreshNumber,
   latestFeedbackStatusOf,
+  STAGE_TO_FEEDBACK_STATUS,
 } from './feedbackBuckets';
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
 import { alertMapOf, clientActionState, leadAlertState, actedAfterReminder } from './reminders';
@@ -2826,13 +2827,20 @@ function App() {
     const from = labels[target.stage] || target.stage;
     const to = labels[stage] || stage;
     const nowIso = new Date().toISOString();
+    // تغيير المرحلة لازم يحمل حالته (Follow Up …): الخانة بتتحدد بآخر حالة على العميل،
+    // فمن غيرها حالة قديمة (Fresh مثلاً) كانت بتفضل غالبة والرقم ما بيتحركش.
+    // لو كومنت بحالة لسه متكتب حالاً (شريط الفيدباك) هو اللي بيحدد — ما نكتبش فوقه.
+    const latestAct: any = (target.activities || [])[0];
+    const justStatused = !!latestAct?.status && Date.now() - Date.parse(String(latestAct.at || '')) < 10000;
+    const stageStatus = justStatused ? '' : (STAGE_TO_FEEDBACK_STATUS[String(stage)] || '');
     const entry: ClientActivity = {
       id: crypto.randomUUID(),
       type: 'stage',
       text: `تغيير المرحلة: ${from} ← ${to}`,
       at: nowIso,
       by: currentUser?.name || '',
-    };
+      ...(stageStatus ? { status: stageStatus } : {}),
+    } as ClientActivity;
     const next = allClients.map((c) =>
       c.id === id ? { ...c, stage, updatedAt: nowIso, activities: [entry, ...(c.activities || [])].slice(0, 60) } : c
     );
@@ -2842,6 +2850,8 @@ function App() {
       // تذكير المتابعة التلقائي يُرفع فوراً (وإلا لم يعرفه السيرفر لإشعار الموقع المقفول)
       if (scheduleFollowUp(updated, to)) void pushKey('crm_reminders');
     }
+    // المرحلة لازم توصل السيرفر — كانت بتتحفظ على الجهاز بس فترجع Fresh عند الباقيين
+    void pushKey('crm_clients');
     loadData();
   };
 
