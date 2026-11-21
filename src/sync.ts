@@ -49,6 +49,7 @@ export const markUnauthorized = (): void => {
   online = false;
   // ما نُبقيش نسخة من بيانات غيرنا بعد ما الجلسة تنتهي
   lastServerData = null;
+  serverBaseline.clear();
   try {
     window.dispatchEvent(new Event(AUTH_EVENT));
   } catch {
@@ -191,6 +192,28 @@ let online = false;
 // آخر نسخة كاملة جاية من السيرفر (كل الحسابات) — للسؤال «الرقم ده عند حدّ تاني؟»
 // من غير ما نحط بيانات غيرنا في ذاكرة الحساب. تُمسح مع تسجيل الخروج.
 let lastServerData: StoreData | null = null;
+
+// ===== نسخة السيرفر من كل سجل (عشان نبعت اللي اتغيّر بس) =====
+// السيرفر على Cloudflare المجاني ليه حد معالجة (١٠ مللي ثانية للطلب): بعت قائمة العملاء
+// كلها (٣٣٠ كيلو) مع كل كومنت كان بيتخطّاه فالحفظ يفشل. دلوقتي الجهاز بيبعت السجلات اللي
+// اتغيّرت عن آخر نسخة وصلته من السيرفر بس (upserts)، والسيرفر بيدمجها في المتخزّن.
+const serverBaseline = new Map<string, Map<string, string>>();
+const rememberServerList = (key: string, list: any) => {
+  if (!Array.isArray(list)) return;
+  const map = new Map<string, string>();
+  for (const row of list) if (row && row.id !== undefined && row.id !== null) map.set(String(row.id), JSON.stringify(row));
+  serverBaseline.set(key, map);
+};
+const rememberServerData = (data: any) => {
+  if (!data || typeof data !== 'object') return;
+  for (const [key, list] of Object.entries(data)) rememberServerList(key, list);
+};
+// السجلات اللي مش زي نسخة السيرفر — null لو ماعندناش نسخة (يتبعت كله زي الأول)
+const changedRows = (key: string, list: any[]): any[] | null => {
+  const base = serverBaseline.get(key);
+  if (!base || key === TOMBSTONE_KEY) return null;
+  return list.filter((row) => !row || row.id === undefined || row.id === null || base.get(String(row.id)) !== JSON.stringify(row));
+};
 
 // من صاحب هذا الرقم (عميل مسجّل) في آخر نسخة من السيرفر — '' يعني مش موجود
 export const ownerOfPhoneOnServer = (phone: string): { ownerId: string; ownerName: string } | null => {
@@ -413,16 +436,32 @@ const pushAll = async (): Promise<void> => {
 };
 
 const pushOne = async (key: string): Promise<void> => {
+  const list = safeParse(localStorage.getItem(key));
+  const upserts = changedRows(key, list);
+  // مفيش أي سجل مختلف عن نسخة السيرفر = مفيش حاجة تتبعت — إلا لو فيه سجلات اتحذفت
+  // من الجهاز: المفتاح لازم يتبعت (ولو فاضي) عشان السيرفر يطبّق شواهد الحذف عليه.
+  const base = serverBaseline.get(key);
+  const localIds = new Set(list.map((row: any) => String(row?.id)));
+  const removedHere = !!base && [...base.keys()].some((id) => !localIds.has(id));
+  if (upserts && !upserts.length && !removedHere) {
+    clearPendingPush();
+    return;
+  }
   const res = await apiFetch(API, {
     method: 'POST',
     headers: apiHeaders(true),
-    body: JSON.stringify({ key, value: safeParse(localStorage.getItem(key)) }),
+    body: JSON.stringify(upserts ? { key, upserts } : { key, value: list }),
   });
   if (!res.ok) throw new Error(`push failed: ${res.status}`);
   const payload = await res.json();
   serverVersion = payload.version;
   rememberVersion(serverVersion);
   clearPendingPush();
+  // السيرفر دلوقتي عنده كل سجلات الجهاز ده (الدمج بيحتفظ بالكل)، والمحذوف اتشال
+  const next = new Map<string, string>();
+  for (const row of list) if (row && row.id !== undefined && row.id !== null) next.set(String(row.id), JSON.stringify(row));
+  if (base) for (const [id, raw] of base) if (!next.has(id) && localIds.has(id)) next.set(id, raw);
+  serverBaseline.set(key, next);
 };
 
 const pushOneWithRetry = async (key: string): Promise<void> => {
@@ -480,7 +519,10 @@ const tick = async (): Promise<void> => {
       const store = prefetched;
       // نسخة السيرفر الكاملة: نستخدمها بسؤال «الرقم ده عند حدّ تاني؟»
       // (من غير ما تدخل ذاكرة الحساب — تتبقى في المزامنة فقط)
-      if (store?.data && typeof store.data === 'object') lastServerData = store.data as StoreData;
+      if (store?.data && typeof store.data === 'object') {
+        lastServerData = store.data as StoreData;
+        rememberServerData(store.data);
+      }
       const serverReset = resetAt(store.data);
       if (serverReset > localResetStamp()) {
         // النظام أُعيد ضبطه من جهاز آخر: نمسح بيانات هذا الجهاز ونأخذ نسخة السيرفر كما هي
@@ -636,32 +678,14 @@ export async function pushKeys(keys: string[]): Promise<boolean> {
 
     if (!Object.keys(dataToSend).length) return true;
 
-    // محاولة الإرسال مع محاولة ثانية سريعة لو حدث خطأ شبكي عابر
-    let lastErr: any = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const res = await apiFetch(API, {
-          method: 'POST',
-          headers: apiHeaders(true),
-          body: JSON.stringify({ data: dataToSend }),
-        });
-        if (res.ok) {
-          const payload = await res.json();
-          serverVersion = payload.version;
-          rememberVersion(serverVersion);
-          clearPendingPush();
-          for (const key of Object.keys(dataToSend)) {
-            snapshot[key] = localStorage.getItem(key) || '[]';
-          }
-          return true;
-        }
-        lastErr = new Error(`push failed: ${res.status}`);
-      } catch (err) {
-        lastErr = err;
-      }
-      if (attempt === 0) await new Promise((r) => setTimeout(r, 350));
+    // كل مفتاح لوحده بالطريق الخفيف (السجلات اللي اتغيّرت بس) — طلب واحد بكل المفاتيح
+    // كان بيعدّي حد المعالجة على Cloudflare. شواهد الحذف الأول.
+    const ordered = Object.keys(dataToSend).sort((a, b) => (a === TOMBSTONE_KEY ? -1 : b === TOMBSTONE_KEY ? 1 : 0));
+    for (const key of ordered) {
+      await pushOneWithRetry(key);
+      snapshot[key] = localStorage.getItem(key) || '[]';
     }
-    throw lastErr;
+    return true;
   } catch (err) {
     console.warn('[sync] pushKeys failed:', err);
     // في بيانات لسه ما وصلتش السيرفر: الفتحة الجاية لازم تسحب وتدمج وترفع
@@ -765,6 +789,7 @@ export async function startSync(): Promise<void> {
       const store = await res.json();
       serverVersion = Number(store.version) || 0;
       online = true;
+      rememberServerData(store?.data);
 
       // إعادة ضبط النظام من جهاز آخر؟ نتجاهل بيانات هذا الجهاز تماماً ونأخذ نسخة السيرفر
       const serverReset = resetAt(store.data);

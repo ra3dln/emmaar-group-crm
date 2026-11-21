@@ -43,7 +43,14 @@ globalThis.fetch = async (url, init = {}) => {
   if (method === 'POST') {
     const body = JSON.parse(init.body);
     if (body.key !== undefined) {
-      server.data[body.key] = body.value;
+      if (Array.isArray(body.upserts)) {
+        // السجلات اللي اتغيّرت بس: تندمج بالمعرّف في المتخزّن (زي السيرفر الحقيقي)
+        const byId = new Map((server.data[body.key] || []).map((row) => [String(row.id), row]));
+        for (const row of body.upserts) byId.set(String(row.id), row);
+        server.data[body.key] = [...byId.values()];
+      } else {
+        server.data[body.key] = body.value;
+      }
       server.version += 1;
       return respond({ version: server.version });
     }

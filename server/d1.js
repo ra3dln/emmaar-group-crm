@@ -205,6 +205,50 @@ export function d1Storage(env = {}) {
       }
       return { version, data };
     },
+    // ===== طرق خفيفة (حد المعالجة في Cloudflare المجاني ١٠ مللي ثانية للطلب) =====
+    // البيانات كنص زي ما هي متخزّنة — من غير JSON.parse لكل حاجة (التحميل الكامل للأجهزة)
+    async loadRaw() {
+      await client.ensureTable();
+      const version = Number(await client.getOne(VERSION_KEY)) || 0;
+      const rows = await rowsOfPrefix();
+      const raw = {};
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const name = String(row.key || '').slice(DATA_PREFIX.length);
+        if (name && typeof row.value === 'string' && row.value !== 'null') raw[name] = row.value;
+      }
+      return { version, raw };
+    },
+    // مفاتيح بعينها بس (الحفظ بيحتاج المفتاح اللي اتغيّر + شواهد الحذف + الحسابات)
+    async loadKeys(names = []) {
+      await client.ensureTable();
+      const list = [...new Set((names || []).filter(Boolean))];
+      const map = await client.getMany([VERSION_KEY, ...list.map((name) => DATA_PREFIX + name)]);
+      const data = {};
+      for (const name of list) {
+        const value = map[DATA_PREFIX + name];
+        if (value !== null && value !== undefined) data[name] = value;
+      }
+      return { version: Number(map[VERSION_KEY]) || 0, data };
+    },
+    // كتابة مفاتيح بعينها (نص JSON جاهز) + رقم النسخة — من غير مقارنة البيانات كلها
+    async saveRaw(version, rawByName = {}) {
+      await client.ensureTable();
+      const entries = Object.entries(rawByName || {});
+      for (const [name, raw] of entries) {
+        if (String(raw).length > MAX_ROW_BYTES) {
+          throw new Error(`المفتاح ${name} أكبر من سقف الصف في Cloudflare D1 (~١ ميجا)`);
+        }
+      }
+      const params = [];
+      for (const [name, raw] of entries) params.push(DATA_PREFIX + name, String(raw));
+      params.push(VERSION_KEY, JSON.stringify(Number(version) || 0));
+      const values = Array.from({ length: params.length / 2 }, () => '(?, ?)').join(', ');
+      await d1Query(
+        env,
+        `INSERT INTO crm_kv (key, value) VALUES ${values} ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        params
+      );
+    },
     async save(db) {
       await client.ensureTable();
       const payload = db?.data || {};

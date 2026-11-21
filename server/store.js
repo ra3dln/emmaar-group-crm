@@ -97,6 +97,21 @@ const send = (res, status, payload, req = null) => {
   res.end(body);
 };
 
+// نفس send بس لنص JSON جاهز (من غير JSON.stringify للبيانات كلها)
+const sendRawJson = (res, status, body, req = null) => {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  const accepts = String(req?.headers?.['accept-encoding'] || '');
+  if (req && body.length >= GZIP_MIN_BYTES && /gzip/i.test(accepts)) {
+    res.setHeader('Content-Encoding', 'gzip');
+    res.setHeader('Vary', 'Accept-Encoding');
+    res.end(zlib.gzipSync(body));
+    return;
+  }
+  res.end(body);
+};
+
 const readBody = (req) =>
   new Promise((resolve) => {
     // على Vercel يكون الجسم مُحللاً مسبقاً، وفي سيرفر التطوير نقرأه من الطلب
@@ -274,7 +289,9 @@ export const safeEqual = (a, b) => {
 //   **لا يُقدَّم أي شيء — لا قراءة ولا كتابة — إلا لمن يحمل جلسة موقّعة صحيحة**.
 //   أي طلب آخر يرجع 401، فتظل بيانات العملاء مغلقة أمام أي شخص يعرف رابط الموقع.
 //   ولو لم يُضبط AUTH_SECRET نرفض العمل (503) بدل أن ننفتح بالخطأ.
-export function createStoreHandler({ load, save, loadVersion, token = '', auth = null }) {
+// loadRaw / loadKeys / saveRaw اختيارية (Cloudflare D1): طرق خفيفة عشان حد المعالجة
+// في Cloudflare المجاني (١٠ مللي ثانية للطلب) — من غير فك البيانات كلها وإعادة تجميعها.
+export function createStoreHandler({ load, save, loadVersion, loadRaw = null, loadKeys = null, saveRaw = null, token = '', auth = null }) {
   return async function handle(req, res) {
     try {
       const [url, query] = (req.url || '').split('?');
@@ -339,6 +356,26 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
           const version = loadVersion ? await loadVersion() : (await load()).version;
           return send(res, 200, { version });
         }
+        // ===== التحميل الخفيف: البيانات كنص زي ما هي، والحسابات بس اللي بتتفك =====
+        if (loadRaw) {
+          const { version, raw } = await loadRaw();
+          let users = [];
+          try {
+            users = JSON.parse(raw.crm_users || '[]');
+          } catch {
+            users = [];
+          }
+          const usersDb = { data: { crm_users: Array.isArray(users) ? users : [] } };
+          if (isStaleSession(usersDb)) return endStaleSession();
+          maybeRefreshSession(usersDb);
+          const safeUsers = stripUserSecrets(usersDb.data, { keepPasswords: session?.r === 'admin' }).crm_users;
+          const names = Object.keys(raw);
+          const parts = names.map(
+            (name) => `${JSON.stringify(name)}:${name === 'crm_users' ? JSON.stringify(safeUsers) : raw[name]}`
+          );
+          const body = `{"version":${Number(version) || 0},"isEmpty":${names.length === 0},"data":{${parts.join(',')}}}`;
+          return sendRawJson(res, 200, body, req);
+        }
         const db = await load();
         if (isStaleSession(db)) return endStaleSession();
         maybeRefreshSession(db);
@@ -354,6 +391,77 @@ export function createStoreHandler({ load, save, loadVersion, token = '', auth =
       if (req.method === 'POST') {
         const body = await readBody(req);
         if (!body) return send(res, 400, { error: 'bad request' });
+
+        // ===== الحفظ الخفيف: مفتاح واحد (القائمة كلها أو upserts = السجلات اللي اتغيّرت بس) =====
+        // بيقرا المفتاح ده + شواهد الحذف + الحسابات بس، وبيكتب المفتاح ده بس.
+        const single = !body.data && isValidKey(body.key);
+        const incomingRows = single ? (Array.isArray(body.upserts) ? body.upserts : body.value) : null;
+        if (loadKeys && saveRaw && single && isValidRecords(incomingRows)) {
+          const key = body.key;
+          const part = await loadKeys([key, TOMBSTONE_DATA_KEY, 'crm_users']);
+          if (isStaleSession(part)) return endStaleSession();
+          const pdata = part.data || {};
+          const storedRows = Array.isArray(pdata[key]) ? pdata[key] : [];
+          const tombs = Array.isArray(pdata[TOMBSTONE_DATA_KEY]) ? pdata[TOMBSTONE_DATA_KEY] : [];
+          let merged;
+          if (key === TOMBSTONE_DATA_KEY) {
+            merged = mergeTombstones(tombs, incomingRows);
+          } else {
+            // التنظيف للسجلات الجاية بس (المتخزّن اتنضّف وقت كتابته) — تنظيف القائمة كلها
+            // مع كل كومنت كان بياخد وقت معالجة كبير.
+            let incoming = incomingRows;
+            if (key === 'crm_clients') incoming = incomingRows.map((row) => sanitizeClientRecord(row));
+            if (key === 'crm_daily_feedback') {
+              // نفس منع التكرار بتاع sanitizeDailyFeedbackCards: نفس الرقم + نفس الكلام + نفس الدقيقة
+              const sigOf = (card) =>
+                `${String(card?.clientPhone || '').replace(/D/g, '')}|${String(card?.feedback || '')}|${String(card?.date || card?.createdAt || '').slice(0, 16)}`;
+              const storedSigs = new Map(storedRows.map((card) => [sigOf(card), String(card?.id)]));
+              incoming = sanitizeDailyFeedbackCards(incomingRows).filter((card) => {
+                const owner = storedSigs.get(sigOf(card));
+                return !owner || owner === String(card?.id);
+              });
+            }
+            merged = mergeKeepingRecords(key, incoming, storedRows, tombs);
+            if (key === 'crm_users') {
+              merged = preserveUserPasswords(keepOwnerScopeOwn(merged), pdata.crm_users, { canManage: session?.r === 'admin' });
+            }
+          }
+          // اتغيّر حاجة؟ من غير تحويل القائمة كلها لنص مرتين: نقارن السجلات اللي اتبعتت
+          // بس، وعدد السجلات (شاهد حذف ممكن يشيل سجل).
+          let changed = merged.length !== storedRows.length;
+          if (!changed) {
+            const storedById = new Map(storedRows.map((row) => [String(row?.id), row]));
+            const mergedById = new Map(merged.map((row) => [String(row?.id), row]));
+            for (const row of incomingRows) {
+              const id = String(row?.id);
+              if (JSON.stringify(mergedById.get(id)) !== JSON.stringify(storedById.get(id))) {
+                changed = true;
+                break;
+              }
+            }
+          }
+          const writes = {};
+          if (changed) writes[key] = JSON.stringify(merged);
+          // شاهد حذف لسجل اتعمل تاني بعد الحذف: يسقط (نفس pruneResurrectedTombstones للمفتاح ده)
+          if (key !== TOMBSTONE_DATA_KEY && tombs.length) {
+            const rowById = new Map(merged.map((row) => [String(row?.id), row]));
+            const kept = tombs.filter((tomb) => {
+              if (!tomb || tomb.key !== key || !tomb.id) return true;
+              const row = rowById.get(String(tomb.id));
+              if (!row) return true;
+              const at = Number(tomb.at) || 0;
+              if (!at) return false;
+              return recordStamp(row) <= at;
+            });
+            if (kept.length !== tombs.length) writes[TOMBSTONE_DATA_KEY] = JSON.stringify(kept);
+          }
+          if (!Object.keys(writes).length) {
+            return send(res, 200, { version: Number(part.version) || 0, unchanged: true });
+          }
+          const nextVersion = (Number(part.version) || 0) + 1;
+          await saveRaw(nextVersion, writes);
+          return send(res, 200, { version: nextVersion });
+        }
 
         const db = await load();
         if (isStaleSession(db)) return endStaleSession();
