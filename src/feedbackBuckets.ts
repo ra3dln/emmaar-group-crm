@@ -83,8 +83,19 @@ const latestAtOf = (activities: any[], pick: (a: any) => boolean): string =>
 const withNoAnswer = (bucket: string, noAnswerAt: string, freshAt: string): string =>
   bucket === 'fresh-stage' && !!noAnswerAt && noAnswerAt > freshAt ? NO_ANSWER : bucket;
 
+// الرقم رجع لمندوب كان شغّال عليه قبل كده (آخر حالة عليه كتبها صاحبه الحالي):
+// النقل ما يرجّعوش Fresh — دي شغلته هو، والحالة اللي اختارها تفضل زي ما هي.
+// (مثال: الإدارة نقلت الرقم لسيلز تاني بالغلط ورجّعته.)
+export const ownerAlreadyWorked = (record: any): boolean => {
+  const owner = String(record?.userId || record?.assignedTo || '').trim();
+  if (!owner) return false;
+  const activities: any[] = Array.isArray(record?.activities) ? record.activities : [];
+  const latest = activities.find((activity) => !!bucketStatus(activity?.status));
+  return !!latest && String(latest?.authorId || '') === owner;
+};
+
 export const feedbackBucketOf = (record: any): string => {
-  const transferAt = String(record?.transferredAt || '');
+  const transferAt = ownerAlreadyWorked(record) ? '' : String(record?.transferredAt || '');
   const latestAct = latestBucketActivityOf(record);
   const actAt = String(latestAct?.at || '');
   if (transferAt && (!actAt || actAt <= transferAt) && (!record?.stage || record?.stage === 'new')) {
@@ -463,7 +474,7 @@ export const buildWorkNumbers = (
     // ===== الرقم المنقول ينزل في «Fresh Leads» =====
     // لو الرقم اتنقل لمندوب جديد ولسه ما عملش عليه أي إجراء جديد (مكالمة أو فيدباك أو تغيير مرحلة)،
     // الرقم ينزل في الفريش ليد (fresh-stage)، مع بقاء الكومنت السابق وحالته القديمة (زي follow up) كما هي.
-    const transferAt = String(client?.transferredAt || lead?.transferredAt || '');
+    const transferAt = client && ownerAlreadyWorked(client) ? '' : String(client?.transferredAt || lead?.transferredAt || '');
     const actAfterTransfer = Boolean(actAt && transferAt && actAt > transferAt);
     const snapAfterTransfer = Boolean(snapAt && transferAt && snapAt > transferAt);
     const stageAfterTransfer = Boolean(

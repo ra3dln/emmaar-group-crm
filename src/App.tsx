@@ -72,6 +72,7 @@ import {
   isDelayedNumber,
   isFreshNumber,
   latestFeedbackStatusOf,
+  ownerAlreadyWorked,
   STAGE_TO_FEEDBACK_STATUS,
 } from './feedbackBuckets';
 import { applyThemeForUser, reapplyCurrentTheme } from './theme';
@@ -2545,7 +2546,8 @@ function App() {
           : [];
         return {
           ...c, userId: owner, assignedTo: owner, ownerVia: via, updatedAt: movedAt,
-          ...(isTransferred || (owner && owner !== prevOwner) ? {
+          // الرقم راجع لمندوب اشتغل عليه قبل كده → مرحلته اللي اختارها تفضل
+          ...((isTransferred || (owner && owner !== prevOwner)) && !ownerAlreadyWorked({ ...c, userId: owner }) ? {
             stage: 'new',
             transferredFrom: prevOwner,
             transferredAt: movedAt,

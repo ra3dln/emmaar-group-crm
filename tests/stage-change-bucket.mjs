@@ -28,3 +28,22 @@ check('حدث تغيير المرحلة بيحمل الحالة', /STAGE_TO_FEED
 check('تغيير المرحلة بيترفع للسيرفر', /pushKey\('crm_clients'\)/.test(block));
 
 console.log(`\n✅ نجحت ${passed} فحوصات (تغيير المرحلة بيحرّك الرقم من Fresh)`);
+
+// ===== الرقم راجع لنفس المندوب بعد نقل بالغلط =====
+{
+  const { ownerAlreadyWorked } = await import('../src/feedbackBuckets.ts');
+  const back = {
+    id: 'c2', userId: 'abd', stage: 'new', transferredFrom: 'salma', transferredAt: '2026-11-21T19:41:00.000Z',
+    activities: [
+      { id: 't', type: 'assign', text: 'تم تخصيص العميل إلى Abdallah', at: '2026-11-21T19:41:00.000Z' },
+      { id: 'f', type: 'feedback', status: 'follow-up', authorId: 'abd', text: 'متابعة', at: '2026-11-21T18:34:00.000Z' },
+    ],
+  };
+  if (!ownerAlreadyWorked(back) || feedbackBucketOf(back) !== 'follow-up') {
+    console.error('✗ الرقم الراجع لصاحبه رجع Fresh', feedbackBucketOf(back)); process.exit(1);
+  }
+  console.log('✓ الرقم الراجع لنفس المندوب بيفضل في المرحلة اللي اختارها');
+  const other = { ...back, userId: 'salma' };
+  if (feedbackBucketOf(other) !== 'fresh-stage') { console.error('✗ النقل لمندوب جديد لازم يبقى Fresh'); process.exit(1); }
+  console.log('✓ النقل لمندوب جديد لسه بينزل Fresh');
+}
