@@ -1,3 +1,4 @@
+import { startVersionWatch } from './appVersion';
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -1724,6 +1725,9 @@ function App() {
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
+
+  // نسخة جديدة من الموقع نزلت؟ الجهاز يحدّث لوحده (src/appVersion.ts)
+  useEffect(() => startVersionWatch(), []);
 
   // رسائل من خدمة الإشعارات: زر «تأجيل ٥ د» على الإشعار الخارجي
   useEffect(() => {
