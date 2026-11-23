@@ -395,7 +395,8 @@ export function createStoreHandler({ load, save, loadVersion, loadRaw = null, lo
         // ===== الحفظ الخفيف: مفتاح واحد (القائمة كلها أو upserts = السجلات اللي اتغيّرت بس) =====
         // بيقرا المفتاح ده + شواهد الحذف + الحسابات بس، وبيكتب المفتاح ده بس.
         const single = !body.data && isValidKey(body.key);
-        const incomingRows = single ? (Array.isArray(body.upserts) ? body.upserts : body.value) : null;
+        const fullList = single && !Array.isArray(body.upserts);
+        let incomingRows = single ? (fullList ? body.value : body.upserts) : null;
         if (loadKeys && saveRaw && single && isValidRecords(incomingRows)) {
           const key = body.key;
           const part = await loadKeys([key, TOMBSTONE_DATA_KEY, 'crm_users']);
@@ -403,6 +404,20 @@ export function createStoreHandler({ load, save, loadVersion, loadRaw = null, lo
           const pdata = part.data || {};
           const storedRows = Array.isArray(pdata[key]) ? pdata[key] : [];
           const tombs = Array.isArray(pdata[TOMBSTONE_DATA_KEY]) ? pdata[TOMBSTONE_DATA_KEY] : [];
+          // ===== أجهزة على نسخة قديمة بتبعت القائمة كلها مع كل كومنت =====
+          // تنظيف ودمج كل السجلات كان بيعدّي حد المعالجة في Cloudflare المجاني فالطلب
+          // بيتقطع («اتحفظ على الجهاز بس») والديلاي ما بيروحش. نشتغل على اللي اتغيّر بس:
+          // سجل جديد، أو أحدث من المتخزّن، أو عليه كومنت مش عند السيرفر.
+          if (fullList && key !== TOMBSTONE_DATA_KEY && key !== 'crm_users') {
+            const storedById = new Map(storedRows.map((row) => [String(row?.id), row]));
+            const firstActId = (row) => String((Array.isArray(row?.activities) && row.activities[0]?.id) || '');
+            incomingRows = incomingRows.filter((row) => {
+              const prev = storedById.get(String(row?.id));
+              if (!prev) return true;
+              if (changeStamp(row) > changeStamp(prev)) return true;
+              return key === 'crm_clients' && firstActId(row) !== firstActId(prev);
+            });
+          }
           let merged;
           if (key === TOMBSTONE_DATA_KEY) {
             merged = mergeTombstones(tombs, incomingRows);
@@ -414,7 +429,7 @@ export function createStoreHandler({ load, save, loadVersion, loadRaw = null, lo
             if (key === 'crm_daily_feedback') {
               // نفس منع التكرار بتاع sanitizeDailyFeedbackCards: نفس الرقم + نفس الكلام + نفس الدقيقة
               const sigOf = (card) =>
-                `${String(card?.clientPhone || '').replace(/D/g, '')}|${String(card?.feedback || '')}|${String(card?.date || card?.createdAt || '').slice(0, 16)}`;
+                `${String(card?.clientPhone || '').replace(/\D/g, '')}|${String(card?.feedback || '')}|${String(card?.date || card?.createdAt || '').slice(0, 16)}`;
               const storedSigs = new Map(storedRows.map((card) => [sigOf(card), String(card?.id)]));
               incoming = sanitizeDailyFeedbackCards(incomingRows).filter((card) => {
                 const owner = storedSigs.get(sigOf(card));
