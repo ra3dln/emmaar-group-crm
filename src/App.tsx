@@ -766,32 +766,6 @@ const addClientActivity = (
 // ===== المتابعة التلقائية =====
 // بعد أي تغيير في مرحلة العميل يُنشئ النظام تذكير متابعة بعد ٢٤ ساعة من تلقاء نفسه،
 // فلا يبقى عميل بلا متابعة. (لا يُكرَّر لو يوجد تذكير قائم لنفس العميل)
-const scheduleFollowUp = (client: Client, stageLabel: string, ownerId?: string): boolean => {
-  try {
-    const reminders: Reminder[] = JSON.parse(localStorage.getItem('crm_reminders') || '[]');
-    if (reminders.some((r) => !r.isCompleted && r.clientId === client.id)) return false;
-    const at = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    at.setHours(10, 0, 0, 0);
-    const reminder: Reminder = {
-      id: crypto.randomUUID(),
-      userId: ownerId || client.userId,
-      clientId: client.id,
-      clientName: client.name,
-      clientPhone: client.phone,
-      dateTime: at.toISOString(),
-      note: `متابعة تلقائية: ${client.name} — المرحلة: ${stageLabel}`,
-      isCompleted: false,
-      isDelayed: false,
-      delayCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-    localStorage.setItem('crm_reminders', JSON.stringify([reminder, ...reminders]));
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 // ===== «الإجراء القادم»: يوم + ساعة يختارها المندوب في الفيدباك =====
 // يبني تذكيراً بنفس نظام «محتاج إجراء» الموجود، فيبقى الموعد ظاهر على كارت
 // العميل (يوم + ساعة)، ولما يجي وقته من غير خطوة → الكارت يولّع أصفر «اتأخر».
@@ -2848,10 +2822,9 @@ function App() {
     );
     localStorage.setItem('crm_clients', JSON.stringify(next));
     const updated = next.find((c) => c.id === id);
-    if (updated && stage !== 'lost' && stage !== 'closed') {
-      // تذكير المتابعة التلقائي يُرفع فوراً (وإلا لم يعرفه السيرفر لإشعار الموقع المقفول)
-      if (scheduleFollowUp(updated, to)) void pushKey('crm_reminders');
-    }
+    // مفيش تذكير متابعة تلقائي مع تغيير المرحلة (كان بيتحط بكرة الساعة ١٠ لوحده):
+    // ميعاد الاتصال الجاي بيحدده المندوب بنفسه بس.
+    void updated;
     // المرحلة لازم توصل السيرفر — كانت بتتحفظ على الجهاز بس فترجع Fresh عند الباقيين
     void pushKey('crm_clients');
     loadData();
@@ -8278,16 +8251,9 @@ function CallFlowModal({
     const userPicked = !!nextCallAt && nextCallAt !== suggestedAtRef.current;
     if (!fromReminder && !userPicked) {
       // «تم الرد»: مفيش ميعاد تلقائي — المندوب يختاره بنفسه (كان بيتحط بعد يوم لوحده)
-      if (r === 'answered') {
-        suggestedAtRef.current = '';
-        setNextCallAt('');
-      } else {
-        const base = new Date();
-        base.setMinutes(base.getMinutes() + 120);
-        const suggested = toLocalInput(base);
-        suggestedAtRef.current = suggested;
-        setNextCallAt(suggested);
-      }
+      // و«لم يرد» كمان: مفيش ميعاد تلقائي (كان بيتحط بعد ساعتين لوحده)
+      suggestedAtRef.current = '';
+      setNextCallAt('');
     }
     // «لم يرد» = لا يوجد رد: تُكتب في الكومنتات تلقائياً حتى لا يحتاج المندوب لكتابتها
     if (r === 'no-answer' && !comment.trim()) setComment(NO_ANSWER_COMMENT);

@@ -72,7 +72,10 @@ check(
 }
 
 // ===== «تم الرد» مالوش ميعاد تذكير تلقائي =====
-assert.ok(/if \(r === 'answered'\) \{\s*suggestedAtRef\.current = '';\s*setNextCallAt\(''\);/.test(app) && !/120 : 1440/.test(app), '✗ ميعاد تم الرد');
+// «تم الرد» و«لم يرد»: مفيش ميعاد تلقائي — ولا تذكير متابعة تلقائي مع تغيير المرحلة
+assert.ok(/if \(!fromReminder && !userPicked\) \{[\s\S]{0,300}?suggestedAtRef\.current = '';\s*setNextCallAt\(''\);\s*\}/.test(app)
+  && !/getMinutes\(\) \+ 120\)/.test(app), '✗ ميعاد تم الرد / لم يرد');
+assert.ok(!/scheduleFollowUp/.test(app), '✗ تذكير المتابعة التلقائي مع تغيير المرحلة لسه موجود');
 passed += 1; console.log('✓ «تم الرد» ما بيحطش ميعاد تذكير لوحده (السيلز يختاره)');
 
 // القلم في نافذة الإجراء (كارت العميل) بيفتح تعديل الاسم والرقم مفتوح
